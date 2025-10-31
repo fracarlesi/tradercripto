@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from services.ai_decision_service import get_decision_cache
 from services.infrastructure.usage_tracker import get_usage_tracker
-from services.news_feed import get_news_cache_stats
+from services.market_data.news_feed import get_news_cache_stats
 
 logger = logging.getLogger(__name__)
 

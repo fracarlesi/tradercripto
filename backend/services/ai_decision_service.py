@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from database.models import Account, AIDecisionLog, Position
 from services.asset_calculator import calc_positions_value
-from services.news_feed import fetch_latest_news
+from services.market_data.news_feed import fetch_latest_news
 
 logger = logging.getLogger(__name__)
 
