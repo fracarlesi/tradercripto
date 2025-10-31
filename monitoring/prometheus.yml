@@ -1,0 +1,27 @@
+# Prometheus Configuration for Bitcoin Trading System
+# T130: Scrape configuration for trading system metrics
+
+global:
+  scrape_interval: 15s  # Scrape targets every 15 seconds
+  evaluation_interval: 15s  # Evaluate rules every 15 seconds
+  external_labels:
+    cluster: 'trader_bitcoin'
+    environment: 'production'
+
+# Scrape configurations
+scrape_configs:
+  # Trading System Application
+  - job_name: 'trading_system'
+    metrics_path: '/api/metrics'
+    static_configs:
+      - targets: ['app:5611']
+        labels:
+          service: 'trading_backend'
+          app: 'trader_bitcoin'
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          service: 'prometheus'

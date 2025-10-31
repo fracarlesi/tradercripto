@@ -1,0 +1,221 @@
+version: '3.8'
+
+services:
+  # =============================================================================
+  # PostgreSQL 14 Database (T065)
+  # =============================================================================
+  postgres:
+    image: postgres:14-alpine
+    container_name: trader_postgres
+    restart: unless-stopped
+    # JSON log driver for log aggregation (T143)
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-trader}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trader_password}
+      POSTGRES_DB: ${POSTGRES_DB:-trader_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-trader}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - trader_network
+      - traefik
+    mem_limit: 512m
+    memswap_limit: 512m
+
+  # =============================================================================
+  # Redis Cache (T080)
+  # =============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: trader_redis
+    restart: unless-stopped
+    # JSON log driver for log aggregation (T143)
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "3"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - trader_network
+    mem_limit: 256m
+    memswap_limit: 256m
+
+  # =============================================================================
+  # Trading Application (T079)
+  # =============================================================================
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: trader_bitcoin:latest
+    container_name: trader_app
+    restart: unless-stopped
+    # App depends on services being healthy (T081)
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # JSON log driver for log aggregation (T143)
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+        labels: "service,environment"
+        tag: "{{.Name}}/{{.ID}}"
+    environment:
+      # Database configuration
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://trader:trader_password@postgres:5432/trader_db}
+      # Redis configuration
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      # Application settings
+      - DEBUG=${DEBUG:-false}
+      - SQL_DEBUG=${SQL_DEBUG:-false}
+      # Trading configuration
+      - HYPERLIQUID_PRIVATE_KEY=${HYPERLIQUID_PRIVATE_KEY}
+      - HYPERLIQUID_WALLET_ADDRESS=${HYPERLIQUID_WALLET_ADDRESS}
+      - MAX_CAPITAL_USD=${MAX_CAPITAL_USD:-52.0}
+      # AI configuration
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}
+      # Database pool configuration
+      - DB_POOL_SIZE=${DB_POOL_SIZE:-10}
+      - DB_MAX_OVERFLOW=${DB_MAX_OVERFLOW:-5}
+      # Sync configuration
+      - SYNC_INTERVAL_SECONDS=${SYNC_INTERVAL_SECONDS:-30}
+      - AI_DECISION_INTERVAL=${AI_DECISION_INTERVAL:-180}
+      # CORS configuration
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+    ports:
+      - "5611:5611"
+    volumes:
+      - app_data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5611/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.trader.rule=Host(`oaa.finan.club`)"
+      - "traefik.http.routers.trader.entrypoints=websecure"
+      - "traefik.http.routers.trader.tls.certresolver=letsencrypt"
+      - "traefik.http.services.trader.loadbalancer.server.port=5611"
+      # Health check
+      - "traefik.http.services.trader.loadbalancer.healthcheck.path=/api/health"
+      - "traefik.http.services.trader.loadbalancer.healthcheck.interval=30s"
+      - "service=trader_app"
+      - "environment=${ENVIRONMENT:-development}"
+    networks:
+      - trader_network
+      - traefik
+    mem_limit: 1g
+    memswap_limit: 1g
+
+  # =============================================================================
+  # Prometheus Monitoring (T129-T130)
+  # =============================================================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: trader_prometheus
+    restart: unless-stopped
+    # JSON log driver for log aggregation (T143)
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "3"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--storage.tsdb.retention.time=30d'
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - trader_network
+    mem_limit: 512m
+    memswap_limit: 512m
+    depends_on:
+      - app
+
+  # =============================================================================
+  # Grafana Dashboard (T131-T132)
+  # =============================================================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: trader_grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_SERVER_ROOT_URL=${GRAFANA_ROOT_URL:-http://localhost:3000}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana:/etc/grafana/provisioning:ro
+    ports:
+      - "3000:3000"
+    networks:
+      - trader_network
+    mem_limit: 512m
+    memswap_limit: 512m
+    depends_on:
+      - prometheus
+
+# =============================================================================
+# Volumes (T082)
+# =============================================================================
+volumes:
+  postgres_data:
+    driver: local
+    name: trader_postgres_data
+  redis_data:
+    driver: local
+    name: trader_redis_data
+  app_data:
+    driver: local
+    name: trader_app_data
+  prometheus_data:
+    driver: local
+    name: trader_prometheus_data
+  grafana_data:
+    driver: local
+    name: trader_grafana_data
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  trader_network:
+    driver: bridge
+    name: trader_network
+  traefik:
+    external: true
