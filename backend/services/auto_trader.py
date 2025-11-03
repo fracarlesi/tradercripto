@@ -115,11 +115,31 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
         logger.info("Executing order on Hyperliquid...")
         execution_result = _execute_order_async(decision, validation_result["order_size"])
 
+        # Check if order was actually executed (not just HTTP success)
+        is_executed = False
         if execution_result.get("status") == "ok":
+            # Check for Hyperliquid errors in response
+            response = execution_result.get("response", {})
+            if response.get("type") == "order":
+                statuses = response.get("data", {}).get("statuses", [])
+                # If there are errors in statuses, order was rejected
+                has_errors = any(s.get("error") for s in statuses)
+                if has_errors:
+                    error_msg = statuses[0].get("error", "Unknown error")
+                    logger.warning(f"⚠️ Order rejected by Hyperliquid: {error_msg}")
+                    is_executed = False
+                else:
+                    # No errors, order was accepted
+                    is_executed = True
+            elif execution_result.get("message") == "No action (HOLD)":
+                # HOLD is considered "executed" (decision was applied)
+                is_executed = True
+
+        if is_executed:
             logger.info(f"✅ Order executed successfully: {execution_result}")
             save_ai_decision(db, account, decision, portfolio, executed=True)
         else:
-            logger.error(f"❌ Order execution failed: {execution_result}")
+            logger.error(f"❌ Order execution failed or rejected: {execution_result}")
             save_ai_decision(db, account, decision, portfolio, executed=False)
 
     except Exception as e:
