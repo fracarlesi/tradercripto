@@ -143,6 +143,63 @@ class HyperliquidTradingService:
         """
         return await run_in_thread(self.info.meta)
 
+    async def place_market_order_async(
+        self, symbol: str, is_buy: bool, size: float, reduce_only: bool = False
+    ) -> dict[str, Any]:
+        """Place a market order on Hyperliquid (async).
+
+        Args:
+            symbol: Trading symbol (e.g., "BTC", "ETH")
+            is_buy: True for buy, False for sell
+            size: Order size (quantity of base asset)
+            reduce_only: If True, order can only reduce existing position
+
+        Returns:
+            Dict containing order response:
+            {
+                "status": "ok" | "error",
+                "response": {
+                    "type": "order",
+                    "data": {
+                        "statuses": [...]
+                    }
+                }
+            }
+
+        Raises:
+            Exception: If order placement fails
+        """
+        if not self._initialized or not self._exchange:
+            raise RuntimeError("Hyperliquid SDK not initialized")
+
+        def _place_order():
+            """Synchronous order placement."""
+            order_result = self._exchange.market_open(
+                coin=symbol, is_buy=is_buy, sz=size, reduce_only=reduce_only
+            )
+            return order_result
+
+        logger.info(
+            f"Placing {'BUY' if is_buy else 'SELL'} market order: {size} {symbol}",
+            extra={
+                "context": {
+                    "symbol": symbol,
+                    "side": "BUY" if is_buy else "SELL",
+                    "size": size,
+                    "reduce_only": reduce_only,
+                }
+            },
+        )
+
+        result = await run_in_thread(_place_order)
+
+        logger.info(
+            f"Order placed: {result.get('status', 'unknown')}",
+            extra={"context": {"result": result}},
+        )
+
+        return result
+
 
 # Global singleton instance
 hyperliquid_trading_service = HyperliquidTradingService()
