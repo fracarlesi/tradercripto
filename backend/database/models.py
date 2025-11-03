@@ -112,15 +112,17 @@ class Account(Base):
     base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     api_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
-    # Trading Account Balances (synced from Hyperliquid)
-    initial_capital: Mapped[Decimal] = mapped_column(
-        Numeric(20, 8), default=Decimal("0"), nullable=False
+    # Trading Account Balances (DEPRECATED - fetch from Hyperliquid instead)
+    # These fields are kept for backward compatibility but should not be used
+    # Always fetch real-time data from hyperliquid_trading_service.get_user_state_async()
+    initial_capital: Mapped[Decimal | None] = mapped_column(
+        Numeric(20, 8), nullable=True
     )
-    current_cash: Mapped[Decimal] = mapped_column(
-        Numeric(20, 8), default=Decimal("0"), nullable=False
+    current_cash: Mapped[Decimal | None] = mapped_column(
+        Numeric(20, 8), nullable=True
     )
-    frozen_cash: Mapped[Decimal] = mapped_column(
-        Numeric(20, 8), default=Decimal("0"), nullable=False
+    frozen_cash: Mapped[Decimal | None] = mapped_column(
+        Numeric(20, 8), nullable=True
     )
 
     created_at: Mapped[datetime] = mapped_column(

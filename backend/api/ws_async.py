@@ -137,6 +137,8 @@ manager = AsyncConnectionManager()
 async def _send_snapshot_async(db: AsyncSession, account_id: int):
     """Send account snapshot via WebSocket (async version).
 
+    Fetches real-time data from Hyperliquid to avoid stale database values.
+
     Args:
         db: Database session
         account_id: Account ID
@@ -152,7 +154,36 @@ async def _send_snapshot_async(db: AsyncSession, account_id: int):
         )
         return
 
-    # Get positions
+    # Fetch real-time data from Hyperliquid (NO REDUNDANCY!)
+    from services.trading.hyperliquid_trading_service import hyperliquid_trading_service
+
+    try:
+        user_state = await hyperliquid_trading_service.get_user_state_async()
+        margin = user_state.get('marginSummary', {})
+        hl_positions = user_state.get('assetPositions', [])
+
+        account_value = float(margin.get('accountValue', '0'))
+        total_margin_used = float(margin.get('totalMarginUsed', '0'))
+
+        # Calculate position value from Hyperliquid
+        positions_value = 0
+        for p in hl_positions:
+            pos = p.get('position', {})
+            size = float(pos.get('szi', '0'))
+            entry_px = float(pos.get('entryPx', '0'))
+            positions_value += size * entry_px
+
+        cash_available = account_value - positions_value
+
+    except Exception as e:
+        logger.error(f"Failed to fetch real-time data from Hyperliquid: {e}")
+        # Fallback to zeros if API fails
+        account_value = 0
+        cash_available = 0
+        total_margin_used = 0
+        positions_value = 0
+
+    # Get historical data from DB (positions, orders, trades)
     result = await db.execute(select(Position).where(Position.account_id == account_id))
     positions = result.scalars().all()
 
@@ -183,22 +214,19 @@ async def _send_snapshot_async(db: AsyncSession, account_id: int):
     )
     ai_decisions = result.scalars().all()
 
-    # Calculate positions value
-    positions_value = sum(float(p.quantity) * float(p.average_cost) for p in positions)
-
-    # Build overview
+    # Build overview with REAL-TIME Hyperliquid data
     overview = {
         "account": {
             "id": account.id,
             "user_id": account.user_id,
             "name": account.name,
             "account_type": account.account_type,
-            "initial_capital": float(account.initial_capital),
-            "current_cash": float(account.current_cash),
-            "frozen_cash": float(account.frozen_cash),
+            "initial_capital": account_value,  # Real-time from Hyperliquid
+            "current_cash": cash_available,    # Real-time from Hyperliquid
+            "frozen_cash": total_margin_used,   # Real-time from Hyperliquid
         },
-        "total_assets": positions_value + float(account.current_cash),
-        "positions_value": positions_value,
+        "total_assets": account_value,  # Real-time total
+        "positions_value": positions_value,  # Real-time from Hyperliquid
     }
 
     # Enrich positions (simplified - no real-time price fetching)

@@ -192,6 +192,8 @@ def _fetch_market_prices() -> dict[str, float]:
 def _build_portfolio_data(db, account: Account) -> dict[str, Any]:
     """Build portfolio data dictionary from account and positions.
 
+    Fetches real-time data from Hyperliquid to avoid stale database values.
+
     Args:
         db: Database session
         account: Trading account
@@ -206,17 +208,47 @@ def _build_portfolio_data(db, account: Account) -> dict[str, Any]:
         }
     """
     from database.models import Position
+    from services.trading.hyperliquid_trading_service import hyperliquid_trading_service
+    import asyncio
 
-    # Get current positions
+    # Fetch real-time data from Hyperliquid (NO REDUNDANCY!)
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        user_state = loop.run_until_complete(hyperliquid_trading_service.get_user_state_async())
+        margin = user_state.get('marginSummary', {})
+        hl_positions = user_state.get('assetPositions', [])
+
+        account_value = float(margin.get('accountValue', '0'))
+        total_margin_used = float(margin.get('totalMarginUsed', '0'))
+
+        # Calculate position value from Hyperliquid
+        positions_value = 0
+        for p in hl_positions:
+            pos = p.get('position', {})
+            size = float(pos.get('szi', '0'))
+            entry_px = float(pos.get('entryPx', '0'))
+            positions_value += size * entry_px
+
+        cash_available = account_value - positions_value
+
+    except Exception as e:
+        logger.error(f"Failed to fetch real-time data from Hyperliquid: {e}")
+        # Fallback to DB values if API fails
+        cash_available = float(account.current_cash or 0)
+        total_margin_used = float(account.frozen_cash or 0)
+        positions_value = calc_positions_value(db, account.id)
+        account_value = cash_available + positions_value
+    finally:
+        loop.close()
+
+    # Get current positions from DB
     positions = db.query(Position).filter(Position.account_id == account.id).all()
 
-    # Calculate total asset value (calc_positions_value queries positions itself)
-    positions_value = calc_positions_value(db, account.id)
-
     portfolio = {
-        "cash": float(account.current_cash or 0),
-        "frozen_cash": float(account.frozen_cash or 0),
-        "total_assets": float(account.current_cash or 0) + positions_value,
+        "cash": cash_available,  # Real-time from Hyperliquid
+        "frozen_cash": total_margin_used,  # Real-time from Hyperliquid
+        "total_assets": account_value,  # Real-time from Hyperliquid
         "positions": [
             {
                 "symbol": pos.symbol,
