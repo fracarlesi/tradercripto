@@ -287,7 +287,7 @@ class AIDecisionLog(Base):
     decision_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     reason: Mapped[str] = mapped_column(String(2000), nullable=False)  # AI explanation
     operation: Mapped[str] = mapped_column(String(10), nullable=False)  # "buy", "sell", "hold"
-    symbol: Mapped[str] = mapped_column(String(20), nullable=False)
+    symbol: Mapped[str | None] = mapped_column(String(20), nullable=True)  # NULL for HOLD operations
     prev_portion: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
     target_portion: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
     total_balance: Mapped[Decimal] = mapped_column(Numeric(20, 8), nullable=False)
