@@ -146,32 +146,32 @@ async def _send_snapshot_optimized(db: Session, account_id: int):
     price_error_message = None
 
     # Group positions by symbol to reduce API calls
-    unique_symbols = set((p.symbol, p.market) for p in positions)
+    unique_symbols = set(p.symbol for p in positions)
     price_cache = {}
 
     # Fetch all unique prices in one go
-    for symbol, market in unique_symbols:
+    for symbol in unique_symbols:
         try:
-            price = get_last_price(symbol, market)
-            price_cache[(symbol, market)] = price
+            price = get_last_price(symbol)
+            price_cache[symbol] = price
         except Exception as e:
-            price_cache[(symbol, market)] = None
+            price_cache[symbol] = None
             error_msg = str(e)
             if "cookie" in error_msg.lower() and price_error_message is None:
                 price_error_message = error_msg
 
     for p in positions:
-        price = price_cache.get((p.symbol, p.market))
+        price = price_cache.get(p.symbol)
         enriched_positions.append(
             {
                 "id": p.id,
                 "account_id": p.account_id,
                 "symbol": p.symbol,
-                "name": p.name,
-                "market": p.market,
+                "name": p.symbol,  # Position model doesn't have name field
+                "market": "CRYPTO",  # Hyperliquid is crypto only
                 "quantity": float(p.quantity),
                 "available_quantity": float(p.available_quantity),
-                "avg_cost": float(p.avg_cost),
+                "avg_cost": float(p.average_cost),  # Model uses average_cost not avg_cost
                 "last_price": float(price) if price is not None else None,
                 "market_value": (float(price) * float(p.quantity)) if price is not None else None,
             }
@@ -188,8 +188,8 @@ async def _send_snapshot_optimized(db: Session, account_id: int):
                 "order_no": o.order_no,
                 "user_id": o.account_id,
                 "symbol": o.symbol,
-                "name": o.name,
-                "market": o.market,
+                "name": o.symbol,  # Order model does not have name field
+                "market": "CRYPTO",  # Hyperliquid is crypto only
                 "side": o.side,
                 "order_type": o.order_type,
                 "price": float(o.price) if o.price is not None else None,
@@ -290,7 +290,7 @@ async def _send_snapshot(db: Session, account_id: int):
 
     for p in positions:
         try:
-            price = get_last_price(p.symbol, p.market)
+            price = get_last_price(p.symbol)
         except Exception as e:
             price = None
             # Collect price retrieval error messages, especially cookie-related errors
@@ -303,11 +303,11 @@ async def _send_snapshot(db: Session, account_id: int):
                 "id": p.id,
                 "account_id": p.account_id,
                 "symbol": p.symbol,
-                "name": p.name,
-                "market": p.market,
+                "name": p.symbol,  # Position model doesn't have name field
+                "market": "CRYPTO",  # Hyperliquid is crypto only
                 "quantity": float(p.quantity),
                 "available_quantity": float(p.available_quantity),
-                "avg_cost": float(p.avg_cost),
+                "avg_cost": float(p.average_cost),  # Model uses average_cost not avg_cost
                 "last_price": float(price) if price is not None else None,
                 "market_value": (float(price) * float(p.quantity)) if price is not None else None,
             }
@@ -324,8 +324,8 @@ async def _send_snapshot(db: Session, account_id: int):
                 "order_no": o.order_no,
                 "user_id": o.account_id,
                 "symbol": o.symbol,
-                "name": o.name,
-                "market": o.market,
+                "name": o.symbol,  # Order model does not have name field
+                "market": "CRYPTO",  # Hyperliquid is crypto only
                 "side": o.side,
                 "order_type": o.order_type,
                 "price": float(o.price) if o.price is not None else None,

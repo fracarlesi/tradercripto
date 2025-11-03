@@ -207,8 +207,8 @@ async def _send_snapshot_async(db: AsyncSession, account_id: int):
             "id": p.id,
             "account_id": p.account_id,
             "symbol": p.symbol,
-            "name": p.name,
-            "market": p.market,
+            "name": p.symbol,  # Position model doesn't have name field
+            "market": "CRYPTO",  # Hyperliquid is crypto only
             "quantity": float(p.quantity),
             "available_quantity": float(p.available_quantity),
             "avg_cost": float(p.average_cost),
@@ -229,8 +229,8 @@ async def _send_snapshot_async(db: AsyncSession, account_id: int):
                 "order_no": o.order_no,
                 "user_id": o.account_id,
                 "symbol": o.symbol,
-                "name": o.name,
-                "market": o.market,
+                "name": o.symbol,
+                "market": "CRYPTO",
                 "side": o.side,
                 "order_type": o.order_type,
                 "price": float(o.price) if o.price is not None else None,
