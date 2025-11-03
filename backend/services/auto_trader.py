@@ -108,7 +108,7 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
         if not validation_result["valid"]:
             logger.warning(f"Decision validation failed: {validation_result['reason']}")
             # Save failed decision to database for analysis
-            save_ai_decision(db, account.id, decision, success=False)
+            save_ai_decision(db, account, decision, portfolio, executed=False)
             return
 
         # 6. Execute order on Hyperliquid
@@ -117,10 +117,10 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
 
         if execution_result.get("status") == "ok":
             logger.info(f"✅ Order executed successfully: {execution_result}")
-            save_ai_decision(db, account.id, decision, success=True)
+            save_ai_decision(db, account, decision, portfolio, executed=True)
         else:
             logger.error(f"❌ Order execution failed: {execution_result}")
-            save_ai_decision(db, account.id, decision, success=False)
+            save_ai_decision(db, account, decision, portfolio, executed=False)
 
     except Exception as e:
         logger.error(

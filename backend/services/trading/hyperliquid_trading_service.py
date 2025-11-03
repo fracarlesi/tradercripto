@@ -175,7 +175,7 @@ class HyperliquidTradingService:
         def _place_order():
             """Synchronous order placement."""
             order_result = self._exchange.market_open(
-                coin=symbol, is_buy=is_buy, sz=size, reduce_only=reduce_only
+                name=symbol, is_buy=is_buy, sz=size
             )
             return order_result
 

@@ -729,7 +729,7 @@ def save_ai_decision(
             prev_portion=Decimal(str(prev_portion)),
             target_portion=Decimal(str(target_portion)),
             total_balance=Decimal(str(portfolio["total_assets"])),
-            executed="true" if executed else "false",
+            executed=executed,
             order_id=order_id,
         )
 
