@@ -258,10 +258,15 @@ def _validate_decision(
         cash_available = portfolio["cash"]
         order_value_usd = cash_available * target_portion
         price = prices[symbol]
-        order_size = order_value_usd / price
 
-        # Let Hyperliquid decide if order size is acceptable
-        # No artificial minimum imposed by us
+        # Hyperliquid minimum is $10 per order
+        # If AI suggests less but we have enough, bump to $10
+        MIN_ORDER_USD = 10.0
+        if order_value_usd < MIN_ORDER_USD and cash_available >= MIN_ORDER_USD:
+            order_value_usd = MIN_ORDER_USD
+            logger.info(f"Bumped order value from ${cash_available * target_portion:.2f} to ${MIN_ORDER_USD:.2f} (Hyperliquid minimum)")
+
+        order_size = order_value_usd / price
 
         return {"valid": True, "reason": "Buy validation passed", "order_size": order_size}
 
