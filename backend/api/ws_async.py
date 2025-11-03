@@ -332,7 +332,7 @@ async def websocket_endpoint_async(websocket: WebSocket):
                         # Get or create default account
                         initial_capital = float(msg.get("initial_capital", 1000.0))
                         account = await AccountRepository.get_or_create_default_account(
-                            db, user.id, f"{username} AI Trader", initial_capital
+                            db, user.id
                         )
 
                         account_id = account.id
