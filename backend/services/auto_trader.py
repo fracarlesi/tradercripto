@@ -260,8 +260,8 @@ def _validate_decision(
         price = prices[symbol]
         order_size = order_value_usd / price
 
-        if order_size * price < 10:  # Min order $10
-            return {"valid": False, "reason": f"Order value ${order_size * price:.2f} below $10 minimum"}
+        # Let Hyperliquid decide if order size is acceptable
+        # No artificial minimum imposed by us
 
         return {"valid": True, "reason": "Buy validation passed", "order_size": order_size}
 
@@ -274,8 +274,8 @@ def _validate_decision(
 
         order_size = position["quantity"] * target_portion
 
-        if order_size * prices[symbol] < 10:  # Min order $10
-            return {"valid": False, "reason": f"Order value ${order_size * prices[symbol]:.2f} below $10 minimum"}
+        # Let Hyperliquid decide if order size is acceptable
+        # No artificial minimum imposed by us
 
         return {"valid": True, "reason": "Sell validation passed", "order_size": order_size}
 
