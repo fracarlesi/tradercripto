@@ -419,8 +419,6 @@ async def websocket_endpoint(websocket: WebSocket):
                     account = get_or_create_default_account(
                         db,
                         user.id,
-                        account_name=f"{username} AI Trader",
-                        initial_capital=float(msg.get("initial_capital", 100000)),
                     )
                     account_id = account.id
                     manager.register(account_id, websocket)
