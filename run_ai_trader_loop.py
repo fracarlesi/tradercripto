@@ -43,7 +43,7 @@ def main():
             logger.info(f"{'='*60}")
 
             try:
-                place_ai_driven_crypto_order(max_ratio=0.2)
+                place_ai_driven_crypto_order(max_ratio=1.0)  # Allow AI to use up to 100% per trade
                 logger.info(f"✅ Cycle #{cycle_count} completed successfully")
             except Exception as e:
                 logger.error(f"❌ Cycle #{cycle_count} failed: {e}", exc_info=True)
