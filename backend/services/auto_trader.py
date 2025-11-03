@@ -201,7 +201,7 @@ def _build_portfolio_data(db, account: Account) -> dict[str, Any]:
             {
                 "symbol": pos.symbol,
                 "quantity": float(pos.quantity or 0),
-                "avg_cost": float(pos.avg_cost or 0),
+                "avg_cost": float(pos.average_cost or 0),
             }
             for pos in positions
         ],
@@ -303,11 +303,24 @@ def _execute_order_async(decision: dict[str, Any], order_size: float) -> dict[st
     if operation == "hold":
         return {"status": "ok", "message": "No action (HOLD)"}
 
-    # Execute async order in new event loop (since we're in sync context)
+    # Round order size to proper decimals for Hyperliquid
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
+            # Get asset metadata to determine proper decimal places
+            meta = loop.run_until_complete(hyperliquid_trading_service.get_meta_async())
+            asset_info = next((a for a in meta['universe'] if a['name'] == symbol), None)
+
+            if asset_info:
+                sz_decimals = asset_info.get('szDecimals', 8)
+                rounded_size = round(order_size, sz_decimals)
+                logger.info(f"Rounded order size from {order_size} to {rounded_size} ({sz_decimals} decimals)")
+                order_size = rounded_size
+            else:
+                logger.warning(f"Asset {symbol} not found in meta, using raw size")
+
+            # Execute order with properly rounded size
             result = loop.run_until_complete(
                 hyperliquid_trading_service.place_market_order_async(
                     symbol=symbol, is_buy=(operation == "buy"), size=order_size, reduce_only=False

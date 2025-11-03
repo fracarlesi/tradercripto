@@ -23,7 +23,7 @@ def calc_positions_value(db: Session, account_id: int) -> float:
 
     for p in positions:
         try:
-            price = Decimal(str(get_last_price(p.symbol, p.market)))
+            price = Decimal(str(get_last_price(p.symbol)))
             total += price * Decimal(p.quantity)
         except Exception as e:
             # Log error but don't interrupt calculation, skip position if price cannot be obtained
@@ -31,7 +31,7 @@ def calc_positions_value(db: Session, account_id: int) -> float:
 
             logger = logging.getLogger(__name__)
             logger.warning(
-                f"Cannot get price for {p.symbol}.{p.market}, skipping position value calculation: {e}"
+                f"Cannot get price for {p.symbol}, skipping position value calculation: {e}"
             )
             continue
 

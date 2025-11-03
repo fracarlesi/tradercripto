@@ -721,8 +721,11 @@ def save_ai_decision(
                     prev_portion = symbol_value / total_balance
 
         # Create decision log entry
+        from datetime import datetime, timezone
+
         decision_log = AIDecisionLog(
             account_id=account.id,
+            decision_time=datetime.now(timezone.utc),
             reason=reason,
             operation=operation,
             symbol=symbol if operation != "hold" else None,
