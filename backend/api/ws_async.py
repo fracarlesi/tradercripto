@@ -246,8 +246,8 @@ async def _send_snapshot_async(db: AsyncSession, account_id: int):
                 "order_id": t.order_id,
                 "user_id": t.account_id,
                 "symbol": t.symbol,
-                "name": t.name,
-                "market": t.market,
+                "name": t.symbol,  # Trade model does not have name field
+                "market": "CRYPTO",  # Hyperliquid is crypto only
                 "side": t.side,
                 "price": float(t.price),
                 "quantity": float(t.quantity),
