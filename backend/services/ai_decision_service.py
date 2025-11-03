@@ -14,8 +14,7 @@ from threading import Lock
 import requests
 from sqlalchemy.orm import Session
 
-from database.models import Account, AIDecisionLog, Position
-from services.asset_calculator import calc_positions_value
+from database.models import Account, AIDecisionLog
 from services.market_data.news_feed import fetch_latest_news
 
 logger = logging.getLogger(__name__)
@@ -411,31 +410,6 @@ def get_decision_cache(window_seconds: int = 600) -> AIDecisionCache:
     return _global_decision_cache
 
 
-def _get_portfolio_data(db: Session, account: Account) -> dict:
-    """Get current portfolio positions and values"""
-    positions = (
-        db.query(Position)
-        .filter(Position.account_id == account.id, Position.market == "CRYPTO")
-        .all()
-    )
-
-    portfolio = {}
-    for pos in positions:
-        if float(pos.quantity) > 0:
-            portfolio[pos.symbol] = {
-                "quantity": float(pos.quantity),
-                "avg_cost": float(pos.avg_cost),
-                "current_value": float(pos.quantity) * float(pos.avg_cost),
-            }
-
-    return {
-        "cash": float(account.current_cash),
-        "frozen_cash": float(account.frozen_cash),
-        "positions": portfolio,
-        "total_assets": float(account.current_cash) + calc_positions_value(db, account.id),
-    }
-
-
 def call_ai_for_decision(
     account: Account, portfolio: dict, prices: dict[str, float]
 ) -> dict | None:
@@ -484,8 +458,22 @@ Rules:
 - For "buy": symbol is what to buy, target_portion_of_balance is % of cash to use (0.0-1.0)
 - For "sell": symbol is what to sell, target_portion_of_balance is % of position to sell (0.0-1.0)
 - For "hold": no action taken
-- Keep target_portion_of_balance between 0.1 and 0.3 for risk management
-- Only choose symbols you have data for"""
+- You have FULL FREEDOM on target_portion_of_balance (0.0-1.0) - use ANY percentage you think is optimal
+- CRITICAL: You can ONLY sell positions that are listed in "Current Positions" above
+- CRITICAL: If a symbol is NOT in "Current Positions", you CANNOT sell it (choose "buy" or "hold" instead)
+- IMPORTANT: Consider selling underperforming positions to free up cash for better opportunities
+- IMPORTANT: Diversification is key - don't get stuck in losing positions just because cash is low
+- IMPORTANT: You can sell up to 100% of a position if needed to rebalance the portfolio
+- Only choose symbols you have data for
+
+CRITICAL INVESTMENT PRINCIPLE:
+- THE UNIT PRICE OF A CRYPTOCURRENCY IS COMPLETELY IRRELEVANT
+- What matters is PERCENTAGE GAIN, not number of coins
+- Buying $10 of BTC at $100,000/coin or $10 of DOGE at $0.17/coin gives the SAME return if both go up 10%
+- DO NOT favor cheap coins (like DOGE) just because you can buy "more coins"
+- Focus on: technical analysis, news sentiment, market trends, fundamentals
+- A $100,000 Bitcoin that goes up 20% earns MORE than a $0.17 DOGE that goes up 10%
+- Evaluate each cryptocurrency on its PERFORMANCE POTENTIAL, not on its unit price"""
 
         # Count tokens for cost tracking (T095)
         input_tokens = count_tokens(prompt)
@@ -713,9 +701,24 @@ def save_ai_decision(
         # Calculate previous portion for the symbol
         prev_portion = 0.0
         if operation in ["sell", "hold"] and symbol:
-            positions = portfolio.get("positions", {})
-            if symbol in positions:
-                symbol_value = positions[symbol]["current_value"]
+            # Handle positions as list (from auto_trader) or dict (legacy)
+            positions = portfolio.get("positions", [])
+
+            # Find position for this symbol
+            position = None
+            if isinstance(positions, list):
+                # New format: list of position dicts
+                position = next((p for p in positions if p.get("symbol") == symbol), None)
+            elif isinstance(positions, dict):
+                # Legacy format: dict keyed by symbol
+                position = positions.get(symbol)
+
+            if position:
+                # Calculate current value of this position
+                quantity = position.get("quantity", 0)
+                avg_cost = position.get("avg_cost", 0)
+                symbol_value = quantity * avg_cost
+
                 total_balance = portfolio["total_assets"]
                 if total_balance > 0:
                     prev_portion = symbol_value / total_balance
