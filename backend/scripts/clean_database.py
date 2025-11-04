@@ -80,7 +80,7 @@ async def verify_hyperliquid_state():
         }
 
     except Exception as e:
-        logger.error(f"❌ Failed to fetch Hyperliquid state: {e}")
+        logger.error(f"❌ Failed to fetch Hyperliquid state: {e}", exc_info=True)
         return None
 
 
@@ -169,7 +169,7 @@ def clean_database(hyperliquid_state):
         return True
 
     except Exception as e:
-        logger.error(f"❌ Database cleanup failed: {e}")
+        logger.error(f"❌ Database cleanup failed: {e}", exc_info=True)
         db.rollback()
         return False
     finally:
@@ -215,7 +215,7 @@ def verify_cleanup():
             return False
 
     except Exception as e:
-        logger.error(f"❌ Verification failed: {e}")
+        logger.error(f"❌ Verification failed: {e}", exc_info=True)
         return False
     finally:
         db.close()

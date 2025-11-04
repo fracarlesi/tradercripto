@@ -285,56 +285,326 @@ class Account:
 
 **Action**: When refactoring or identifying obsolete code, **delete it immediately** - do NOT ask for permission.
 
-## 🔍 EXCEPTION HANDLING & LOGGING - IDENTIFIED IMPROVEMENTS
+## 🚨 MANDATORY ERROR HANDLING PATTERNS
 
-**Status**: Identified during 2025-11-04 refactoring analysis
+**CRITICAL RULE**: ALWAYS use `exc_info=True` when logging exceptions.
 
-**Issue**: 42 files contain `except Exception as e` patterns that may lack proper logging with stack traces.
+**Status**: 42 files identified (2025-11-04 analysis) requiring remediation.
 
-**Files Requiring Review**:
-- api/*_routes.py (10 files)
-- services/*.py (20+ files)
-- scripts/maintenance/*.py (8 files)
-- scripts/testing/*.py (4 files)
+### Pattern Checklist (verify EVERY exception handler)
 
-**Best Practices to Apply**:
-1. **Always include exc_info=True** in error logs:
-   ```python
-   # ❌ WRONG - No stack trace
-   except Exception as e:
-       logger.error(f"Error: {e}")
+✅ **CORRECT - Full stack trace**:
+```python
+try:
+    await hyperliquid_trading_service.get_user_state_async()
+except HyperliquidAPIError as e:  # Specific exception
+    logger.error(
+        "Hyperliquid API call failed",
+        extra={"context": {"account_id": account_id}},
+        exc_info=True  # ← MANDATORY for stack trace
+    )
+    raise  # Re-raise or return error response
+```
 
-   # ✅ CORRECT - Full stack trace
-   except Exception as e:
-       logger.error(f"Error: {e}", exc_info=True)
-   ```
+❌ **WRONG - No stack trace**:
+```python
+except Exception as e:
+    logger.error(f"Error: {e}")  # Missing exc_info=True!
+```
 
-2. **Catch specific exceptions** instead of bare `Exception`:
-   ```python
-   # ❌ WRONG - Too broad
-   except Exception as e:
-       pass
+❌ **WRONG - Silent failure**:
+```python
+except Exception:
+    pass  # Hides bugs - NEVER do this!
+```
 
-   # ✅ CORRECT - Specific exceptions
-   except (ValueError, KeyError, TypeError) as e:
-       logger.error(f"Data error: {e}", exc_info=True)
-   except HyperliquidAPIError as e:
-       logger.error(f"API error: {e}", exc_info=True)
-   ```
+❌ **WRONG - Too generic**:
+```python
+except Exception as e:  # Catch specific exceptions instead
+    logger.error(f"Error: {e}", exc_info=True)
+```
 
-3. **Fail fast** - Don't silently catch and continue:
-   ```python
-   # ❌ WRONG - Silent failure
-   except Exception:
-       pass  # Hides bugs
+### Best Practice Reference
 
-   # ✅ CORRECT - Log and re-raise or return error
-   except Exception as e:
-       logger.error(f"Critical error: {e}", exc_info=True)
-       raise  # Or return error response
-   ```
+Real-world example from codebase (`backend/api/ws_async.py:720-757`):
+```python
+except Exception as e:
+    logger.error(
+        "WebSocket message handling error",
+        extra={
+            "context": {
+                "message_type": kind,
+                "account_id": account_id,
+                "error": str(e),
+            }
+        },
+        exc_info=True  # ✅ Perfect!
+    )
+```
 
-**TODO**: Systematic review of identified 42 files to apply best practices (future task)
+### Action Items for Code Cleanup
+
+**IDENTIFIED**: 42 files need remediation.
+
+**Process** (apply when touching any file):
+1. Review ALL exception handlers in the file
+2. Add `exc_info=True` to ALL logger.error/logger.exception calls
+3. Replace `except Exception` with specific exception types where possible
+4. Remove silent `pass` blocks - log or re-raise instead
+
+**Files Requiring Update** (priority order):
+- `api/*_routes.py` (10 files) - User-facing, needs best error messages
+- `services/*.py` (20+ files) - Core business logic
+- `scripts/maintenance/*.py` (8 files) - Lower priority
+- `scripts/testing/*.py` (4 files) - Lower priority
+
+## 🎯 SOURCE OF TRUTH HIERARCHY
+
+**CRITICAL**: This project has MULTIPLE data sources. Follow this hierarchy to avoid inconsistencies.
+
+### 1. Real-time Trading Data → Hyperliquid API (ALWAYS)
+- Account balance (accountValue, totalMarginUsed, withdrawable)
+- Position sizes, entry prices, PNL, leverage
+- Order status, fills
+- Current market prices (mids)
+
+**Rule**: NEVER read balance/positions from database for real-time display. DB is for metadata only.
+
+### 2. Historical Snapshots → PortfolioSnapshot table
+- Used ONLY for portfolio charts (5-minute intervals)
+- Source: Captured FROM Hyperliquid API via scheduled job
+- Never modify manually - read-only for charting
+
+### 3. Account Metadata → Account table
+- AI model config (model, base_url, api_key)
+- Account name, type, active status
+- User relationships
+- NO balance data stored here (deprecated fields removed)
+
+### 4. Trade History → Database tables (Order, Trade, Position)
+- Synced FROM Hyperliquid via `hyperliquid_sync_service`
+- Used for historical analysis, NOT real-time display
+- Sync lag: up to 60 seconds (configured interval)
+
+### Decision Matrix: "Where do I get this data?"
+
+| Data Type | Source | Method | Cache OK? | File Reference |
+|-----------|--------|--------|-----------|----------------|
+| Current balance | Hyperliquid API | `get_user_state_async()` | No (real-time) | `backend/services/trading/hyperliquid_trading_service.py:68-89` |
+| Current price | Hyperliquid API | `get_all_mids_async()` | Yes (2 min TTL) | `backend/services/market_data/price_cache.py` |
+| Position size | Hyperliquid API | `get_user_state_async()` | No (real-time) | `backend/api/ws_async.py:215-289` |
+| Historical chart | DB (PortfolioSnapshot) | `get_snapshots_for_chart()` | Yes (immutable) | `backend/services/portfolio_snapshot_service.py` |
+| Trade history | DB (Trade) | `get_trades_by_account()` | Yes (historical) | `backend/repositories/trade_repo.py` |
+| Account config | DB (Account) | `get_account_by_id()` | Yes (rarely changes) | `backend/repositories/account_repo.py` |
+
+### Anti-Pattern Examples (DO NOT DO THIS):
+
+❌ **Reading balance from DB**:
+```python
+# WRONG - DB balance fields are DEPRECATED and REMOVED
+account_value = account.current_cash + account.frozen_cash  # Fields don't exist!
+```
+
+✅ **Reading balance from Hyperliquid**:
+```python
+# CORRECT - Always from API
+user_state = await hyperliquid_trading_service.get_user_state_async()
+account_value = float(user_state['marginSummary']['accountValue'])
+```
+
+❌ **Using fallback/stale prices**:
+```python
+# WRONG - Shows wrong price to user
+last_price = pos.get('markPx', entry_px)  # Fallback to entry price!
+```
+
+✅ **Fetch current price or show None**:
+```python
+# CORRECT - Real current price or explicit None
+all_mids = await hyperliquid_trading_service.get_all_mids_async()
+current_price = all_mids.get(coin)
+if current_price is None:
+    logger.warning(f"No current price for {coin}")
+    last_price = None  # Don't invent data!
+```
+
+## 🐛 DEBUG WORKFLOW
+
+**When things go wrong, follow this systematic approach:**
+
+### Step 1: Identify Error Location (use structured logs)
+
+```bash
+# Filter logs by request_id (from X-Request-ID header)
+grep "request_id.*abc123" logs.json | jq '.exception.stack_trace'
+
+# Filter by operation type
+grep "operation.*place_order" logs.json | jq '.exception'
+
+# Filter by account_id
+grep "account_id.*1" logs.json | jq 'select(.level=="ERROR")'
+```
+
+**Log locations** (depending on deployment):
+- Development: stdout (visible in terminal)
+- Production: JSON logs in structured format
+
+### Step 2: Check Service Health
+
+```bash
+# Overall health check
+curl http://localhost:8000/api/health
+
+# Detailed readiness check (tests DB + Hyperliquid API)
+curl http://localhost:8000/api/readiness
+```
+
+**Expected response (healthy)**:
+```json
+{
+  "ready": true,
+  "checks": {
+    "database": "ok",
+    "hyperliquid_api": "ok",
+    "environment": "ok"
+  },
+  "message": "System ready"
+}
+```
+
+### Step 3: Verify Source of Truth
+
+**When debugging data inconsistencies, ALWAYS check Hyperliquid first:**
+
+```bash
+# 1. Check real balance from Hyperliquid (source of truth)
+cd backend/
+python3 -c "
+import asyncio
+from services.trading.hyperliquid_trading_service import hyperliquid_trading_service
+
+async def check():
+    state = await hyperliquid_trading_service.get_user_state_async()
+    print(f'Real balance: \${state[\"marginSummary\"][\"accountValue\"]}')
+    print(f'Margin used: \${state[\"marginSummary\"][\"totalMarginUsed\"]}')
+    print(f'Withdrawable: \${state[\"marginSummary\"][\"withdrawable\"]}')
+
+asyncio.run(check())
+"
+```
+
+```bash
+# 2. Check DB snapshots (should match Hyperliquid after sync)
+sqlite3 backend/data.db "
+SELECT
+    datetime(snapshot_time) as time,
+    total_assets,
+    withdrawable,
+    total_margin_used
+FROM portfolio_snapshots
+ORDER BY snapshot_time DESC
+LIMIT 5;
+"
+```
+
+```bash
+# 3. If mismatch detected → force sync
+curl -X POST http://localhost:8000/api/sync/account/1
+```
+
+### Step 4: Common Issues & Solutions
+
+| Symptom | Root Cause | Solution | File Reference |
+|---------|------------|----------|----------------|
+| Balance shows $0 | Fallback value used | Remove `or '0'` pattern | Search codebase for `or '0'` |
+| Positions missing | Not synced from Hyperliquid | Run manual sync | `backend/api/sync_routes.py` |
+| Prices stale | Price cache expired | Check cleanup job running | `backend/services/startup.py:35-41` |
+| Chart empty | No snapshots yet | Wait 5 min or run snapshot job | `backend/services/portfolio_snapshot_service.py` |
+| API timeouts | Hyperliquid API slow/down | Check circuit breaker | `backend/services/trading/hyperliquid_sync_service.py` |
+| WebSocket disconnects | Client network issue | Check connection manager | `backend/api/ws_async.py:720-757` |
+
+### Step 5: Check Background Jobs
+
+```bash
+# Verify scheduled jobs are running
+ps aux | grep uvicorn  # Main app process
+
+# Check job execution logs
+grep "portfolio_snapshot_capture\|hyperliquid_sync\|price_cache_cleanup" logs.json
+```
+
+**Expected job frequency**:
+- `price_cache_cleanup`: Every 2 minutes
+- `hyperliquid_account_sync`: Every 60 seconds
+- `portfolio_snapshot_capture`: Every 5 minutes
+- `auto_trading`: Every 3 minutes (180 seconds)
+
+## 📂 QUICK REFERENCE - Critical File Locations
+
+**When debugging, start with these files (ranked by importance):**
+
+### 🔴 Core Trading Logic (MOST CRITICAL)
+- `backend/services/trading/hyperliquid_trading_service.py:20-90` - Hyperliquid SDK wrapper (async)
+- `backend/services/trading/hyperliquid_sync_service.py` - Sync logic (balance, positions, trades)
+- `backend/services/auto_trader.py` - AI decision execution
+- `backend/services/trading_commands.py:54-79` - Order execution & post-trade sync
+
+### 🟡 API Endpoints (USER-FACING)
+- `backend/api/accounts_async.py` - Account management
+- `backend/api/ws_async.py:215-289` - WebSocket real-time data (**uses Hyperliquid directly!**)
+- `backend/api/health_routes.py:128-202` - Health/readiness checks
+- `backend/api/sync_routes.py` - Manual sync triggers
+
+### 🟢 Data Models & Database
+- `backend/database/models.py:78-138` - Account model (**metadata only, NO balance**)
+- `backend/database/connection.py:76-117` - Async session factory + `get_db()` dependency
+- `backend/repositories/account_repo.py` - Account CRUD operations
+- `backend/repositories/position_repo.py` - Position CRUD operations
+
+### 🔵 Configuration & Logging
+- `backend/config/settings.py:10-97` - Pydantic settings (env vars)
+- `backend/config/logging.py:13-72` - Structured JSON logger (with exc_info support!)
+
+### 🟣 Testing
+- `backend/tests/integration/test_api_integration.py:130-205` - API endpoint tests
+- `backend/tests/unit/test_hyperliquid_sync_service.py` - Sync service tests
+- `backend/tests/integration/test_sync_integration.py:459-513` - Transaction rollback tests
+
+### ⚪ Startup & Scheduling
+- `backend/main.py:12-84` - FastAPI lifespan (startup/shutdown sequence)
+- `backend/services/startup.py:12-71` - **Service initialization order (CRITICAL!)**
+- `backend/services/infrastructure/scheduler.py:23-38` - APScheduler wrapper
+
+### 🔧 SERVICE INITIALIZATION ORDER (CRITICAL - DO NOT CHANGE!)
+
+**From `backend/services/startup.py:12-71`**
+
+```python
+def initialize_services():
+    # 1. MUST be first - other services depend on scheduler
+    start_scheduler()
+
+    # 2. Registers market data fetch jobs
+    setup_market_tasks()
+
+    # 3. Depends on market data being available
+    schedule_auto_trading()
+
+    # 4-6. Independent interval tasks (order doesn't matter)
+    task_scheduler.add_interval_task(clear_expired_prices)       # Every 2 min
+    task_scheduler.add_interval_task(sync_all_active_accounts)   # Every 60 sec
+    task_scheduler.add_interval_task(capture_snapshots_wrapper)  # Every 5 min
+```
+
+**Why this order matters**:
+- Scheduler MUST start first (all jobs registered to it)
+- Auto trading needs market data → setup_market_tasks() first
+- Interval tasks are independent → can be registered in any order
+
+**DO NOT**:
+- Change initialization order without understanding dependencies
+- Start auto trading before market tasks
+- Skip scheduler initialization
 
 ## 📚 MCP SERVER DOCUMENTATION
 

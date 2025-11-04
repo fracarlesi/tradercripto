@@ -331,9 +331,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated }:
                               API Key: {'*'.repeat(Math.max(0, (account.api_key?.length || 0) - 4))}{account.api_key?.slice(-4) || '****'}
                             </div>
                           )}
-                          <div className="text-xs text-muted-foreground">
-                            Cash: ${account.current_cash?.toLocaleString() || '0'}
-                          </div>
+                          {/* REMOVED: Cash display (deprecated - use AccountOverview API for balance data) */}
                         </div>
                         <div className="flex gap-2">
                           <Button

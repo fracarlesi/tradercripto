@@ -51,7 +51,7 @@ def _load_trading_symbols() -> list[str]:
         logger.info(f"Loaded {len(symbols)} crypto symbols for trading")
         return symbols
     except Exception as e:
-        logger.error(f"Failed to load symbols: {e}")
+        logger.error(f"Failed to load symbols: {e}", exc_info=True)
         # Fallback to basic list
         return ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"]
 
@@ -76,7 +76,7 @@ def _sync_balance_from_hyperliquid(db: Session, account: Account) -> None:
             logger.warning(f"Post-trade sync failed: {result.get('error', result.get('reason'))}")
 
     except Exception as e:
-        logger.error(f"Failed to sync balance from Hyperliquid: {e}")
+        logger.error(f"Failed to sync balance from Hyperliquid: {e}", exc_info=True)
 
 
 def _get_market_prices(symbols: list[str]) -> dict[str, float]:

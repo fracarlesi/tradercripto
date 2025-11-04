@@ -3,8 +3,7 @@ import { Button } from '@/components/ui/button'
 import { toast } from 'react-hot-toast'
 
 interface User {
-  current_cash: number
-  frozen_cash: number
+  // REMOVED: current_cash, frozen_cash (deprecated - use AccountOverview data)
   has_password: boolean
   id?: string
 }

@@ -80,7 +80,7 @@ async def get_crypto_price(symbol: str, market: str = "US"):
             symbol=symbol, market=market, price=price, timestamp=int(time.time() * 1000)
         )
     except Exception as e:
-        logger.error(f"Failed to get crypto price: {e}")
+        logger.error(f"Failed to get crypto price: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get crypto price: {str(e)}")
 
 
@@ -122,7 +122,7 @@ async def get_multiple_prices(symbols: str, market: str = "hyperliquid"):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to batch get crypto prices: {e}")
+        logger.error(f"Failed to batch get crypto prices: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to batch get crypto prices: {str(e)}")
 
 
@@ -179,7 +179,7 @@ async def get_crypto_kline(symbol: str, market: str = "US", period: str = "1m", 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to get K-line data: {e}")
+        logger.error(f"Failed to get K-line data: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get K-line data: {str(e)}")
 
 
@@ -206,7 +206,7 @@ async def get_crypto_market_status(symbol: str, market: str = "US"):
             current_time=status_data.get("current_time", ""),
         )
     except Exception as e:
-        logger.error(f"Failed to get market status: {e}")
+        logger.error(f"Failed to get market status: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get market status: {str(e)}")
 
 
@@ -231,7 +231,7 @@ async def market_data_health():
             "message": "Market data service is running normally",
         }
     except Exception as e:
-        logger.error(f"Market data service health check failed: {e}")
+        logger.error(f"Market data service health check failed: {e}", exc_info=True)
         return {
             "status": "unhealthy",
             "timestamp": int(time.time() * 1000),

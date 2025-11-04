@@ -69,7 +69,7 @@ class OrderScheduler:
                     break
 
             except Exception as e:
-                logger.error(f"Order scheduler execution error: {e}")
+                logger.error(f"Order scheduler execution error: {e}", exc_info=True)
                 # Wait briefly after error to avoid rapid looping
                 time.sleep(1)
 
@@ -87,7 +87,7 @@ class OrderScheduler:
                 )
 
         except Exception as e:
-            logger.error(f"Error processing orders: {e}")
+            logger.error(f"Error processing orders: {e}", exc_info=True)
         finally:
             db.close()
 
@@ -101,7 +101,7 @@ class OrderScheduler:
             self._process_orders()
             logger.info("Manual order processing completed")
         except Exception as e:
-            logger.error(f"Manual order processing failed: {e}")
+            logger.error(f"Manual order processing failed: {e}", exc_info=True)
 
 
 # Global scheduler instance

@@ -108,7 +108,7 @@ class TaskScheduler:
                         task_info["func"](**task_info["kwargs"])
                         task_info["last_run"] = current_time
                     except Exception as e:
-                        logger.error(f"Error executing task {task_id}: {e}")
+                        logger.error(f"Error executing task {task_id}: {e}", exc_info=True)
             time.sleep(1)
 
     def start(self) -> None:

@@ -151,7 +151,7 @@ async def create_new_order(request: OrderCreateRequest, db: Session = Depends(ge
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         db.rollback()
-        logger.error(f"Failed to create order: {e}")
+        logger.error(f"Failed to create order: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to create order: {str(e)}")
 
 
@@ -171,7 +171,7 @@ async def get_user_pending_orders(user_id: int | None = None, db: Session = Depe
         orders = get_pending_orders(db, user_id)
         return orders
     except Exception as e:
-        logger.error(f"Failed to get pending orders: {e}")
+        logger.error(f"Failed to get pending orders: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get pending orders: {str(e)}")
 
 
@@ -198,7 +198,7 @@ async def get_user_orders(user_id: int, status: str | None = None, db: Session =
         return orders
 
     except Exception as e:
-        logger.error(f"Failed to get user orders: {e}")
+        logger.error(f"Failed to get user orders: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get user orders: {str(e)}")
 
 
@@ -241,7 +241,7 @@ async def execute_order_manually(order_id: int, db: Session = Depends(get_db)):
             )
 
     except Exception as e:
-        logger.error(f"Failed to execute order: {e}")
+        logger.error(f"Failed to execute order: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to execute order: {str(e)}")
 
 
@@ -280,7 +280,7 @@ async def cancel_user_order(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to cancel order: {e}")
+        logger.error(f"Failed to cancel order: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to cancel order: {str(e)}")
 
 
@@ -305,7 +305,7 @@ async def process_all_orders(db: Session = Depends(get_db)):
         )
 
     except Exception as e:
-        logger.error(f"Failed to process orders: {e}")
+        logger.error(f"Failed to process orders: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to process orders: {str(e)}")
 
 
@@ -331,7 +331,7 @@ async def get_order_details(order_id: int, db: Session = Depends(get_db)):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to get order details: {e}")
+        logger.error(f"Failed to get order details: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get order details: {str(e)}")
 
 
@@ -365,7 +365,7 @@ async def orders_health_check(db: Session = Depends(get_db)):
         }
 
     except Exception as e:
-        logger.error(f"Order service health check failed: {e}")
+        logger.error(f"Order service health check failed: {e}", exc_info=True)
         return {
             "status": "unhealthy",
             "timestamp": int(time.time() * 1000),

@@ -239,7 +239,7 @@ def _fetch_market_prices() -> dict[str, float]:
         return prices
 
     except Exception as e:
-        logger.error(f"Failed to fetch market prices: {e}")
+        logger.error(f"Failed to fetch market prices: {e}", exc_info=True)
         # Return fallback prices
         return {"BTC": 100000.0, "ETH": 4000.0, "SOL": 200.0}
 
@@ -288,7 +288,7 @@ def _build_portfolio_data(db, account: Account) -> dict[str, Any]:
         cash_available = account_value - positions_value
 
     except Exception as e:
-        logger.error(f"Failed to fetch real-time data from Hyperliquid: {e}")
+        logger.error(f"Failed to fetch real-time data from Hyperliquid: {e}", exc_info=True)
         # Balance data from Hyperliquid API, not from DB
         # If Hyperliquid API fails, we cannot proceed - no fallback to stale DB data
         raise RuntimeError(f"Cannot fetch balance from Hyperliquid: {e}") from e

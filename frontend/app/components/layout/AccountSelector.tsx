@@ -8,9 +8,7 @@ interface Account {
   username?: string
   name: string
   account_type: string
-  initial_capital: number
-  current_cash: number
-  frozen_cash: number
+  // REMOVED: initial_capital, current_cash, frozen_cash (deprecated - use AccountOverview data)
   model?: string
   is_active?: boolean
 }
@@ -58,9 +56,8 @@ export default function AccountSelector({ currentAccount, onAccountChange, usern
       const accountData = await getAccounts()
       console.log('Fetched accounts:', accountData)
       
-      // TODO: Fetch real balance from Hyperliquid API
-      // After migration, current_cash and frozen_cash fields no longer exist in DB
-      // Balance must be fetched from GET /api/accounts/{id}/overview or similar
+      // REMOVED: current_cash and frozen_cash fields (deprecated - use AccountOverview API)
+      // Balance must be fetched from GET /api/accounts/{id}/overview
       const accountsWithAssets: AccountWithAssets[] = accountData.map((account) => ({
         ...account,
         total_assets: 0, // Will be populated by API call

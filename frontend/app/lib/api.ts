@@ -149,9 +149,7 @@ export interface TradingAccount {
   model?: string  // AI model (e.g., "gpt-4-turbo")
   base_url?: string  // API endpoint
   api_key?: string  // API key (masked in responses)
-  initial_capital: number
-  current_cash: number
-  frozen_cash: number
+  // REMOVED: initial_capital, current_cash, frozen_cash (deprecated - use AccountOverview instead)
   account_type: string  // "AI" or "MANUAL"
   is_active: boolean
 }
@@ -161,7 +159,7 @@ export interface TradingAccountCreate {
   model?: string
   base_url?: string
   api_key?: string
-  initial_capital?: number
+  // REMOVED: initial_capital (deprecated - balance managed by Hyperliquid)
   account_type?: string
 }
 

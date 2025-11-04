@@ -581,12 +581,12 @@ def sync_all_active_accounts() -> None:
                         await hyperliquid_sync_service.sync_account(db, account.id)
                         logger.debug(f"Synced account {account.id}")
                     except Exception as e:
-                        logger.error(f"Failed to sync account {account.id}: {e}")
+                        logger.error(f"Failed to sync account {account.id}: {e}", exc_info=True)
 
         except Exception as e:
-            logger.error(f"Failed to sync accounts: {e}")
+            logger.error(f"Failed to sync accounts: {e}", exc_info=True)
 
     try:
         asyncio.run(_sync())
     except Exception as e:
-        logger.error(f"Sync task failed: {e}")
+        logger.error(f"Sync task failed: {e}", exc_info=True)

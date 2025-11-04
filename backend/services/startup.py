@@ -45,10 +45,31 @@ def initialize_services() -> None:
         )
         logger.info("Hyperliquid account sync task started (1-minute interval)")
 
+        # Add portfolio snapshot capture task (every 5 minutes)
+        # Captures periodic snapshots of portfolio value from Hyperliquid for historical charts
+        from services.portfolio_snapshot_service import capture_all_accounts_snapshots_async
+        from database.connection import SessionLocal
+        import asyncio
+
+        def capture_snapshots_wrapper():
+            """Wrapper to run async snapshot capture in sync context"""
+            db = SessionLocal()
+            try:
+                asyncio.run(capture_all_accounts_snapshots_async(db))
+            finally:
+                db.close()
+
+        task_scheduler.add_interval_task(
+            task_func=capture_snapshots_wrapper,
+            interval_seconds=300,  # Capture every 5 minutes
+            task_id="portfolio_snapshot_capture",
+        )
+        logger.info("Portfolio snapshot capture task started (5-minute interval)")
+
         logger.info("All services initialized successfully")
 
     except Exception as e:
-        logger.error(f"Service initialization failed: {e}")
+        logger.error(f"Service initialization failed: {e}", exc_info=True)
         raise
 
 
@@ -61,7 +82,7 @@ def shutdown_services() -> None:
         logger.info("All services have been shut down")
 
     except Exception as e:
-        logger.error(f"Failed to shut down services: {e}")
+        logger.error(f"Failed to shut down services: {e}", exc_info=True)
 
 
 async def startup_event() -> None:
@@ -87,7 +108,7 @@ def schedule_auto_trading(interval_seconds: int = 300, max_ratio: float = 0.2) -
             place_ai_driven_crypto_order(max_ratio)
             logger.info("Initial AI-driven trading execution completed")
         except Exception as e:
-            logger.error(f"Error during initial AI-driven trading execution: {e}")
+            logger.error(f"Error during initial AI-driven trading execution: {e}", exc_info=True)
 
     logger.info("Scheduling AI-driven crypto trading (real trading on Hyperliquid)")
 

@@ -47,7 +47,7 @@ def get_last_price(symbol: str, market: str = "CRYPTO") -> float:
             return price
         raise Exception(f"Hyperliquid returned invalid price: {price}")
     except Exception as hl_err:
-        logger.error(f"Failed to get price from Hyperliquid: {hl_err}")
+        logger.error(f"Failed to get price from Hyperliquid: {hl_err}", exc_info=True)
         raise Exception(f"Unable to get real-time price for {key}: {hl_err}")
 
 
@@ -64,7 +64,7 @@ def get_kline_data(
             return data
         raise Exception("Hyperliquid returned empty K-line data")
     except Exception as hl_err:
-        logger.error(f"Failed to get K-line data from Hyperliquid: {hl_err}")
+        logger.error(f"Failed to get K-line data from Hyperliquid: {hl_err}", exc_info=True)
         raise Exception(f"Unable to get K-line data for {key}: {hl_err}")
 
 
@@ -79,7 +79,7 @@ def get_market_status(symbol: str, market: str = "CRYPTO") -> dict[str, Any]:
         )
         return status
     except Exception as hl_err:
-        logger.error(f"Failed to get market status: {hl_err}")
+        logger.error(f"Failed to get market status: {hl_err}", exc_info=True)
         raise Exception(f"Unable to get market status for {key}: {hl_err}")
 
 
@@ -90,7 +90,7 @@ def get_all_symbols() -> list[str]:
         logger.info(f"Got {len(symbols)} trading pairs from Hyperliquid")
         return symbols
     except Exception as hl_err:
-        logger.error(f"Failed to get trading pairs list: {hl_err}")
+        logger.error(f"Failed to get trading pairs list: {hl_err}", exc_info=True)
         return ["BTC/USD", "ETH/USD", "SOL/USD"]  # default trading pairs
 
 

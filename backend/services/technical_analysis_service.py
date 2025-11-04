@@ -74,7 +74,7 @@ def fetch_historical_data(symbols: list[str], period: str = "1d", count: int = 7
             logger.info(f"Fetched {len(df)} candles for {symbol}")
 
         except Exception as e:
-            logger.error(f"Failed to fetch historical data for {symbol}: {e}")
+            logger.error(f"Failed to fetch historical data for {symbol}: {e}", exc_info=True)
             continue
 
     return history

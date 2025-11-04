@@ -48,7 +48,7 @@ async def stop_auto_trading():
         logger.info("✅ Auto-trading scheduler stopped successfully")
         return True
     except Exception as e:
-        logger.error(f"❌ Failed to stop scheduler: {e}")
+        logger.error(f"❌ Failed to stop scheduler: {e}", exc_info=True)
         return False
 
 
@@ -93,7 +93,7 @@ async def get_account_state():
         return user_state
 
     except Exception as e:
-        logger.error(f"❌ Failed to get account state: {e}")
+        logger.error(f"❌ Failed to get account state: {e}", exc_info=True)
         return None
 
 
@@ -167,7 +167,7 @@ async def liquidate_all_positions(user_state):
             await asyncio.sleep(1)
 
         except Exception as e:
-            logger.error(f"   ❌ Exception while closing {coin}: {e}")
+            logger.error(f"   ❌ Exception while closing {coin}: {e}", exc_info=True)
             results.append({
                 'symbol': coin,
                 'size': size,
@@ -212,7 +212,7 @@ async def verify_liquidation():
             return False
 
     except Exception as e:
-        logger.error(f"❌ Failed to verify liquidation: {e}")
+        logger.error(f"❌ Failed to verify liquidation: {e}", exc_info=True)
         return False
 
 
@@ -277,7 +277,7 @@ async def calculate_total_pnl():
             logger.info(f"   💔 LOSS: {float(realized_pnl):,.2f}")
 
     except Exception as e:
-        logger.error(f"❌ Failed to calculate P&L: {e}")
+        logger.error(f"❌ Failed to calculate P&L: {e}", exc_info=True)
     finally:
         db.close()
 

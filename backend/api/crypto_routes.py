@@ -20,7 +20,7 @@ async def get_crypto_symbols() -> list[str]:
         symbols = get_all_symbols()
         return symbols
     except Exception as e:
-        logger.error(f"Error getting crypto symbols: {e}")
+        logger.error(f"Error getting crypto symbols: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -31,7 +31,7 @@ async def get_crypto_price(symbol: str) -> dict[str, Any]:
         price = get_last_price(symbol, "CRYPTO")
         return {"symbol": symbol, "price": price, "market": "CRYPTO"}
     except Exception as e:
-        logger.error(f"Error getting price for {symbol}: {e}")
+        logger.error(f"Error getting price for {symbol}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -42,7 +42,7 @@ async def get_crypto_market_status(symbol: str) -> dict[str, Any]:
         status = get_market_status(symbol, "CRYPTO")
         return status
     except Exception as e:
-        logger.error(f"Error getting market status for {symbol}: {e}")
+        logger.error(f"Error getting market status for {symbol}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

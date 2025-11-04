@@ -42,7 +42,7 @@ def _load_all_supported_symbols() -> dict[str, str]:
         logger.info(f"Loaded {len(symbols)} crypto symbols from Hyperliquid")
         return symbols
     except Exception as e:
-        logger.error(f"Failed to load symbols from Hyperliquid: {e}")
+        logger.error(f"Failed to load symbols from Hyperliquid: {e}", exc_info=True)
         # Fallback to basic list
         return {
             "BTC": "Bitcoin",
@@ -365,7 +365,7 @@ class AIDecisionCache:
             return fresh_decision
 
         except Exception as err:
-            logger.error(f"Failed to generate AI decision: {err}")
+            logger.error(f"Failed to generate AI decision: {err}", exc_info=True)
             return None
 
     def _cleanup_expired(self) -> None:
@@ -615,7 +615,7 @@ CRITICAL INVESTMENT PRINCIPLES:
                     time.sleep(wait_time)
                     continue
                 else:
-                    logger.error(f"AI API request failed after {max_retries} attempts: {req_err}")
+                    logger.error(f"AI API request failed after {max_retries} attempts: {req_err}", exc_info=True)
                     return None
 
         result = response.json()
@@ -738,14 +738,14 @@ CRITICAL INVESTMENT PRINCIPLES:
         return None
 
     except requests.RequestException as err:
-        logger.error(f"AI API request failed: {err}")
+        logger.error(f"AI API request failed: {err}", exc_info=True)
         return None
     except json.JSONDecodeError as err:
-        logger.error(f"Failed to parse AI response as JSON: {err}")
+        logger.error(f"Failed to parse AI response as JSON: {err}", exc_info=True)
         # Try to log the content that failed to parse
         try:
             if "text_content" in locals():
-                logger.error(f"Content that failed to parse: {text_content[:500]}")
+                logger.error(f"Content that failed to parse: {text_content[:500]}", exc_info=True)
         except:
             pass
         return None
@@ -825,7 +825,7 @@ def save_ai_decision(
         )
 
     except Exception as err:
-        logger.error(f"Failed to save AI decision log: {err}")
+        logger.error(f"Failed to save AI decision log: {err}", exc_info=True)
         db.rollback()
 
 

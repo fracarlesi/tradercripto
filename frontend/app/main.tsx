@@ -29,8 +29,7 @@ interface Account {
   user_id: number
   name: string
   account_type: string
-  current_cash: number
-  frozen_cash: number
+  // REMOVED: current_cash, frozen_cash (deprecated - use Overview data from API)
 }
 
 interface Overview {

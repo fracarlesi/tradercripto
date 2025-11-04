@@ -53,6 +53,7 @@ class HyperliquidTradingService:
             logger.error(
                 "Failed to initialize Hyperliquid SDK",
                 extra={"context": {"error": str(e)}},
+                exc_info=True,
             )
             raise
 
@@ -224,7 +225,7 @@ class HyperliquidTradingService:
             try:
                 await self.update_leverage_async(symbol=symbol, leverage=leverage, is_cross=True)
             except Exception as e:
-                logger.error(f"Failed to update leverage for {symbol}: {e}")
+                logger.error(f"Failed to update leverage for {symbol}: {e}", exc_info=True)
                 # Continue with order placement anyway (will use existing leverage)
 
         def _place_order():

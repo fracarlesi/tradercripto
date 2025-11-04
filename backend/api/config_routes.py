@@ -35,7 +35,7 @@ async def check_required_configs(db: Session = Depends(get_db)):
     try:
         return {"has_required_configs": True, "missing_configs": []}
     except Exception as e:
-        logger.error(f"Failed to check required configs: {e}")
+        logger.error(f"Failed to check required configs: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to check required configs: {str(e)}")
 
 
@@ -61,5 +61,5 @@ async def get_scheduler_status():
 
         return {"scheduler_running": is_running, "total_jobs": len(jobs), "jobs": jobs}
     except Exception as e:
-        logger.error(f"Failed to get scheduler status: {e}")
+        logger.error(f"Failed to get scheduler status: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get scheduler status: {str(e)}")

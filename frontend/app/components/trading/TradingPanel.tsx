@@ -6,8 +6,7 @@ import TradeButtons from './TradeButtons'
 
 interface User {
   id?: string
-  current_cash: number
-  frozen_cash: number
+  // REMOVED: current_cash, frozen_cash (deprecated - use AccountOverview data)
   has_password: boolean
 }
 
@@ -129,12 +128,7 @@ export default function TradingPanel({ onPlace, user, positions = [], lastPrices
       toast.error('Please input a valid quantity')
       return
     }
-    const amount = price * quantity
-    const cashAvailable = user?.current_cash ?? 0
-    if (amount > cashAvailable) {
-      toast.error('Insufficient available cash')
-      return
-    }
+    // REMOVED: Cash validation (deprecated - balance validation moved to backend using AccountOverview data)
     
     // If already authenticated, trade directly
     if (isAuthenticated && authSessionToken) {

@@ -18,9 +18,7 @@ interface Account {
   user_id: number
   name: string
   account_type: string
-  initial_capital: number
-  current_cash: number
-  frozen_cash: number
+  // REMOVED: initial_capital, current_cash, frozen_cash (deprecated - use AccountOverview data)
 }
 
 interface Overview {
@@ -211,8 +209,7 @@ export default function AccountDataView({
                   }}
                   user={overview?.account ? {
                     id: overview.account.id.toString(),
-                    current_cash: overview.account.current_cash,
-                    frozen_cash: overview.account.frozen_cash,
+                    // REMOVED: current_cash, frozen_cash (deprecated - TradingPanel no longer uses these)
                     has_password: true // Assume has password for now
                   } : undefined}
                   positions={positions.map(p => ({
@@ -437,7 +434,8 @@ function AIDecisionLog({ aiDecisions }: { aiDecisions: AIDecision[] }) {
 function PortfolioPieChart({ overview, positions }: { overview: Overview, positions: Position[] }) {
   // Calculate portfolio composition
   const totalValue = overview.total_assets
-  const cashValue = overview.account.current_cash
+  // REMOVED: overview.account.current_cash (deprecated - calculate from overview data)
+  const cashValue = overview.total_assets - overview.positions_value
 
   // Group positions by symbol for the pie chart
   const positionData = positions.reduce((acc, position) => {

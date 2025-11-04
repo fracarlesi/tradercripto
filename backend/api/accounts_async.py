@@ -101,7 +101,7 @@ async def list_accounts(db: AsyncSession = Depends(get_db)):
         return accounts
 
     except Exception as e:
-        logger.error("Failed to list accounts", extra={"context": {"error": str(e)}})
+        logger.error("Failed to list accounts", extra={"context": {"error": str(e, exc_info=True)}})
         raise HTTPException(status_code=500, detail=f"Failed to list accounts: {str(e)}")
 
 

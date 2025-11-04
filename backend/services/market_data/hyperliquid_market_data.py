@@ -27,7 +27,7 @@ class HyperliquidClient:
             )
             logger.info("Hyperliquid exchange initialized successfully")
         except Exception as e:
-            logger.error(f"Failed to initialize Hyperliquid exchange: {e}")
+            logger.error(f"Failed to initialize Hyperliquid exchange: {e}", exc_info=True)
             raise
 
     def get_last_price(self, symbol: str) -> float | None:
@@ -46,7 +46,7 @@ class HyperliquidClient:
             return float(price) if price else None
 
         except Exception as e:
-            logger.error(f"Error fetching price for {symbol}: {e}")
+            logger.error(f"Error fetching price for {symbol}: {e}", exc_info=True)
             return None
 
     def get_kline_data(
@@ -108,7 +108,7 @@ class HyperliquidClient:
             return klines
 
         except Exception as e:
-            logger.error(f"Error fetching klines for {symbol}: {e}")
+            logger.error(f"Error fetching klines for {symbol}: {e}", exc_info=True)
             return []
 
     def get_market_status(self, symbol: str) -> dict[str, Any]:
@@ -145,7 +145,7 @@ class HyperliquidClient:
             return status
 
         except Exception as e:
-            logger.error(f"Error getting market status for {symbol}: {e}")
+            logger.error(f"Error getting market status for {symbol}: {e}", exc_info=True)
             return {"market_status": "ERROR", "is_trading": False, "error": str(e)}
 
     def get_all_symbols(self) -> list[str]:
@@ -175,7 +175,7 @@ class HyperliquidClient:
             return result
 
         except Exception as e:
-            logger.error(f"Error getting symbols: {e}")
+            logger.error(f"Error getting symbols: {e}", exc_info=True)
             return ["BTC/USD", "ETH/USD", "SOL/USD"]  # Fallback popular pairs
 
     def _format_symbol(self, symbol: str) -> str:

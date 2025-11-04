@@ -340,3 +340,51 @@ class CryptoPrice(Base):
         Index("idx_prices_unique", "symbol", "price_date", unique=True),
         Index("idx_prices_lookup", "symbol"),
     )
+
+
+class PortfolioSnapshot(Base):
+    """Portfolio value snapshot from Hyperliquid (SNAPSHOT-BASED SYSTEM).
+
+    Purpose: Store periodic snapshots of portfolio value from Hyperliquid
+    Source: Hyperliquid API user_state() - captured every 5 minutes
+    Strategy: Simple, accurate, no P&L reconstruction needed
+
+    This replaces the complex reconstruction logic in asset_curve_calculator.
+    """
+
+    __tablename__ = "portfolio_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), nullable=False)
+
+    # Snapshot data from Hyperliquid marginSummary
+    total_assets: Mapped[Decimal] = mapped_column(
+        Numeric(20, 8), nullable=False
+    )  # accountValue
+    total_raw_usd: Mapped[Decimal] = mapped_column(
+        Numeric(20, 8), nullable=False
+    )  # totalRawUsd
+    total_margin_used: Mapped[Decimal] = mapped_column(
+        Numeric(20, 8), nullable=False
+    )  # totalMarginUsed
+    withdrawable: Mapped[Decimal] = mapped_column(
+        Numeric(20, 8), nullable=False
+    )  # withdrawable cash
+
+    snapshot_time: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    # Relationship
+    account: Mapped["Account"] = relationship("Account", lazy="selectin")
+
+    __table_args__ = (
+        Index("idx_snapshots_account", "account_id"),
+        Index("idx_snapshots_time", "snapshot_time"),
+        Index("idx_snapshots_account_time", "account_id", "snapshot_time"),
+        # Prevent duplicate snapshots for same account at same time
+        UniqueConstraint("account_id", "snapshot_time", name="uq_snapshot_account_time"),
+    )

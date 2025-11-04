@@ -199,7 +199,7 @@ async def _send_snapshot_async_impl(db: AsyncSession, account_id: int):
         cash_available = account_value - positions_value
 
     except Exception as e:
-        logger.error(f"Failed to fetch real-time data from Hyperliquid: {e}")
+        logger.error(f"Failed to fetch real-time data from Hyperliquid: {e}", exc_info=True)
         # Fallback to zeros if API fails
         account_value = 0
         cash_available = 0
@@ -252,7 +252,7 @@ async def _send_snapshot_async_impl(db: AsyncSession, account_id: int):
     try:
         all_mids = await hyperliquid_trading_service.get_all_mids_async()
     except Exception as e:
-        logger.error(f"Failed to fetch market prices from Hyperliquid: {e}")
+        logger.error(f"Failed to fetch market prices from Hyperliquid: {e}", exc_info=True)
         all_mids = {}
 
     # Build positions list DIRECTLY from Hyperliquid (NO DATABASE!)

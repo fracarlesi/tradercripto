@@ -145,7 +145,7 @@ def process_all_pending_orders(db: Session) -> dict[str, Any]:
             if check_and_execute_order(db, order):
                 executed_count += 1
         except Exception as e:
-            logger.error(f"Failed to process order {order.id}: {e}")
+            logger.error(f"Failed to process order {order.id}: {e}", exc_info=True)
             failed_count += 1
 
     logger.info(

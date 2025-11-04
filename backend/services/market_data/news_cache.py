@@ -110,7 +110,7 @@ class NewsFeedCache:
                 return fresh_news
 
             except Exception as err:
-                logger.error(f"Failed to fetch fresh news: {err}")
+                logger.error(f"Failed to fetch fresh news: {err}", exc_info=True)
 
                 # Return stale cache if available, or empty string
                 if self._cached_news is not None:

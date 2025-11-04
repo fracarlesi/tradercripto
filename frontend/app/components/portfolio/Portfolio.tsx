@@ -6,9 +6,7 @@ interface Account {
   user_id: number
   name: string
   account_type: string
-  initial_capital: number
-  current_cash: number
-  frozen_cash: number
+  // REMOVED: initial_capital, current_cash, frozen_cash (deprecated - use AccountOverview data)
 }
 
 interface Overview {
