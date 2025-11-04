@@ -185,55 +185,10 @@ class HyperliquidSyncService:
                 )
             )
 
-    async def sync_account_balance(self, db: AsyncSession, account: Account) -> Account:
-        """Sync account balance from Hyperliquid (T034).
-
-        Args:
-            db: Async database session
-            account: Account to sync
-
-        Returns:
-            Updated Account instance
-
-        Raises:
-            SyncException: If sync fails
-        """
-        try:
-            user_state = await hyperliquid_trading_service.get_user_state_async()
-
-            if "marginSummary" not in user_state:
-                raise SyncException("marginSummary not found in user state")
-
-            margin = user_state["marginSummary"]
-            account_value = Decimal(str(margin.get("accountValue", "0")))
-            margin_used = Decimal(str(margin.get("totalMarginUsed", "0")))
-            available = account_value - margin_used
-
-            # Balance data from Hyperliquid API, not from DB
-            # Note: This sync updates DB for backward compatibility, but new code should fetch from API directly
-            updated = await AccountRepository.update_balance(
-                db=db, account=account, current_cash=available, frozen_cash=margin_used
-            )
-
-            logger.info(
-                "Account balance synced",
-                extra={
-                    "context": {
-                        "account_id": account.id,
-                        "available": float(available),
-                        "frozen": float(margin_used),
-                    }
-                },
-            )
-
-            return updated
-
-        except Exception as e:
-            logger.error(
-                "Failed to sync account balance",
-                extra={"context": {"account_id": account.id, "error": str(e)}},
-            )
-            raise SyncException(f"Balance sync failed: {e}") from e
+    # REMOVED: sync_account_balance() method
+    # Balance fields (current_cash, frozen_cash) were removed from Account model during refactoring.
+    # Balance data should ALWAYS be fetched directly from Hyperliquid API in real-time,
+    # not stored in database. See Account model docstring for details.
 
     async def sync_positions(self, db: AsyncSession, account: Account) -> int:
         """Sync positions using clear-recreate strategy (T035).
@@ -478,22 +433,20 @@ class HyperliquidSyncService:
                     raise SyncException(f"Account {account_id} not found")
 
                 # Atomic sync operations
+                # Note: Balance is NOT synced - always fetched from Hyperliquid API in real-time
                 async with db.begin_nested():
-                    # 1. Sync balance
-                    await self.sync_account_balance(db=db, account=account)
-
-                    # 2. Sync positions (clear-recreate)
+                    # 1. Sync positions (clear-recreate)
                     positions_synced = await self.sync_positions(db=db, account=account)
 
-                    # 3. Get fills from Hyperliquid
+                    # 2. Get fills from Hyperliquid
                     fills = await hyperliquid_trading_service.get_user_fills_async(limit=100)
 
-                    # 4. Sync orders from fills
+                    # 3. Sync orders from fills
                     orders_synced = await self.sync_orders_from_fills(
                         db=db, account=account, fills=fills
                     )
 
-                    # 5. Sync trades from fills
+                    # 4. Sync trades from fills
                     trades_synced = await self.sync_trades_from_fills(
                         db=db, account=account, fills=fills
                     )

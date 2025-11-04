@@ -8,9 +8,9 @@ import logging
 from typing import Any
 
 from .hyperliquid_market_data import (
+    get_all_prices_from_hyperliquid,
     get_all_symbols_from_hyperliquid,
     get_kline_data_from_hyperliquid,
-    get_last_price_from_hyperliquid,
     get_market_status_from_hyperliquid,
 )
 from .news_cache import NewsFeedCache, get_news_cache
@@ -39,7 +39,10 @@ def get_last_price(symbol: str, market: str = "CRYPTO") -> float:
     logger.info(f"Getting real-time price for {key} from API...")
 
     try:
-        price = get_last_price_from_hyperliquid(symbol)
+        # Get ALL prices using efficient all_mids() endpoint, then filter
+        all_prices = get_all_prices_from_hyperliquid()
+        price = all_prices.get(symbol)
+
         if price and price > 0:
             logger.info(f"Got real-time price for {key} from Hyperliquid: {price}")
             # Cache the price
@@ -106,7 +109,7 @@ __all__ = [
     "clear_expired_prices",
     "get_price_cache_stats",
     # Hyperliquid market data (low-level)
-    "get_last_price_from_hyperliquid",
+    "get_all_prices_from_hyperliquid",
     "get_kline_data_from_hyperliquid",
     "get_market_status_from_hyperliquid",
     "get_all_symbols_from_hyperliquid",

@@ -1,5 +1,5 @@
 """
-Hyperliquid market data service using CCXT
+Hyperliquid market data service using CCXT and native SDK
 """
 
 import logging
@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import ccxt
+from hyperliquid.info import Info
 
 logger = logging.getLogger(__name__)
 
@@ -29,25 +30,6 @@ class HyperliquidClient:
         except Exception as e:
             logger.error(f"Failed to initialize Hyperliquid exchange: {e}", exc_info=True)
             raise
-
-    def get_last_price(self, symbol: str) -> float | None:
-        """Get the last price for a symbol"""
-        try:
-            if not self.exchange:
-                self._initialize_exchange()
-
-            # Ensure symbol is in CCXT format (e.g., 'BTC/USD')
-            formatted_symbol = self._format_symbol(symbol)
-
-            ticker = self.exchange.fetch_ticker(formatted_symbol)
-            price = ticker["last"]
-
-            logger.info(f"Got price for {formatted_symbol}: {price}")
-            return float(price) if price else None
-
-        except Exception as e:
-            logger.error(f"Error fetching price for {symbol}: {e}", exc_info=True)
-            return None
 
     def get_kline_data(
         self, symbol: str, period: str = "1d", count: int = 100
@@ -178,6 +160,30 @@ class HyperliquidClient:
             logger.error(f"Error getting symbols: {e}", exc_info=True)
             return ["BTC/USD", "ETH/USD", "SOL/USD"]  # Fallback popular pairs
 
+    def get_all_prices(self) -> dict[str, float]:
+        """Get ALL market prices in ONE API call using Hyperliquid native SDK.
+
+        This is the most efficient method to get prices for all available symbols.
+        Uses the all_mids() endpoint which returns all mid prices in a single call.
+
+        Returns:
+            dict[str, float]: Dictionary mapping symbol (e.g., "BTC") to price
+        """
+        try:
+            # Use native Hyperliquid SDK for maximum efficiency
+            info = Info()
+            all_mids = info.all_mids()
+
+            # Convert string prices to float
+            prices = {symbol: float(price) for symbol, price in all_mids.items()}
+
+            logger.info(f"Got {len(prices)} prices from all_mids() endpoint in ONE API call")
+            return prices
+
+        except Exception as e:
+            logger.error(f"Error fetching all prices: {e}", exc_info=True)
+            return {}
+
     def _format_symbol(self, symbol: str) -> str:
         """Format symbol for CCXT (e.g., 'BTC' -> 'BTC/USDC:USDC')"""
         if "/" in symbol and ":" in symbol:
@@ -196,11 +202,6 @@ class HyperliquidClient:
 hyperliquid_client = HyperliquidClient()
 
 
-def get_last_price_from_hyperliquid(symbol: str) -> float | None:
-    """Get last price from Hyperliquid"""
-    return hyperliquid_client.get_last_price(symbol)
-
-
 def get_kline_data_from_hyperliquid(
     symbol: str, period: str = "1d", count: int = 100
 ) -> list[dict[str, Any]]:
@@ -216,3 +217,15 @@ def get_market_status_from_hyperliquid(symbol: str) -> dict[str, Any]:
 def get_all_symbols_from_hyperliquid() -> list[str]:
     """Get all available symbols from Hyperliquid"""
     return hyperliquid_client.get_all_symbols()
+
+
+def get_all_prices_from_hyperliquid() -> dict[str, float]:
+    """Get ALL market prices from Hyperliquid in ONE API call.
+
+    This is the most efficient method - returns 468+ prices in a single call.
+    Uses the all_mids() endpoint from Hyperliquid native SDK.
+
+    Returns:
+        dict[str, float]: Dictionary mapping symbol (e.g., "BTC") to price
+    """
+    return hyperliquid_client.get_all_prices()

@@ -19,7 +19,7 @@ from services.ai_decision_service import (
     get_active_ai_accounts,
     save_ai_decision,
 )
-from services.hyperliquid_market_data import get_last_price_from_hyperliquid
+from services.market_data.hyperliquid_market_data import get_all_prices_from_hyperliquid
 
 # Import Hyperliquid trading service for real trading
 from services.hyperliquid_trading_service import hyperliquid_trading_service
@@ -80,17 +80,19 @@ def _sync_balance_from_hyperliquid(db: Session, account: Account) -> None:
 
 
 def _get_market_prices(symbols: list[str]) -> dict[str, float]:
-    """Get latest prices for given symbols from Hyperliquid"""
-    prices = {}
-    for symbol in symbols:
-        try:
-            # Use Hyperliquid market data service for all symbols
-            price = get_last_price_from_hyperliquid(symbol)
-            if price and price > 0:
-                prices[symbol] = float(price)
-        except Exception as err:
-            logger.warning(f"Failed to get price for {symbol}: {err}")
-    return prices
+    """Get latest prices for given symbols from Hyperliquid in ONE efficient API call"""
+    try:
+        # Get ALL prices in ONE API call using all_mids() endpoint
+        all_prices = get_all_prices_from_hyperliquid()
+
+        # Filter to only requested symbols
+        prices = {symbol: price for symbol, price in all_prices.items() if symbol in symbols}
+
+        logger.info(f"Fetched {len(prices)}/{len(symbols)} prices in ONE API call")
+        return prices
+    except Exception as err:
+        logger.error(f"Failed to get market prices: {err}", exc_info=True)
+        return {}
 
 
 def _select_side(
