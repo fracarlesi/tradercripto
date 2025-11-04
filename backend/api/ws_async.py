@@ -234,17 +234,17 @@ async def _send_snapshot_async_impl(db: AsyncSession, account_id: int):
     ai_decisions = result.scalars().all()
 
     # Build overview with REAL-TIME Hyperliquid data
+    # Balance data fetched from Hyperliquid API, not stored in DB
     overview = {
         "account": {
             "id": account.id,
             "user_id": account.user_id,
             "name": account.name,
             "account_type": account.account_type,
-            "initial_capital": account_value,  # Real-time from Hyperliquid
-            "current_cash": cash_available,    # Real-time from Hyperliquid
-            "frozen_cash": total_margin_used,   # Real-time from Hyperliquid
         },
-        "total_assets": account_value,  # Real-time total
+        "total_assets": account_value,  # Real-time from Hyperliquid
+        "cash_available": cash_available,  # Real-time from Hyperliquid
+        "margin_used": total_margin_used,   # Real-time from Hyperliquid
         "positions_value": positions_value,  # Real-time from Hyperliquid
     }
 

@@ -28,9 +28,7 @@ class AccountResponse(BaseModel):
     username: str
     name: str
     account_type: str
-    initial_capital: float
-    current_cash: float
-    frozen_cash: float
+    # Balance data fetched from Hyperliquid API, not stored in DB
     model: str | None = None
     base_url: str | None = None
     api_key: str | None = None
@@ -52,7 +50,7 @@ class AccountCreate(BaseModel):
 
     name: str
     account_type: str = "AI"
-    initial_capital: float = 1000.0
+    # Balance data fetched from Hyperliquid API, not stored in DB
     model: str | None = "deepseek-chat"
     base_url: str | None = "https://api.deepseek.com"
     api_key: str | None = None
@@ -83,6 +81,7 @@ async def list_accounts(db: AsyncSession = Depends(get_db)):
         )
         rows = result.all()
 
+        # Balance data fetched from Hyperliquid API, not stored in DB
         accounts = []
         for account, user in rows:
             accounts.append(
@@ -92,9 +91,6 @@ async def list_accounts(db: AsyncSession = Depends(get_db)):
                     username=user.username,
                     name=account.name,
                     account_type=account.account_type,
-                    initial_capital=float(account.initial_capital),
-                    current_cash=float(account.current_cash),
-                    frozen_cash=float(account.frozen_cash),
                     model=account.model,
                     base_url=account.base_url,
                     api_key=account.api_key,
@@ -167,13 +163,14 @@ async def get_account_overview(account_id: int, db: AsyncSession = Depends(get_d
         )
         pending_orders = result.scalar()
 
+        # Balance data fetched from Hyperliquid API, not stored in DB
         return AccountOverview(
             account={
                 "id": account.id,
                 "name": account.name,
                 "account_type": account.account_type,
-                "current_cash": available_cash,  # Real-time from Hyperliquid
-                "frozen_cash": total_margin_used,  # Real-time from Hyperliquid
+                "available_cash": available_cash,  # Real-time from Hyperliquid
+                "margin_used": total_margin_used,  # Real-time from Hyperliquid
             },
             total_assets=account_value,  # Real-time total from Hyperliquid
             positions_value=positions_value,  # Calculated with current market prices
@@ -208,14 +205,12 @@ async def create_account(data: AccountCreate, db: AsyncSession = Depends(get_db)
 
         user = await UserRepository.get_or_create_user(db, username="default")
 
+        # Balance data fetched from Hyperliquid API, not stored in DB
         # Create account
         account = Account(
             user_id=user.id,
             name=data.name,
             account_type=data.account_type,
-            initial_capital=Decimal(str(data.initial_capital)),
-            current_cash=Decimal(str(data.initial_capital)),
-            frozen_cash=Decimal("0"),
             model=data.model,
             base_url=data.base_url,
             api_key=data.api_key or "default-key-please-update",
@@ -226,15 +221,13 @@ async def create_account(data: AccountCreate, db: AsyncSession = Depends(get_db)
         await db.flush()
         await db.refresh(account)
 
+        # Balance data fetched from Hyperliquid API, not stored in DB
         return AccountResponse(
             id=account.id,
             user_id=account.user_id,
             username=user.username,
             name=account.name,
             account_type=account.account_type,
-            initial_capital=float(account.initial_capital),
-            current_cash=float(account.current_cash),
-            frozen_cash=float(account.frozen_cash),
             model=account.model,
             base_url=account.base_url,
             api_key=account.api_key,
@@ -288,15 +281,13 @@ async def update_account(account_id: int, data: AccountUpdate, db: AsyncSession 
         await db.flush()
         await db.refresh(account)
 
+        # Balance data fetched from Hyperliquid API, not stored in DB
         return AccountResponse(
             id=account.id,
             user_id=account.user_id,
             username=user.username,
             name=account.name,
             account_type=account.account_type,
-            initial_capital=float(account.initial_capital),
-            current_cash=float(account.current_cash),
-            frozen_cash=float(account.frozen_cash),
             model=account.model,
             base_url=account.base_url,
             api_key=account.api_key,

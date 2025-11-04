@@ -118,6 +118,8 @@ def _select_side(
     )
     available_quantity = int(position.available_quantity) if position else 0
 
+    # Balance data from Hyperliquid API, not from DB
+    # This is legacy code - should fetch from Hyperliquid API instead
     choices = []
 
     if float(account.current_cash) >= price and max_quantity_by_value >= 1:
@@ -228,7 +230,8 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
 
                 # Calculate quantity based on operation
                 if operation == "buy":
-                    # Calculate quantity based on available cash and target portion
+                    # Balance data from Hyperliquid API, not from DB
+                    # This is legacy code - should fetch from Hyperliquid API instead
                     available_cash = float(account.current_cash)
                     order_value = available_cash * target_portion
 

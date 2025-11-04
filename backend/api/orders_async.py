@@ -287,15 +287,8 @@ async def cancel_order_async(
                 detail=f"Order status is {order.status}, cannot be cancelled",
             )
 
-        # Get account to release frozen cash
-        result = await db.execute(select(Account).where(Account.id == order.account_id))
-        account = result.scalar_one_or_none()
-
-        if account:
-            # Release frozen cash
-            frozen_amount = float(order.price or 0) * float(order.quantity)
-            account.frozen_cash = float(account.frozen_cash) - frozen_amount
-            account.current_cash = float(account.current_cash) + frozen_amount
+        # Balance management handled by Hyperliquid (single source of truth)
+        # No need to update local balance fields - they don't exist anymore
 
         # Update order status
         order.status = "CANCELLED"

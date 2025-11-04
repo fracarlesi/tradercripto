@@ -68,11 +68,11 @@ def place_and_execute(
     notional = exec_price * Decimal(quantity)
     commission = _calc_commission(notional)
 
+    # Balance data from Hyperliquid API, not from DB
     if side == "BUY":
-        cash_needed = notional + commission
-        if Decimal(str(user.current_cash)) < cash_needed:
-            raise ValueError("Insufficient USD cash")
-        user.current_cash = float(Decimal(str(user.current_cash)) - cash_needed)
+        # This is a legacy order executor - no longer used
+        # Balance validation should happen via Hyperliquid API, not DB
+        raise ValueError("Legacy order executor - use hyperliquid_trading_service instead")
 
         # position update (avg cost)
         pos = (
@@ -115,8 +115,9 @@ def place_and_execute(
         pos.quantity = int(pos.quantity) - quantity
         pos.available_quantity = int(pos.available_quantity) - quantity
 
-        cash_gain = notional - commission
-        user.current_cash = float(Decimal(str(user.current_cash)) + cash_gain)
+        # Balance data from Hyperliquid API, not from DB
+        # This is a legacy order executor - no longer used
+        raise ValueError("Legacy order executor - use hyperliquid_trading_service instead")
 
     trade = Trade(
         order_id=order.id,

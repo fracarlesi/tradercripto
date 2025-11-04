@@ -289,11 +289,9 @@ def _build_portfolio_data(db, account: Account) -> dict[str, Any]:
 
     except Exception as e:
         logger.error(f"Failed to fetch real-time data from Hyperliquid: {e}")
-        # Fallback to DB values if API fails
-        cash_available = float(account.current_cash or 0)
-        total_margin_used = float(account.frozen_cash or 0)
-        positions_value = calc_positions_value(db, account.id)
-        account_value = cash_available + positions_value
+        # Balance data from Hyperliquid API, not from DB
+        # If Hyperliquid API fails, we cannot proceed - no fallback to stale DB data
+        raise RuntimeError(f"Cannot fetch balance from Hyperliquid: {e}") from e
     finally:
         loop.close()
 

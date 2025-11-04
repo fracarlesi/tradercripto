@@ -89,15 +89,13 @@ async def get_specific_account_overview(account_id: int, db: Session = Depends(g
             .count()
         )
 
+        # Balance data fetched from Hyperliquid API, not stored in DB
         return {
             "account": {
                 "id": account.id,
                 "name": account.name,
                 "account_type": account.account_type,
-                "current_cash": float(account.current_cash),
-                "frozen_cash": float(account.frozen_cash),
             },
-            "total_assets": positions_value + float(account.current_cash),
             "positions_value": positions_value,
             "positions_count": positions_count,
             "pending_orders": pending_orders,
@@ -139,16 +137,14 @@ async def get_account_overview(db: Session = Depends(get_db)):
             .count()
         )
 
+        # Balance data fetched from Hyperliquid API, not stored in DB
         return {
             "account": {
                 "id": account.id,
                 "name": account.name,
                 "account_type": account.account_type,
-                "current_cash": float(account.current_cash),
-                "frozen_cash": float(account.frozen_cash),
             },
             "portfolio": {
-                "total_assets": positions_value + float(account.current_cash),
                 "positions_value": positions_value,
                 "positions_count": positions_count,
                 "pending_orders": pending_orders,
@@ -179,6 +175,7 @@ async def create_new_account(payload: dict, db: Session = Depends(get_db)):
         if "name" not in payload or not payload["name"]:
             raise HTTPException(status_code=400, detail="Account name is required")
 
+        # Balance data fetched from Hyperliquid API, not stored in DB
         # Create new account
         new_account = Account(
             user_id=user.id,
@@ -188,9 +185,6 @@ async def create_new_account(payload: dict, db: Session = Depends(get_db)):
             model=payload.get("model", "gpt-4-turbo"),
             base_url=payload.get("base_url", "https://api.openai.com/v1"),
             api_key=payload.get("api_key", ""),
-            initial_capital=float(payload.get("initial_capital", 10000.0)),
-            current_cash=float(payload.get("initial_capital", 10000.0)),
-            frozen_cash=0.0,
             is_active="true",
         )
 
@@ -207,15 +201,13 @@ async def create_new_account(payload: dict, db: Session = Depends(get_db)):
         except Exception as e:
             logger.warning(f"Failed to reset auto trading job: {e}")
 
+        # Balance data fetched from Hyperliquid API, not stored in DB
         return {
             "id": new_account.id,
             "user_id": new_account.user_id,
             "username": user.username,
             "name": new_account.name,
             "account_type": new_account.account_type,
-            "initial_capital": float(new_account.initial_capital),
-            "current_cash": float(new_account.current_cash),
-            "frozen_cash": float(new_account.frozen_cash),
             "model": new_account.model,
             "base_url": new_account.base_url,
             "api_key": new_account.api_key,
@@ -280,15 +272,13 @@ async def update_account_settings(account_id: int, payload: dict, db: Session = 
 
         user = db.query(User).filter(User.id == account.user_id).first()
 
+        # Balance data fetched from Hyperliquid API, not stored in DB
         return {
             "id": account.id,
             "user_id": account.user_id,
             "username": user.username if user else "unknown",
             "name": account.name,
             "account_type": account.account_type,
-            "initial_capital": float(account.initial_capital),
-            "current_cash": float(account.current_cash),
-            "frozen_cash": float(account.frozen_cash),
             "model": account.model,
             "base_url": account.base_url,
             "api_key": account.api_key,
@@ -333,20 +323,9 @@ async def get_asset_curve_by_timeframe(timeframe: str = "1d", db: Session = Depe
             unique_symbols.add((symbol, market))
 
         if not unique_symbols:
-            # No trades yet, return initial capital for all accounts
-            now = datetime.now()
-            return [
-                {
-                    "timestamp": int(now.timestamp()),
-                    "datetime_str": now.isoformat(),
-                    "user_id": account.user_id,
-                    "username": account.name,
-                    "total_assets": float(account.initial_capital),
-                    "cash": float(account.current_cash),
-                    "positions_value": 0.0,
-                }
-                for account in accounts
-            ]
+            # Balance data fetched from Hyperliquid API, not stored in DB
+            # No trades yet, cannot calculate asset curve without market data
+            return []
 
         # Fetch kline data for all symbols (20 points)
         from services.market_data import get_kline_data
@@ -382,19 +361,8 @@ async def get_asset_curve_by_timeframe(timeframe: str = "1d", db: Session = Depe
             )
 
             if not trades:
-                # No trades, return initial capital at all timestamps
-                for i, ts in enumerate(timestamps):
-                    result.append(
-                        {
-                            "timestamp": ts,
-                            "datetime_str": first_klines[i]["datetime_str"],
-                            "user_id": account.user_id,
-                            "username": account.name,
-                            "total_assets": float(account.initial_capital),
-                            "cash": float(account.initial_capital),
-                            "positions_value": 0.0,
-                        }
-                    )
+                # Balance data fetched from Hyperliquid API, not stored in DB
+                # No trades, cannot calculate historical asset curve
                 continue
 
             # Calculate holdings and cash at each timestamp
@@ -430,8 +398,7 @@ async def get_asset_curve_by_timeframe(timeframe: str = "1d", db: Session = Depe
                         else:  # SELL
                             position_quantities[key] -= float(trade.quantity)
 
-                current_cash = float(account.initial_capital) + cash_change
-
+                # Balance data fetched from Hyperliquid API, not stored in DB
                 # Calculate positions value using prices at this timestamp
                 positions_value = 0.0
                 for (symbol, market), quantity in position_quantities.items():
@@ -442,16 +409,12 @@ async def get_asset_curve_by_timeframe(timeframe: str = "1d", db: Session = Depe
                             if price:
                                 positions_value += float(price) * quantity
 
-                total_assets = current_cash + positions_value
-
                 result.append(
                     {
                         "timestamp": ts,
                         "datetime_str": first_klines[i]["datetime_str"],
                         "user_id": account.user_id,
                         "username": account.name,
-                        "total_assets": total_assets,
-                        "cash": current_cash,
                         "positions_value": positions_value,
                     }
                 )

@@ -99,6 +99,8 @@ class BalanceMonitor:
                 logger.warning(f"Account {account_id} not found in database")
                 return {"error": "Account not found"}
 
+            # Balance data from Hyperliquid API, not from DB
+            # This monitor checks for discrepancies between DB cache and live Hyperliquid data
             local_balance = account.current_cash + account.frozen_cash
 
             # Get remote balance

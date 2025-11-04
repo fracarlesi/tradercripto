@@ -47,6 +47,7 @@ async def list_user_accounts(session_token: str, db: Session = Depends(get_db)):
         user_id = await get_current_user_id(session_token, db)
         accounts = get_accounts_by_user(db, user_id, active_only=True)
 
+        # Balance data fetched from Hyperliquid API, not stored in DB
         return [
             AccountOut(
                 id=account.id,
@@ -55,9 +56,6 @@ async def list_user_accounts(session_token: str, db: Session = Depends(get_db)):
                 model=account.model,
                 base_url=account.base_url,
                 api_key="****" + account.api_key[-4:] if account.api_key else "",  # Mask API key
-                initial_capital=float(account.initial_capital),
-                current_cash=float(account.current_cash),
-                frozen_cash=float(account.frozen_cash),
                 account_type=account.account_type,
                 is_active=account.is_active,
             )
@@ -90,12 +88,12 @@ async def create_trading_account(
             user_id=user_id,
             name=account_data.name,
             account_type=account_data.account_type,
-            initial_capital=account_data.initial_capital,
             model=account_data.model,
             base_url=account_data.base_url,
             api_key=account_data.api_key,
         )
 
+        # Balance data fetched from Hyperliquid API, not stored in DB
         return AccountOut(
             id=account.id,
             user_id=account.user_id,
@@ -103,9 +101,6 @@ async def create_trading_account(
             model=account.model,
             base_url=account.base_url,
             api_key="****" + account.api_key[-4:] if account.api_key else "",
-            initial_capital=float(account.initial_capital),
-            current_cash=float(account.current_cash),
-            frozen_cash=float(account.frozen_cash),
             account_type=account.account_type,
             is_active=account.is_active,
         )
@@ -130,6 +125,7 @@ async def get_account_details(account_id: int, session_token: str, db: Session =
         if account.user_id != user_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
+        # Balance data fetched from Hyperliquid API, not stored in DB
         return AccountOut(
             id=account.id,
             user_id=account.user_id,
@@ -137,9 +133,6 @@ async def get_account_details(account_id: int, session_token: str, db: Session =
             model=account.model,
             base_url=account.base_url,
             api_key="****" + account.api_key[-4:] if account.api_key else "",
-            initial_capital=float(account.initial_capital),
-            current_cash=float(account.current_cash),
-            frozen_cash=float(account.frozen_cash),
             account_type=account.account_type,
             is_active=account.is_active,
         )
@@ -182,6 +175,7 @@ async def update_trading_account(
             api_key=account_data.api_key,
         )
 
+        # Balance data fetched from Hyperliquid API, not stored in DB
         return AccountOut(
             id=updated_account.id,
             user_id=updated_account.user_id,
@@ -189,9 +183,6 @@ async def update_trading_account(
             model=updated_account.model,
             base_url=updated_account.base_url,
             api_key="****" + updated_account.api_key[-4:] if updated_account.api_key else "",
-            initial_capital=float(updated_account.initial_capital),
-            current_cash=float(updated_account.current_cash),
-            frozen_cash=float(updated_account.frozen_cash),
             account_type=updated_account.account_type,
             is_active=updated_account.is_active,
         )
@@ -235,6 +226,7 @@ async def get_or_create_default(session_token: str, db: Session = Depends(get_db
         user_id = await get_current_user_id(session_token, db)
         account = get_or_create_default_account(db, user_id)
 
+        # Balance data fetched from Hyperliquid API, not stored in DB
         return AccountOut(
             id=account.id,
             user_id=account.user_id,
@@ -242,9 +234,6 @@ async def get_or_create_default(session_token: str, db: Session = Depends(get_db
             model=account.model,
             base_url=account.base_url,
             api_key="****" + account.api_key[-4:] if account.api_key else "",
-            initial_capital=float(account.initial_capital),
-            current_cash=float(account.current_cash),
-            frozen_cash=float(account.frozen_cash),
             account_type=account.account_type,
             is_active=account.is_active,
         )

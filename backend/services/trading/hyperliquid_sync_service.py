@@ -209,7 +209,8 @@ class HyperliquidSyncService:
             margin_used = Decimal(str(margin.get("totalMarginUsed", "0")))
             available = account_value - margin_used
 
-            # Update account balance
+            # Balance data from Hyperliquid API, not from DB
+            # Note: This sync updates DB for backward compatibility, but new code should fetch from API directly
             updated = await AccountRepository.update_balance(
                 db=db, account=account, current_cash=available, frozen_cash=margin_used
             )

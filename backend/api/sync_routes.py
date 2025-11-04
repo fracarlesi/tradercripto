@@ -211,6 +211,10 @@ async def sync_account(account_id: int, db: AsyncSession = Depends(get_db)) -> S
         # Record success
         sync_state_tracker.record_sync_success(account_id, started_at, finished_at)
 
+        # Balance data fetched from Hyperliquid API, not stored in DB
+        # Fetch real-time balance from sync result
+        sync_balance = result.get("balance", {})
+
         # Build response
         return SyncResultResponse(
             success=True,
@@ -220,9 +224,9 @@ async def sync_account(account_id: int, db: AsyncSession = Depends(get_db)) -> S
             synced_at=finished_at,
             data=SyncData(
                 balance=BalanceData(
-                    available=float(account.current_cash),
-                    frozen=float(account.frozen_cash),
-                    total_equity=float(account.current_cash + account.frozen_cash),
+                    available=sync_balance.get("available", 0.0),
+                    frozen=sync_balance.get("frozen", 0.0),
+                    total_equity=sync_balance.get("total_equity", 0.0),
                 ),
                 positions_count=result.get("positions_synced", 0),
                 new_orders_count=result.get("orders_synced", 0),
