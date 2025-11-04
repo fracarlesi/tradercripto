@@ -41,26 +41,38 @@ class AccountRepository:
         return list(result.scalars().all())
 
     @staticmethod
-    async def update_balance(
-        db: AsyncSession,
-        account: Account,
-        current_cash: Decimal,
-        frozen_cash: Decimal,
-    ) -> Account:
-        """Update account balance (synced from Hyperliquid).
+    async def get_or_create_default_account(db: AsyncSession, user_id: int) -> Account:
+        """Get or create default account for user (async version).
 
         Args:
             db: Async database session
-            account: Account instance to update
-            current_cash: New current_cash value from Hyperliquid
-            frozen_cash: New frozen_cash value from Hyperliquid
+            user_id: User ID
 
         Returns:
-            Updated Account instance
+            Account instance
         """
-        account.current_cash = current_cash
-        account.frozen_cash = frozen_cash
+        # Try to get first active account for user
+        result = await db.execute(
+            select(Account).where(
+                Account.user_id == user_id,
+                Account.is_active == True  # noqa: E712
+            )
+        )
+        account = result.scalar_one_or_none()
+
+        if account:
+            return account
+
+        # Create new default account without deprecated balance fields
+        # Balance data will be fetched from Hyperliquid in real-time
+        account = Account(
+            user_id=user_id,
+            name="Default Account",
+            is_active=True,
+        )
+        db.add(account)
         await db.flush()
+        await db.refresh(account)
         return account
 
 
@@ -97,13 +109,11 @@ def get_or_create_default_account(db: Session, user_id: int) -> Account:
     if account:
         return account
 
-    # Create new default account
+    # Create new default account without deprecated balance fields
+    # Balance data will be fetched from Hyperliquid in real-time
     account = Account(
         user_id=user_id,
         name="Default Account",
-        initial_capital=Decimal("10000"),
-        current_cash=Decimal("10000"),
-        frozen_cash=Decimal("0"),
         is_active=True,
     )
     db.add(account)

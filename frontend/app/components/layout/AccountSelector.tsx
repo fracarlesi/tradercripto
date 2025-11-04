@@ -41,7 +41,8 @@ export default function AccountSelector({ currentAccount, onAccountChange, usern
       // Map external accounts to AccountWithAssets shape if needed
       const mapped = externalAccounts.map((a: any) => ({
         ...a,
-        total_assets: (a as any).total_assets ?? ((a.current_cash || 0) + (a.frozen_cash || 0)),
+        // TODO: Fetch real balance from API instead of deprecated DB fields
+        total_assets: (a as any).total_assets ?? 0,
         positions_value: (a as any).positions_value ?? 0,
       }))
       setAccounts(mapped)
@@ -57,11 +58,12 @@ export default function AccountSelector({ currentAccount, onAccountChange, usern
       const accountData = await getAccounts()
       console.log('Fetched accounts:', accountData)
       
-      // Get account-specific data for each account
-      // Fast path: avoid per-account overview calls to minimize latency on page switches
+      // TODO: Fetch real balance from Hyperliquid API
+      // After migration, current_cash and frozen_cash fields no longer exist in DB
+      // Balance must be fetched from GET /api/accounts/{id}/overview or similar
       const accountsWithAssets: AccountWithAssets[] = accountData.map((account) => ({
         ...account,
-        total_assets: account.current_cash + account.frozen_cash,
+        total_assets: 0, // Will be populated by API call
         positions_value: 0,
       }))
       

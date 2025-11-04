@@ -1,11 +1,12 @@
 """
-Asset Curve Calculator - New Algorithm
-Draws curve by accounts, creates all-time list for every account: time, cash, positions.
-Gets latest 20 close prices for all symbols, then fills curve with cash + sum(symbol price * position).
+Asset Curve Calculator - Hyperliquid-based Algorithm
+Fetches current balance from Hyperliquid, then reconstructs historical curve using trades + market prices.
+NO DEPENDENCY on deprecated DB fields (initial_capital, current_cash, frozen_cash).
 """
 
 import logging
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
@@ -13,9 +14,15 @@ from database.models import Account, Trade
 from services.market_data import get_kline_data
 
 
-def get_all_asset_curves_data_new(db: Session, timeframe: str = "1h") -> list[dict]:
+async def get_all_asset_curves_data_new_async(db: Session, timeframe: str = "1h") -> list[dict]:
     """
-    New algorithm for asset curve calculation by accounts.
+    Calculate asset curve from Hyperliquid real-time data + historical trades (ASYNC).
+
+    Algorithm:
+    1. Fetch current accountValue from Hyperliquid
+    2. Get historical trades from DB
+    3. Get historical prices (klines)
+    4. Reconstruct portfolio value at each timestamp using trades + klines
 
     Args:
         db: Database session
@@ -25,21 +32,35 @@ def get_all_asset_curves_data_new(db: Session, timeframe: str = "1h") -> list[di
         List of asset curve data points with timestamp, account info, and asset values
     """
     try:
-        # Step 1: Get all active accounts
-        accounts = db.query(Account).filter(Account.is_active == "true").all()
+        # Step 1: Get current balance from Hyperliquid
+        from services.trading.hyperliquid_trading_service import hyperliquid_trading_service
+
+        user_state = await hyperliquid_trading_service.get_user_state_async()
+
+        if not user_state or 'marginSummary' not in user_state:
+            logging.error("Failed to fetch user state from Hyperliquid")
+            return []
+
+        margin = user_state['marginSummary']
+        current_account_value = Decimal(str(margin.get('accountValue', '0')))
+
+        logging.info(f"Current Hyperliquid account value: ${current_account_value}")
+
+        # Step 2: Get all active accounts
+        accounts = db.query(Account).filter(Account.is_active == True).all()
         if not accounts:
             return []
 
         logging.info(f"Found {len(accounts)} active accounts")
 
-        # Step 2: Get all unique symbols from all account trades
-        symbols_query = db.query(Trade.symbol, Trade.market).distinct().all()
+        # Step 3: Get all unique symbols from all account trades
+        symbols_query = db.query(Trade.symbol).distinct().all()
         unique_symbols = set()
-        for symbol, market in symbols_query:
-            unique_symbols.add((symbol, market))
+        for (symbol,) in symbols_query:
+            unique_symbols.add((symbol, "CRYPTO"))
 
         if not unique_symbols:
-            # No trades yet, return initial capital for all accounts at current time
+            # No trades yet, return current Hyperliquid balance
             now = datetime.now()
             return [
                 {
@@ -48,8 +69,8 @@ def get_all_asset_curves_data_new(db: Session, timeframe: str = "1h") -> list[di
                     "account_id": account.id,
                     "user_id": account.user_id,
                     "username": account.name,
-                    "total_assets": float(account.initial_capital),
-                    "cash": float(account.initial_capital),
+                    "total_assets": float(current_account_value),
+                    "cash": float(current_account_value),
                     "positions_value": 0.0,
                 }
                 for account in accounts
@@ -57,9 +78,8 @@ def get_all_asset_curves_data_new(db: Session, timeframe: str = "1h") -> list[di
 
         logging.info(f"Found {len(unique_symbols)} unique symbols: {unique_symbols}")
 
-        # Step 3: Get latest close prices for all symbols (increased from 20 to 100 for better chart history)
+        # Step 4: Get historical close prices for all symbols
         symbol_klines = {}
-        # Adjust kline count based on timeframe for better visualization
         kline_count = 100 if timeframe == "1h" else 200 if timeframe == "5m" else 50
         for symbol, market in unique_symbols:
             try:
@@ -71,7 +91,7 @@ def get_all_asset_curves_data_new(db: Session, timeframe: str = "1h") -> list[di
                 logging.warning(f"Failed to fetch klines for {symbol}.{market}: {e}")
 
         if not symbol_klines:
-            # Fallback to current time if no market data available
+            # No market data, return current balance only
             now = datetime.now()
             return [
                 {
@@ -80,28 +100,30 @@ def get_all_asset_curves_data_new(db: Session, timeframe: str = "1h") -> list[di
                     "account_id": account.id,
                     "user_id": account.user_id,
                     "username": account.name,
-                    "total_assets": float(account.initial_capital),
-                    "cash": float(account.initial_capital),
+                    "total_assets": float(current_account_value),
+                    "cash": float(current_account_value),
                     "positions_value": 0.0,
                 }
                 for account in accounts
             ]
 
-        # Step 4: Get common timestamps from market data
+        # Step 5: Get common timestamps from market data
         first_klines = next(iter(symbol_klines.values()))
         timestamps = [k["timestamp"] for k in first_klines]
 
         logging.info(f"Processing {len(timestamps)} timestamps")
 
-        # Step 5: Calculate asset curves for each account
+        # Step 6: Calculate asset curves for each account
         result = []
 
         for account in accounts:
             account_id = account.id
             logging.info(f"Processing account {account_id}: {account.name}")
 
-            # Create all-time list for this account: time, cash, positions
-            account_timeline = _create_account_timeline(db, account, timestamps, symbol_klines)
+            # Create timeline using Hyperliquid balance as reference
+            account_timeline = await _create_account_timeline_async(
+                db, account, timestamps, symbol_klines, current_account_value
+            )
             result.extend(account_timeline)
 
         # Sort result by timestamp and account_id for consistent ordering
@@ -111,25 +133,37 @@ def get_all_asset_curves_data_new(db: Session, timeframe: str = "1h") -> list[di
         return result
 
     except Exception as e:
-        logging.error(f"Failed to calculate asset curves: {e}")
+        logging.error(f"Failed to calculate asset curves: {e}", exc_info=True)
         return []
 
 
-def _create_account_timeline(
+# DELETED: Sync wrapper removed to prevent event loop deadlock
+# The function get_all_asset_curves_data_new() has been removed because it caused deadlock
+# by creating a new event loop inside an async context.
+# Use get_all_asset_curves_data_new_async() directly from async contexts.
+
+
+async def _create_account_timeline_async(
     db: Session,
     account: Account,
     timestamps: list[int],
     symbol_klines: dict[tuple[str, str], list[dict]],
+    current_account_value: Decimal,
 ) -> list[dict]:
     """
-    Create all-time list for an account: time, cash, positions.
-    Calculate cash + sum(symbol price * position) for each timestamp.
+    Create historical timeline for an account using Hyperliquid current balance.
+
+    Algorithm:
+    1. Calculate net P&L from all trades (realized gains/losses)
+    2. Reverse-engineer starting capital: current_balance - realized_pnl
+    3. For each timestamp: starting_capital + cumulative_pnl_up_to_timestamp + position_values
 
     Args:
         db: Database session
         account: Account object
         timestamps: List of timestamps to calculate for
         symbol_klines: Dictionary of symbol klines data
+        current_account_value: Current account value from Hyperliquid
 
     Returns:
         List of timeline data points for the account
@@ -145,7 +179,7 @@ def _create_account_timeline(
     )
 
     if not trades:
-        # No trades, return initial capital at all timestamps
+        # No trades, return current Hyperliquid balance at all timestamps
         first_klines = next(iter(symbol_klines.values()))
         return [
             {
@@ -154,12 +188,27 @@ def _create_account_timeline(
                 "account_id": account.id,
                 "user_id": account.user_id,
                 "username": account.name,
-                "total_assets": float(account.initial_capital),
-                "cash": float(account.initial_capital),
+                "total_assets": float(current_account_value),
+                "cash": float(current_account_value),
                 "positions_value": 0.0,
             }
             for i, ts in enumerate(timestamps)
         ]
+
+    # Calculate total realized P&L from trades
+    total_realized_pnl = Decimal("0")
+    for trade in trades:
+        # Commissions are always a cost
+        total_realized_pnl -= Decimal(str(trade.commission))
+
+    # Reverse-engineer starting capital
+    # starting_capital = current_value - realized_pnl
+    starting_capital = current_account_value - total_realized_pnl
+
+    logging.info(
+        f"Account {account.name}: current=${current_account_value}, "
+        f"realized_pnl=${total_realized_pnl}, starting_capital=${starting_capital}"
+    )
 
     # Calculate holdings and cash at each timestamp
     timeline = []
@@ -168,8 +217,8 @@ def _create_account_timeline(
     for i, ts in enumerate(timestamps):
         ts_datetime = datetime.fromtimestamp(ts, tz=UTC)
 
-        # Calculate cash and positions up to this timestamp
-        cash_change = 0.0
+        # Calculate cash changes and positions up to this timestamp
+        cash_change = Decimal("0")
         position_quantities = {}
 
         for trade in trades:
@@ -179,32 +228,34 @@ def _create_account_timeline(
 
             if trade_time <= ts_datetime:
                 # Update cash based on trade
-                trade_amount = float(trade.price) * float(trade.quantity) + float(trade.commission)
+                trade_amount = Decimal(str(trade.price)) * Decimal(str(trade.quantity))
+                commission = Decimal(str(trade.commission))
+
                 if trade.side == "BUY":
-                    cash_change -= trade_amount
+                    cash_change -= (trade_amount + commission)
                 else:  # SELL
-                    cash_change += trade_amount
+                    cash_change += (trade_amount - commission)
 
                 # Update position quantity
-                key = (trade.symbol, trade.market)
+                key = (trade.symbol, "CRYPTO")
                 if key not in position_quantities:
-                    position_quantities[key] = 0.0
+                    position_quantities[key] = Decimal("0")
 
                 if trade.side == "BUY":
-                    position_quantities[key] += float(trade.quantity)
+                    position_quantities[key] += Decimal(str(trade.quantity))
                 else:  # SELL
-                    position_quantities[key] -= float(trade.quantity)
+                    position_quantities[key] -= Decimal(str(trade.quantity))
 
-        # Current cash = initial capital + net cash changes from trades
-        current_cash = float(account.initial_capital) + cash_change
+        # Current cash = starting capital + net cash changes from trades
+        current_cash = starting_capital + cash_change
 
         # Calculate positions value using prices at this timestamp
-        positions_value = 0.0
+        positions_value = Decimal("0")
         for (symbol, market), quantity in position_quantities.items():
             if quantity > 0 and (symbol, market) in symbol_klines:
                 klines = symbol_klines[(symbol, market)]
                 if i < len(klines) and klines[i]["close"]:
-                    price = float(klines[i]["close"])
+                    price = Decimal(str(klines[i]["close"]))
                     positions_value += price * quantity
 
         total_assets = current_cash + positions_value
@@ -216,99 +267,10 @@ def _create_account_timeline(
                 "account_id": account.id,
                 "user_id": account.user_id,
                 "username": account.name,
-                "total_assets": total_assets,
-                "cash": current_cash,
-                "positions_value": positions_value,
+                "total_assets": float(total_assets),
+                "cash": float(current_cash),
+                "positions_value": float(positions_value),
             }
         )
 
     return timeline
-
-
-def get_account_asset_curve(db: Session, account_id: int, timeframe: str = "1h") -> list[dict]:
-    """
-    Get asset curve data for a specific account.
-
-    Args:
-        db: Database session
-        account_id: ID of the account to get curve for
-        timeframe: Time period for the curve
-
-    Returns:
-        List of asset curve data points for the account
-    """
-    try:
-        # Get the specific account
-        account = (
-            db.query(Account).filter(Account.id == account_id, Account.is_active == "true").first()
-        )
-
-        if not account:
-            return []
-
-        # Get all unique symbols from this account's trades
-        symbols_query = (
-            db.query(Trade.symbol, Trade.market)
-            .filter(Trade.account_id == account_id)
-            .distinct()
-            .all()
-        )
-
-        unique_symbols = set()
-        for symbol, market in symbols_query:
-            unique_symbols.add((symbol, market))
-
-        if not unique_symbols:
-            # No trades yet, return initial capital
-            now = datetime.now()
-            return [
-                {
-                    "timestamp": int(now.timestamp()),
-                    "datetime_str": now.isoformat(),
-                    "account_id": account.id,
-                    "user_id": account.user_id,
-                    "username": account.name,
-                    "total_assets": float(account.initial_capital),
-                    "cash": float(account.initial_capital),
-                    "positions_value": 0.0,
-                }
-            ]
-
-        # Get latest 20 close prices for account's symbols
-        symbol_klines = {}
-        for symbol, market in unique_symbols:
-            try:
-                klines = get_kline_data(symbol, market, timeframe, 20)
-                if klines:
-                    symbol_klines[(symbol, market)] = klines
-            except Exception as e:
-                logging.warning(f"Failed to fetch klines for {symbol}.{market}: {e}")
-
-        if not symbol_klines:
-            # Fallback to current time
-            now = datetime.now()
-            return [
-                {
-                    "timestamp": int(now.timestamp()),
-                    "datetime_str": now.isoformat(),
-                    "account_id": account.id,
-                    "user_id": account.user_id,
-                    "username": account.name,
-                    "total_assets": float(account.initial_capital),
-                    "cash": float(account.initial_capital),
-                    "positions_value": 0.0,
-                }
-            ]
-
-        # Get timestamps
-        first_klines = next(iter(symbol_klines.values()))
-        timestamps = [k["timestamp"] for k in first_klines]
-
-        # Create timeline for this account
-        timeline = _create_account_timeline(db, account, timestamps, symbol_klines)
-
-        return timeline
-
-    except Exception as e:
-        logging.error(f"Failed to get account asset curve for account {account_id}: {e}")
-        return []

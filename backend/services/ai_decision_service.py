@@ -62,6 +62,54 @@ def _is_default_api_key(api_key: str) -> bool:
     return api_key in DEMO_API_KEYS
 
 
+def _format_technical_analysis(technical_factors: dict) -> str:
+    """Format technical analysis for AI prompt"""
+    if not technical_factors or not technical_factors.get("recommendations"):
+        return "Technical Analysis: Not available (insufficient historical data)"
+
+    recommendations = technical_factors.get("recommendations", [])
+
+    lines = ["Technical Analysis (Quantitative Signals - Use these to guide decisions):"]
+    lines.append("")
+
+    # Show top 5 recommendations with scores
+    for i, rec in enumerate(recommendations[:5], 1):
+        symbol = rec["symbol"]
+        score = rec["score"]
+        momentum = rec["momentum"]
+        support = rec["support"]
+
+        # Signal interpretation
+        if score >= 0.7:
+            signal = "🟢 STRONG BUY"
+        elif score >= 0.6:
+            signal = "🟢 BUY"
+        elif score >= 0.4:
+            signal = "🟡 HOLD"
+        elif score >= 0.3:
+            signal = "🔴 SELL"
+        else:
+            signal = "🔴 STRONG SELL"
+
+        lines.append(
+            f"  {i}. {symbol}: {signal} | Score: {score:.3f} "
+            f"(Momentum: {momentum:.3f}, Support: {support:.3f})"
+        )
+
+    lines.append("")
+    lines.append("Signal Interpretation:")
+    lines.append("  • Momentum Score: Measures upward price trend strength (higher = stronger uptrend)")
+    lines.append("  • Support Score: Measures support level strength (higher = stronger buying pressure)")
+    lines.append("  • Combined Score > 0.7: Strong technical buy signal - high confidence")
+    lines.append("  • Combined Score 0.6-0.7: Moderate buy signal")
+    lines.append("  • Combined Score 0.4-0.6: Neutral - hold or wait for better signal")
+    lines.append("  • Combined Score < 0.4: Weak signal - consider selling or avoid buying")
+    lines.append("")
+    lines.append("IMPORTANT: Prioritize symbols with high combined scores (>0.6) for BUY decisions.")
+
+    return "\n".join(lines)
+
+
 def optimize_ai_prompt(
     news_summary: str,
     market_data: dict,
@@ -427,6 +475,9 @@ def call_ai_for_decision(
         # Generate list of available symbols
         available_symbols = ", ".join([f'"{s}"' for s in SUPPORTED_SYMBOLS.keys()])
 
+        # Format technical analysis for AI (CRITICAL: quantitative signals)
+        technical_section = _format_technical_analysis(portfolio.get("technical_factors", {}))
+
         # Full prompt without optimization - preserves all information for quality (T093-T094 removed)
         prompt = f"""You are a cryptocurrency trading AI. Based on the following portfolio and market data, decide on a trading action.
 
@@ -439,41 +490,66 @@ Portfolio Data:
 Current Market Prices (showing {len(prices)} available cryptocurrencies):
 {json.dumps(prices, indent=2)}
 
+{technical_section}
+
 Latest Crypto News (CoinJournal):
 {news_section}
 
 Available symbols for trading: {available_symbols}
 
-Analyze ALL available cryptocurrencies, identify the BEST opportunity based on news, price trends, and market data.
+Analyze ALL available cryptocurrencies, identify the BEST opportunity based on TECHNICAL ANALYSIS, news, and market data.
 Then respond with ONLY a JSON object in this exact format:
 {{
-  "operation": "buy" or "sell" or "hold",
+  "operation": "buy" or "sell" or "short" or "hold",
   "symbol": one of the available symbols above,
   "target_portion_of_balance": 0.2,
-  "reason": "Brief explanation of your decision"
+  "leverage": 1,
+  "reason": "Brief explanation citing technical score and other factors"
 }}
 
-Rules:
-- operation must be "buy", "sell", or "hold"
-- For "buy": symbol is what to buy, target_portion_of_balance is % of cash to use (0.0-1.0)
-- For "sell": symbol is what to sell, target_portion_of_balance is % of position to sell (0.0-1.0)
-- For "hold": no action taken
+DECISION-MAKING PRIORITY (CRITICAL):
+1. TECHNICAL ANALYSIS (Primary): Use Momentum + Support scores above - these are QUANTITATIVE signals
+2. News Sentiment (Secondary): Consider only as confirmation or warning flag
+3. Price Trends (Tertiary): Look at current prices for context only
+
+Rules - OPERATIONS:
+- operation must be "buy", "sell", "short", or "hold"
+- "buy": Open LONG position (profit when price goes UP) - use when technical score > 0.7
+- "short": Open SHORT position (profit when price goes DOWN) - use when technical score < 0.3
+- "sell": Close existing position (long or short)
+- "hold": No action taken when technical score is between 0.3-0.7 (neutral zone)
+
+Rules - POSITION SIZING:
+- target_portion_of_balance: % of available capital to use (0.0-1.0)
+- For "buy"/"short": % of cash to allocate for new position
+- For "sell": % of existing position to close (0.0-1.0, where 1.0 = close 100%)
+
+Rules - LEVERAGE (CRITICAL):
+- leverage: Multiplier for position size (1-10 allowed, use intelligently based on signal strength)
+- leverage=1: No leverage (1:1 capital) - safest, use for weak signals (0.3-0.5 or 0.5-0.7)
+- leverage=2-3: Moderate leverage - use for moderate signals (0.5-0.65 or 0.35-0.5)
+- leverage=4-5: High leverage - use for strong signals (0.65-0.75 or 0.25-0.35)
+- leverage=6-10: Very high leverage - use ONLY for VERY STRONG signals (>0.8 or <0.2)
+- Higher leverage = Higher profit potential BUT MUCH HIGHER RISK
+- CONSERVATIVE APPROACH: For technical score 0.7-0.8 or 0.2-0.3, use leverage 2-4x maximum
+- AGGRESSIVE APPROACH: For technical score >0.8 or <0.2, you can use up to 10x leverage
 - You have FULL FREEDOM on target_portion_of_balance (0.0-1.0) - use ANY percentage you think is optimal
 - CRITICAL: You can ONLY sell positions that are listed in "Current Positions" above
 - CRITICAL: If a symbol is NOT in "Current Positions", you CANNOT sell it (choose "buy" or "hold" instead)
 - IMPORTANT: Consider selling underperforming positions to free up cash for better opportunities
 - IMPORTANT: Diversification is key - don't get stuck in losing positions just because cash is low
 - IMPORTANT: You can sell up to 100% of a position if needed to rebalance the portfolio
+- IMPORTANT: ALWAYS prefer symbols with Technical Score > 0.6 for BUY decisions
 - Only choose symbols you have data for
 
-CRITICAL INVESTMENT PRINCIPLE:
-- THE UNIT PRICE OF A CRYPTOCURRENCY IS COMPLETELY IRRELEVANT
-- What matters is PERCENTAGE GAIN, not number of coins
-- Buying $10 of BTC at $100,000/coin or $10 of DOGE at $0.17/coin gives the SAME return if both go up 10%
-- DO NOT favor cheap coins (like DOGE) just because you can buy "more coins"
-- Focus on: technical analysis, news sentiment, market trends, fundamentals
-- A $100,000 Bitcoin that goes up 20% earns MORE than a $0.17 DOGE that goes up 10%
-- Evaluate each cryptocurrency on its PERFORMANCE POTENTIAL, not on its unit price"""
+CRITICAL INVESTMENT PRINCIPLES:
+1. FOLLOW TECHNICAL SIGNALS: If a symbol has Score > 0.7, strongly consider buying it
+2. UNIT PRICE IS IRRELEVANT: What matters is PERCENTAGE GAIN, not number of coins
+3. Buying $10 of BTC at $100,000/coin or $10 of DOGE at $0.17/coin gives the SAME return if both go up 10%
+4. DO NOT favor cheap coins (like DOGE) just because you can buy "more coins"
+5. Focus on: TECHNICAL SCORES FIRST, then news sentiment, market trends
+6. A $100,000 Bitcoin with Score 0.8 is BETTER than a $0.17 DOGE with Score 0.4
+7. Evaluate each cryptocurrency on TECHNICAL PERFORMANCE SIGNALS, not on unit price"""
 
         # Count tokens for cost tracking (T095)
         input_tokens = count_tokens(prompt)
@@ -756,7 +832,7 @@ def save_ai_decision(
 def get_active_ai_accounts(db: Session) -> list[Account]:
     """Get all active AI accounts that are not using default API key"""
     accounts = (
-        db.query(Account).filter(Account.is_active == "true", Account.account_type == "AI").all()
+        db.query(Account).filter(Account.is_active == True, Account.account_type == "AI").all()
     )
 
     if not accounts:

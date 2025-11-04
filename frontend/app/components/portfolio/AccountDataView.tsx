@@ -41,6 +41,9 @@ interface Position {
   avg_cost: number
   last_price?: number | null
   market_value?: number | null
+  unrealized_pnl?: number | null  // P&L from Hyperliquid
+  return_on_equity?: number | null  // ROE % from Hyperliquid
+  margin_used?: number | null  // Margin used from Hyperliquid
 }
 
 interface Order {
@@ -296,8 +299,11 @@ function PositionList({ positions }: { positions: Position[] }) {
         </TableHeader>
         <TableBody>
           {positions.map(p => {
-            const pnl = p.last_price && p.market_value ? p.market_value - (p.quantity * p.avg_cost) : 0
-            const pnlPercent = p.avg_cost > 0 ? (pnl / (p.quantity * p.avg_cost)) * 100 : 0
+            // Use Hyperliquid data directly - NO REDUNDANT CALCULATIONS!
+            const pnl = p.unrealized_pnl ?? 0
+            const roe = p.return_on_equity ?? 0
+            const roePercent = roe * 100  // ROE is already in decimal form (e.g., -0.37 = -37%)
+
             return (
               <TableRow key={p.id}>
                 <TableCell>{p.symbol}.{p.market}</TableCell>
@@ -307,7 +313,13 @@ function PositionList({ positions }: { positions: Position[] }) {
                 <TableCell>${p.last_price?.toFixed(4) ?? '-'}</TableCell>
                 <TableCell>${p.market_value?.toFixed(2) ?? '-'}</TableCell>
                 <TableCell className={pnl >= 0 ? 'text-green-600' : 'text-red-600'}>
-                  ${pnl.toFixed(2)} ({pnlPercent.toFixed(2)}%)
+                  {p.unrealized_pnl !== null && p.unrealized_pnl !== undefined ? (
+                    <>
+                      ${pnl.toFixed(2)} ({roePercent.toFixed(2)}%)
+                    </>
+                  ) : (
+                    '-'
+                  )}
                 </TableCell>
               </TableRow>
             )

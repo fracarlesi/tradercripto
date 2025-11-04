@@ -143,8 +143,54 @@ class HyperliquidTradingService:
         """
         return await run_in_thread(self.info.meta)
 
+    async def update_leverage_async(
+        self, symbol: str, leverage: int, is_cross: bool = True
+    ) -> dict[str, Any]:
+        """Update leverage for a specific asset on Hyperliquid (async).
+
+        Args:
+            symbol: Trading symbol (e.g., "BTC", "ETH")
+            leverage: Leverage multiplier (1-50, but we limit to 1-10)
+            is_cross: True for cross-margin, False for isolated margin
+
+        Returns:
+            Dict containing leverage update response
+
+        Raises:
+            Exception: If leverage update fails
+        """
+        if not self._initialized or not self._exchange:
+            raise RuntimeError("Hyperliquid SDK not initialized")
+
+        def _update_leverage():
+            """Synchronous leverage update."""
+            result = self._exchange.update_leverage(
+                leverage=leverage, name=symbol, is_cross=is_cross
+            )
+            return result
+
+        logger.info(
+            f"Updating leverage for {symbol}: {leverage}x ({'cross' if is_cross else 'isolated'})",
+            extra={
+                "context": {
+                    "symbol": symbol,
+                    "leverage": leverage,
+                    "is_cross": is_cross,
+                }
+            },
+        )
+
+        result = await run_in_thread(_update_leverage)
+
+        logger.info(
+            f"Leverage updated for {symbol}: {result}",
+            extra={"context": {"result": result}},
+        )
+
+        return result
+
     async def place_market_order_async(
-        self, symbol: str, is_buy: bool, size: float, reduce_only: bool = False
+        self, symbol: str, is_buy: bool, size: float, reduce_only: bool = False, leverage: int = 1
     ) -> dict[str, Any]:
         """Place a market order on Hyperliquid (async).
 
@@ -153,6 +199,7 @@ class HyperliquidTradingService:
             is_buy: True for buy, False for sell
             size: Order size (quantity of base asset)
             reduce_only: If True, order can only reduce existing position
+            leverage: Leverage multiplier (1-10x) - will be set before opening position
 
         Returns:
             Dict containing order response:
@@ -172,6 +219,14 @@ class HyperliquidTradingService:
         if not self._initialized or not self._exchange:
             raise RuntimeError("Hyperliquid SDK not initialized")
 
+        # Update leverage BEFORE opening position (only if not closing position)
+        if not reduce_only and leverage > 1:
+            try:
+                await self.update_leverage_async(symbol=symbol, leverage=leverage, is_cross=True)
+            except Exception as e:
+                logger.error(f"Failed to update leverage for {symbol}: {e}")
+                # Continue with order placement anyway (will use existing leverage)
+
         def _place_order():
             """Synchronous order placement."""
             order_result = self._exchange.market_open(
@@ -180,13 +235,14 @@ class HyperliquidTradingService:
             return order_result
 
         logger.info(
-            f"Placing {'BUY' if is_buy else 'SELL'} market order: {size} {symbol}",
+            f"Placing {'BUY' if is_buy else 'SELL'} market order: {size} {symbol} (leverage: {leverage}x)",
             extra={
                 "context": {
                     "symbol": symbol,
                     "side": "BUY" if is_buy else "SELL",
                     "size": size,
                     "reduce_only": reduce_only,
+                    "leverage": leverage,
                 }
             },
         )

@@ -11,6 +11,10 @@ from sqlalchemy.orm import Session
 # Load environment variables from .env file
 load_dotenv()
 
+# Setup logging BEFORE any other imports (critical for seeing startup logs)
+from config.logging import setup_logging
+setup_logging()
+
 # from config.settings import DEFAULT_TRADING_CONFIGS  # TODO: Restore after settings refactor
 from database.connection import SessionLocal, sync_engine
 from database.models import Account, Base, User  # TradingConfig temporarily disabled
@@ -99,10 +103,8 @@ async def lifespan(app: FastAPI):
                 model="deepseek-chat",
                 base_url="https://api.deepseek.com",
                 api_key="default-key-please-update-in-settings",
-                initial_capital=1000.0,  # €1,000 starting capital for crypto trading
-                current_cash=1000.0,
-                frozen_cash=0.0,
                 is_active=True,
+                # Note: Balance is fetched from Hyperliquid API, not stored in database
             )
             db.add(default_account)
             db.commit()
@@ -137,6 +139,22 @@ async def lifespan(app: FastAPI):
 
         scheduler_service.add_cron_job(
             job_func=reset_ai_usage_daily, hour=0, minute=0, job_id="ai_usage_daily_reset"
+        )
+
+        # Add stop-loss check job (every 30 seconds) - FIX 3
+        from services.auto_trader import check_stop_loss_async, check_take_profit_async
+
+        scheduler_service.add_sync_job(
+            job_func=check_stop_loss_async,
+            interval_seconds=30,
+            job_id="stop_loss_check"
+        )
+
+        # Add take-profit check job (every 30 seconds) - lock in profits at +5%
+        scheduler_service.add_sync_job(
+            job_func=check_take_profit_async,
+            interval_seconds=30,
+            job_id="take_profit_check"
         )
 
     except Exception as e:
@@ -402,19 +420,11 @@ app.include_router(config_router)
 app.include_router(ranking_router)
 app.include_router(crypto_router)
 
-# WebSocket endpoints
-from api.ws import websocket_endpoint  # Original sync version
+# WebSocket endpoints - using async version with real-time Hyperliquid data
+from api.ws_async import websocket_endpoint_async
 
-# New async WebSocket endpoint (T063-T064)
-try:
-    from api.ws_async import websocket_endpoint_async
-
-    app.websocket("/ws-async")(websocket_endpoint_async)
-except ImportError:
-    pass  # Async WebSocket not available
-
-# Keep original WebSocket for backward compatibility
-app.websocket("/ws")(websocket_endpoint)
+# Primary WebSocket endpoint (async, fetches from Hyperliquid)
+app.websocket("/ws")(websocket_endpoint_async)
 
 
 # Serve frontend index.html for root and SPA routes

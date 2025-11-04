@@ -79,7 +79,7 @@ async def list_accounts(db: AsyncSession = Depends(get_db)):
         result = await db.execute(
             select(Account, User)
             .join(User, Account.user_id == User.id)
-            .where(Account.is_active == "true")
+            .where(Account.is_active == True)
         )
         rows = result.all()
 
@@ -98,7 +98,7 @@ async def list_accounts(db: AsyncSession = Depends(get_db)):
                     model=account.model,
                     base_url=account.base_url,
                     api_key=account.api_key,
-                    is_active=account.is_active == "true",
+                    is_active=account.is_active,
                 )
             )
 
@@ -119,32 +119,45 @@ async def get_account_overview(account_id: int, db: AsyncSession = Depends(get_d
 
     Returns:
         Account overview with positions and orders summary
+
+    Note:
+        All financial data (balance, positions value) is fetched in real-time from Hyperliquid.
+        Database is used only for account metadata and counting records.
     """
     try:
-        # Get account with positions eager loaded
+        # Get account metadata from database (NOT positions - fetched from Hyperliquid)
         result = await db.execute(
-            select(Account)
-            .where(Account.id == account_id, Account.is_active == "true")
-            .options(selectinload(Account.positions))
+            select(Account).where(Account.id == account_id, Account.is_active == True)
         )
         account = result.scalar_one_or_none()
 
         if not account:
             raise HTTPException(status_code=404, detail="Account not found")
 
-        # Calculate positions value
-        positions_value = 0.0
-        for position in account.positions:
-            # Simplified calculation - in production, get current market price
-            positions_value += float(position.quantity * position.average_cost)
+        # Fetch real-time data from Hyperliquid (single source of truth)
+        from services.trading.hyperliquid_trading_service import hyperliquid_trading_service
 
-        # Count positions
-        result = await db.execute(
-            select(func.count())
-            .select_from(Position)
-            .where(Position.account_id == account_id, Position.quantity > 0)
-        )
-        positions_count = result.scalar()
+        user_state = await hyperliquid_trading_service.get_user_state_async()
+        margin_summary = user_state.get('marginSummary', {})
+
+        # Real-time account balance from Hyperliquid
+        account_value = float(margin_summary.get('accountValue', '0'))
+        total_margin_used = float(margin_summary.get('totalMarginUsed', '0'))
+        available_cash = account_value - total_margin_used
+
+        # Get real-time positions from Hyperliquid (NOT from database - may be stale)
+        hyperliquid_positions = user_state.get('assetPositions', [])
+
+        # Calculate positions value from Hyperliquid position values
+        positions_value = 0.0
+        for pos in hyperliquid_positions:
+            position_data = pos.get('position', {})
+            # Use positionValue from Hyperliquid (already calculated correctly for LONG/SHORT)
+            pos_value = abs(float(position_data.get('positionValue', 0)))
+            positions_value += pos_value
+
+        # Count positions from Hyperliquid (single source of truth)
+        positions_count = len(hyperliquid_positions)
 
         # Count pending orders
         result = await db.execute(
@@ -159,11 +172,11 @@ async def get_account_overview(account_id: int, db: AsyncSession = Depends(get_d
                 "id": account.id,
                 "name": account.name,
                 "account_type": account.account_type,
-                "current_cash": float(account.current_cash),
-                "frozen_cash": float(account.frozen_cash),
+                "current_cash": available_cash,  # Real-time from Hyperliquid
+                "frozen_cash": total_margin_used,  # Real-time from Hyperliquid
             },
-            total_assets=positions_value + float(account.current_cash),
-            positions_value=positions_value,
+            total_assets=account_value,  # Real-time total from Hyperliquid
+            positions_value=positions_value,  # Calculated with current market prices
             positions_count=positions_count or 0,
             pending_orders=pending_orders or 0,
         )
@@ -287,7 +300,7 @@ async def update_account(account_id: int, data: AccountUpdate, db: AsyncSession 
             model=account.model,
             base_url=account.base_url,
             api_key=account.api_key,
-            is_active=account.is_active == "true",
+            is_active=account.is_active,
         )
 
     except HTTPException:

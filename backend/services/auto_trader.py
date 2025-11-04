@@ -16,6 +16,7 @@ from services.ai_decision_service import (
     save_ai_decision,
 )
 from services.asset_calculator import calc_positions_value
+from services.technical_analysis_service import calculate_technical_factors
 from services.trading.hyperliquid_trading_service import hyperliquid_trading_service
 
 logger = logging.getLogger(__name__)
@@ -86,6 +87,19 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
             f"${portfolio['total_assets']:.2f} total"
         )
 
+        # 3.5. Calculate technical factors (CRITICAL: momentum + support analysis)
+        logger.info("Calculating technical analysis factors...")
+        # Use ALL symbols from prices dict (real-time available symbols)
+        available_symbols = list(prices.keys())
+        logger.info(f"Analyzing {len(available_symbols)} available symbols: {', '.join(available_symbols)}")
+        technical_factors = calculate_technical_factors(available_symbols)
+        logger.info(
+            f"Technical analysis: {len(technical_factors.get('recommendations', []))} symbols analyzed"
+        )
+
+        # Add technical factors to portfolio data for AI
+        portfolio["technical_factors"] = technical_factors
+
         # 4. Get AI decision (with caching)
         logger.info("Calling AI for trading decision...")
 
@@ -103,7 +117,27 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
 
         logger.info(f"AI Decision: {decision}")
 
-        # 5. Validate decision
+        # 5. Check margin safety BEFORE opening new positions (FIX 5)
+        operation = decision.get("operation", "").lower()
+        if operation in ["buy", "short"]:
+            # Only check margin for new positions (not for sell/hold)
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                margin_check = loop.run_until_complete(_check_margin_safety(margin_limit=0.70))
+            finally:
+                loop.close()
+
+            if not margin_check["safe"]:
+                logger.warning(
+                    f"Margin safety check failed: {margin_check['reason']}. "
+                    f"Blocking new position. Utilization: {margin_check['margin_utilization']:.1%}"
+                )
+                # Save failed decision to database for analysis
+                save_ai_decision(db, account, decision, portfolio, executed=False)
+                return
+
+        # 6. Validate decision
         validation_result = _validate_decision(decision, portfolio, prices, max_ratio)
         if not validation_result["valid"]:
             logger.warning(f"Decision validation failed: {validation_result['reason']}")
@@ -111,9 +145,10 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
             save_ai_decision(db, account, decision, portfolio, executed=False)
             return
 
-        # 6. Execute order on Hyperliquid
+        # 7. Execute order on Hyperliquid
         logger.info("Executing order on Hyperliquid...")
-        execution_result = _execute_order_async(decision, validation_result["order_size"])
+        leverage = validation_result.get("leverage", 1)
+        execution_result = _execute_order_async(decision, validation_result["order_size"], leverage)
 
         # Check if order was actually executed (not just HTTP success)
         is_executed = False
@@ -166,20 +201,40 @@ def _fetch_market_prices() -> dict[str, float]:
             get_last_price_from_hyperliquid,
         )
 
-        symbols = get_all_symbols_from_hyperliquid()
+        # Get all available symbols from Hyperliquid
+        all_symbols = get_all_symbols_from_hyperliquid()
         prices = {}
 
-        # Get prices for major symbols (limit to avoid too many API calls)
-        major_symbols = ["BTC", "ETH", "SOL", "DOGE", "XRP", "BNB", "AVAX", "ARB"]
+        # Extract base symbols from BOTH perpetual swaps AND spot pairs
+        # - Perpetual: "BTC/USDC:USDC" -> "BTC"
+        # - Spot: "PURR/USDC" -> "PURR"
+        # Analyze ALL symbols - let technical analysis filter the good opportunities
+        base_symbols = []
+        for sym in all_symbols:
+            if "/USDC:USDC" in sym:
+                # Perpetual swap
+                base = sym.split("/")[0]
+                base_symbols.append(base)
+            elif "/USDC" in sym:
+                # Spot pair
+                base = sym.split("/")[0]
+                base_symbols.append(base)
 
-        for symbol in major_symbols:
-            if symbol in symbols or f"{symbol}/USDC:USDC" in symbols:
-                try:
-                    price = get_last_price_from_hyperliquid(symbol)
-                    if price and price > 0:
-                        prices[symbol] = price
-                except Exception as e:
-                    logger.warning(f"Failed to get price for {symbol}: {e}")
+        symbols_to_fetch = base_symbols
+
+        logger.info(
+            f"Fetching prices for ALL {len(symbols_to_fetch)} symbols on Hyperliquid "
+            f"({len([s for s in all_symbols if '/USDC:USDC' in s])} perpetuals + "
+            f"{len([s for s in all_symbols if '/USDC' in s and '/USDC:USDC' not in s])} spot)"
+        )
+
+        for symbol in symbols_to_fetch:
+            try:
+                price = get_last_price_from_hyperliquid(symbol)
+                if price and price > 0:
+                    prices[symbol] = price
+            except Exception as e:
+                logger.warning(f"Failed to get price for {symbol}: {e}")
 
         return prices
 
@@ -243,23 +298,121 @@ def _build_portfolio_data(db, account: Account) -> dict[str, Any]:
         loop.close()
 
     # Get current positions from DB
-    positions = db.query(Position).filter(Position.account_id == account.id).all()
+    db_positions = db.query(Position).filter(Position.account_id == account.id).all()
+
+    # Create a set of symbols that exist in Hyperliquid (to filter out stale DB entries)
+    hl_symbols = set()
+    for p in hl_positions:
+        pos = p.get('position', {})
+        coin = pos.get('coin', '')
+        if coin:
+            hl_symbols.add(coin)
+
+    # Only include positions that exist in Hyperliquid (avoid stale DB data)
+    active_positions = []
+    for pos in db_positions:
+        if pos.symbol in hl_symbols:
+            active_positions.append({
+                "symbol": pos.symbol,
+                "quantity": float(pos.quantity or 0),
+                "avg_cost": float(pos.average_cost or 0),
+            })
+        else:
+            logger.warning(f"Position {pos.symbol} exists in DB but not in Hyperliquid - filtering out stale data")
 
     portfolio = {
         "cash": cash_available,  # Real-time from Hyperliquid
         "frozen_cash": total_margin_used,  # Real-time from Hyperliquid
         "total_assets": account_value,  # Real-time from Hyperliquid
-        "positions": [
-            {
-                "symbol": pos.symbol,
-                "quantity": float(pos.quantity or 0),
-                "avg_cost": float(pos.average_cost or 0),
-            }
-            for pos in positions
-        ],
+        "positions": active_positions,  # Only positions that exist in Hyperliquid
     }
 
     return portfolio
+
+
+async def _check_margin_safety(margin_limit: float = 0.70) -> dict[str, Any]:
+    """Check if margin utilization is safe before opening new positions (async).
+
+    This prevents over-leveraging and reduces liquidation risk.
+    Balanced approach: blocks new positions when margin usage > 70%.
+
+    Args:
+        margin_limit: Maximum allowed margin utilization (default: 0.70 = 70%)
+
+    Returns:
+        Dict with:
+        {
+            "safe": True/False,
+            "reason": "explanation if unsafe",
+            "margin_utilization": current utilization percentage,
+            "account_value": total account value,
+            "margin_used": total margin used
+        }
+
+    Example:
+        Account value: $22
+        Total margin used: $18
+        Margin utilization: 81.8%
+        Result: {"safe": False, "reason": "Margin utilization 81.8% > 70% limit"}
+    """
+    try:
+        # Fetch current margin state from Hyperliquid
+        user_state = await hyperliquid_trading_service.get_user_state_async()
+        margin_summary = user_state.get('marginSummary', {})
+
+        account_value = float(margin_summary.get('accountValue', '0'))
+        total_margin_used = float(margin_summary.get('totalMarginUsed', '0'))
+
+        # Calculate margin utilization
+        if account_value > 0:
+            margin_utilization = total_margin_used / account_value
+        else:
+            # No account value = cannot open positions
+            return {
+                "safe": False,
+                "reason": "Account value is 0",
+                "margin_utilization": 0.0,
+                "account_value": 0.0,
+                "margin_used": 0.0
+            }
+
+        # Check if margin utilization exceeds limit
+        if margin_utilization > margin_limit:
+            logger.warning(
+                f"⚠️ Margin utilization too high: {margin_utilization:.1%} > {margin_limit:.1%} limit. "
+                f"Account=${account_value:.2f}, Margin Used=${total_margin_used:.2f}"
+            )
+            return {
+                "safe": False,
+                "reason": f"Margin utilization {margin_utilization:.1%} exceeds {margin_limit:.1%} limit",
+                "margin_utilization": margin_utilization,
+                "account_value": account_value,
+                "margin_used": total_margin_used
+            }
+
+        logger.info(
+            f"✅ Margin check passed: {margin_utilization:.1%} < {margin_limit:.1%} limit. "
+            f"Account=${account_value:.2f}, Margin Used=${total_margin_used:.2f}"
+        )
+
+        return {
+            "safe": True,
+            "reason": "Margin utilization within safe limits",
+            "margin_utilization": margin_utilization,
+            "account_value": account_value,
+            "margin_used": total_margin_used
+        }
+
+    except Exception as e:
+        logger.error(f"Margin safety check failed: {e}", exc_info=True)
+        # Fail safe: if check fails, block new positions
+        return {
+            "safe": False,
+            "reason": f"Margin check error: {str(e)}",
+            "margin_utilization": 0.0,
+            "account_value": 0.0,
+            "margin_used": 0.0
+        }
 
 
 def _validate_decision(
@@ -268,7 +421,7 @@ def _validate_decision(
     """Validate AI decision with safety checks.
 
     Args:
-        decision: AI decision dict with operation, symbol, target_portion_of_balance
+        decision: AI decision dict with operation, symbol, target_portion_of_balance, leverage
         portfolio: Current portfolio data
         prices: Current market prices
         max_ratio: Maximum allowed ratio per trade
@@ -278,33 +431,46 @@ def _validate_decision(
         {
             "valid": True/False,
             "reason": "explanation if invalid",
-            "order_size": calculated size in base currency units
+            "order_size": calculated size in base currency units,
+            "leverage": validated leverage value
         }
     """
     operation = decision.get("operation", "").lower()
     symbol = decision.get("symbol", "")
     target_portion = float(decision.get("target_portion_of_balance", 0))
+    leverage = int(decision.get("leverage", 1))  # Default to 1x (no leverage)
 
-    # 1. Check operation is valid
-    if operation not in ["buy", "sell", "hold"]:
+    # 1. Check operation is valid (now includes "short")
+    if operation not in ["buy", "sell", "short", "hold"]:
         return {"valid": False, "reason": f"Invalid operation: {operation}"}
 
     # 2. HOLD requires no validation
     if operation == "hold":
-        return {"valid": True, "reason": "Hold decision", "order_size": 0}
+        return {"valid": True, "reason": "Hold decision", "order_size": 0, "leverage": 1}
 
     # 3. Check symbol is in our price data
     if symbol not in prices:
         return {"valid": False, "reason": f"Symbol {symbol} not in market data"}
 
-    # 4. Check target_portion is reasonable
-    if target_portion <= 0 or target_portion > max_ratio:
+    # 4. Check target_portion is reasonable (basic sanity check only)
+    # Trust AI decisions - no artificial limits!
+    if target_portion <= 0:
         return {
             "valid": False,
-            "reason": f"target_portion {target_portion} outside allowed range (0, {max_ratio}]",
+            "reason": f"target_portion {target_portion} must be positive",
         }
 
-    # 5. Calculate order size
+    if target_portion > 1.0:
+        return {
+            "valid": False,
+            "reason": f"target_portion {target_portion} exceeds 100%",
+        }
+
+    # 5. Validate leverage (1-10x allowed)
+    if leverage < 1 or leverage > 10:
+        return {"valid": False, "reason": f"Leverage {leverage} out of range (1-10)"}
+
+    # 6. Calculate order size
     if operation == "buy":
         # Buy: use portion of available cash
         cash_available = portfolio["cash"]
@@ -320,7 +486,23 @@ def _validate_decision(
 
         order_size = order_value_usd / price
 
-        return {"valid": True, "reason": "Buy validation passed", "order_size": order_size}
+        return {"valid": True, "reason": "Buy validation passed", "order_size": order_size, "leverage": leverage}
+
+    elif operation == "short":
+        # Short: open short position (similar to buy, but is_buy=False)
+        cash_available = portfolio["cash"]
+        order_value_usd = cash_available * target_portion
+        price = prices[symbol]
+
+        # Hyperliquid minimum is $10 per order
+        MIN_ORDER_USD = 10.0
+        if order_value_usd < MIN_ORDER_USD and cash_available >= MIN_ORDER_USD:
+            order_value_usd = MIN_ORDER_USD
+            logger.info(f"Bumped SHORT order value from ${cash_available * target_portion:.2f} to ${MIN_ORDER_USD:.2f} (Hyperliquid minimum)")
+
+        order_size = order_value_usd / price
+
+        return {"valid": True, "reason": "Short validation passed", "order_size": order_size, "leverage": leverage}
 
     elif operation == "sell":
         # Sell: check we have the position
@@ -334,17 +516,18 @@ def _validate_decision(
         # Let Hyperliquid decide if order size is acceptable
         # No artificial minimum imposed by us
 
-        return {"valid": True, "reason": "Sell validation passed", "order_size": order_size}
+        return {"valid": True, "reason": "Sell validation passed", "order_size": order_size, "leverage": 1}
 
     return {"valid": False, "reason": "Unknown validation error"}
 
 
-def _execute_order_async(decision: dict[str, Any], order_size: float) -> dict[str, Any]:
+def _execute_order_async(decision: dict[str, Any], order_size: float, leverage: int = 1) -> dict[str, Any]:
     """Execute order on Hyperliquid (wrapper for async call).
 
     Args:
         decision: AI decision with operation and symbol
         order_size: Calculated order size in base currency units
+        leverage: Leverage multiplier (1-10x)
 
     Returns:
         Order execution result dict
@@ -373,9 +556,37 @@ def _execute_order_async(decision: dict[str, Any], order_size: float) -> dict[st
                 logger.warning(f"Asset {symbol} not found in meta, using raw size")
 
             # Execute order with properly rounded size
+            # Determine order direction and reduce_only flag:
+            # - BUY: is_buy=True, reduce_only=False (opens LONG position)
+            # - SHORT: is_buy=False, reduce_only=False (opens SHORT position)
+            # - SELL: reduce_only=True (closes existing position, direction depends on current position)
+
+            if operation == "buy":
+                is_buy = True
+                reduce_only = False
+            elif operation == "short":
+                is_buy = False
+                reduce_only = False
+            elif operation == "sell":
+                # For sell, check current position direction
+                # If we have a LONG position (quantity > 0), sell is is_buy=False
+                # If we have a SHORT position (quantity < 0), sell is is_buy=True
+                # For simplicity, use is_buy=False (most common case: closing LONG)
+                is_buy = False
+                reduce_only = True
+            else:
+                logger.error(f"Unknown operation: {operation}")
+                return {"status": "error", "message": f"Unknown operation: {operation}"}
+
+            logger.info(f"Executing {operation.upper()} order: {symbol} size={order_size} leverage={leverage}x is_buy={is_buy} reduce_only={reduce_only}")
+
             result = loop.run_until_complete(
                 hyperliquid_trading_service.place_market_order_async(
-                    symbol=symbol, is_buy=(operation == "buy"), size=order_size, reduce_only=False
+                    symbol=symbol,
+                    is_buy=is_buy,
+                    size=order_size,
+                    reduce_only=reduce_only,
+                    leverage=leverage
                 )
             )
             return result
@@ -383,4 +594,187 @@ def _execute_order_async(decision: dict[str, Any], order_size: float) -> dict[st
             loop.close()
     except Exception as e:
         logger.error(f"Order execution failed: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+
+async def check_stop_loss_async(stop_loss_threshold: float = -0.10) -> None:
+    """Check all open positions and close if loss exceeds threshold (async).
+
+    This function runs every 30 seconds to protect against large losses.
+    Conservative approach: closes position if unrealized loss > 10%.
+
+    Args:
+        stop_loss_threshold: Loss threshold as negative decimal (default: -0.10 = -10%)
+
+    Returns:
+        None
+
+    Example:
+        Position value: $100
+        Unrealized P&L: -$12
+        P&L %: -12%
+        Action: Close position (exceeds -10% threshold)
+    """
+    try:
+        # Fetch current positions from Hyperliquid
+        user_state = await hyperliquid_trading_service.get_user_state_async()
+        positions = user_state.get('assetPositions', [])
+
+        if not positions:
+            logger.debug("No open positions to check for stop-loss")
+            return
+
+        logger.info(f"Checking {len(positions)} positions for stop-loss (threshold: {stop_loss_threshold:.1%})")
+
+        for pos in positions:
+            try:
+                coin = pos['position']['coin']
+                szi = float(pos['position']['szi'])  # Signed size (negative = short)
+                entry_px = float(pos['position']['entryPx'])
+                position_value = float(pos['position']['positionValue'])
+                unrealized_pnl = float(pos['position']['unrealizedPnl'])
+
+                # Calculate P&L percentage
+                if position_value > 0:
+                    pnl_pct = unrealized_pnl / position_value
+                else:
+                    continue  # Skip if position value is 0
+
+                logger.debug(
+                    f"{coin}: Size={szi}, Entry=${entry_px:.2f}, "
+                    f"Value=${position_value:.2f}, P&L=${unrealized_pnl:.2f} ({pnl_pct:.2%})"
+                )
+
+                # Check if loss exceeds threshold
+                if pnl_pct < stop_loss_threshold:
+                    logger.warning(
+                        f"🛑 STOP-LOSS TRIGGERED for {coin}: "
+                        f"P&L={pnl_pct:.2%} < threshold={stop_loss_threshold:.2%}"
+                    )
+
+                    # Close position immediately
+                    await _close_position_async(
+                        coin=coin,
+                        size=abs(szi),
+                        is_long=(szi > 0),
+                        reason="stop_loss"
+                    )
+
+                    logger.info(f"✅ Stop-loss executed: Closed {coin} position")
+
+            except Exception as e:
+                logger.error(f"Error checking stop-loss for position: {e}", exc_info=True)
+                continue
+
+    except Exception as e:
+        logger.error(f"Stop-loss check failed: {e}", exc_info=True)
+
+
+async def check_take_profit_async(take_profit_threshold: float = 0.05) -> None:
+    """Check all open positions and close if profit exceeds threshold (async).
+
+    This function runs every 30 seconds to lock in profits quickly.
+    Aggressive approach: closes position if unrealized profit > 5%.
+
+    Args:
+        take_profit_threshold: Profit threshold as positive decimal (default: 0.05 = +5%)
+
+    Returns:
+        None
+
+    Example:
+        Position value: $100
+        Unrealized P&L: +$6
+        P&L %: +6%
+        Action: Close position (exceeds +5% threshold)
+    """
+    try:
+        # Fetch current positions from Hyperliquid
+        user_state = await hyperliquid_trading_service.get_user_state_async()
+        positions = user_state.get('assetPositions', [])
+
+        if not positions:
+            logger.debug("No open positions to check for take-profit")
+            return
+
+        logger.info(f"Checking {len(positions)} positions for take-profit (threshold: +{take_profit_threshold:.1%})")
+
+        for pos in positions:
+            try:
+                coin = pos['position']['coin']
+                szi = float(pos['position']['szi'])  # Signed size (negative = short)
+                entry_px = float(pos['position']['entryPx'])
+                position_value = float(pos['position']['positionValue'])
+                unrealized_pnl = float(pos['position']['unrealizedPnl'])
+
+                # Calculate P&L percentage
+                if position_value > 0:
+                    pnl_pct = unrealized_pnl / position_value
+                else:
+                    continue  # Skip if position value is 0
+
+                logger.debug(
+                    f"{coin}: Size={szi}, Entry=${entry_px:.2f}, "
+                    f"Value=${position_value:.2f}, P&L=${unrealized_pnl:.2f} ({pnl_pct:.2%})"
+                )
+
+                # Check if profit exceeds threshold
+                if pnl_pct > take_profit_threshold:
+                    logger.warning(
+                        f"💰 TAKE-PROFIT TRIGGERED for {coin}: "
+                        f"P&L={pnl_pct:.2%} > threshold=+{take_profit_threshold:.2%}"
+                    )
+
+                    # Close position immediately to lock in profit
+                    await _close_position_async(
+                        coin=coin,
+                        size=abs(szi),
+                        is_long=(szi > 0),
+                        reason="take_profit"
+                    )
+
+                    logger.info(f"✅ Take-profit executed: Closed {coin} position with +{pnl_pct:.2%} profit")
+
+            except Exception as e:
+                logger.error(f"Error checking take-profit for position: {e}", exc_info=True)
+                continue
+
+    except Exception as e:
+        logger.error(f"Take-profit check failed: {e}", exc_info=True)
+
+
+async def _close_position_async(coin: str, size: float, is_long: bool, reason: str) -> dict[str, Any]:
+    """Close a position on Hyperliquid (async helper).
+
+    Args:
+        coin: Symbol to close (e.g., "BTC")
+        size: Position size to close (absolute value)
+        is_long: True if closing LONG position, False if closing SHORT
+        reason: Reason for closing ("stop_loss", "take_profit", etc.)
+
+    Returns:
+        Order execution result dict
+    """
+    try:
+        # For LONG position: sell (is_buy=False)
+        # For SHORT position: buy to cover (is_buy=True)
+        is_buy = not is_long
+
+        logger.info(
+            f"Closing {coin} position: size={size}, "
+            f"type={'LONG' if is_long else 'SHORT'}, reason={reason}"
+        )
+
+        result = await hyperliquid_trading_service.place_market_order_async(
+            symbol=coin,
+            is_buy=is_buy,
+            size=size,
+            reduce_only=True,  # Only close existing position
+            leverage=1  # Leverage irrelevant when closing
+        )
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Failed to close {coin} position: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}

@@ -86,12 +86,11 @@ class UserAuthSession(Base):
 class Account(Base):
     """Trading account with DeepSeek AI model configuration.
 
-    Synced fields from Hyperliquid:
-    - current_cash: Available balance
-    - frozen_cash: Margin used
-    - initial_capital: Total equity
+    Account balance and positions are ALWAYS fetched in real-time from Hyperliquid API.
+    Database stores only: AI model config, account metadata, relationships.
 
-    Local only: AI model config, account metadata
+    IMPORTANT: Do NOT use balance fields - always fetch from hyperliquid_trading_service.
+    The balance fields below are DEPRECATED and kept only for backward compatibility.
     """
 
     __tablename__ = "accounts"
@@ -112,18 +111,11 @@ class Account(Base):
     base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     api_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
-    # Trading Account Balances (DEPRECATED - fetch from Hyperliquid instead)
-    # These fields are kept for backward compatibility but should not be used
-    # Always fetch real-time data from hyperliquid_trading_service.get_user_state_async()
-    initial_capital: Mapped[Decimal | None] = mapped_column(
-        Numeric(20, 8), nullable=True
-    )
-    current_cash: Mapped[Decimal | None] = mapped_column(
-        Numeric(20, 8), nullable=True
-    )
-    frozen_cash: Mapped[Decimal | None] = mapped_column(
-        Numeric(20, 8), nullable=True
-    )
+    # DEPRECATED Balance Fields (kept for backward compatibility - DO NOT USE)
+    # Always fetch real-time balance from Hyperliquid API instead
+    initial_capital: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    current_cash: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    frozen_cash: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

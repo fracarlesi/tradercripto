@@ -8,11 +8,11 @@ export default defineConfig({
     port: 5621,
     proxy: {
       '/api': {
-        target: 'http://localhost:5611',
+        target: 'http://localhost:8000',
         changeOrigin: true,
       },
       '/ws': {
-        target: 'ws://localhost:5611',
+        target: 'ws://localhost:8000',
         changeOrigin: true,
         ws: true,
       },

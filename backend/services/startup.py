@@ -99,6 +99,8 @@ def schedule_auto_trading(interval_seconds: int = 300, max_ratio: float = 0.2) -
         max_ratio=max_ratio,
     )
 
-    # Execute the first trade immediately in a separate thread to avoid blocking
-    initial_trade = threading.Thread(target=execute_trade, daemon=True)
-    initial_trade.start()
+    # FIX: Removed initial trade thread to prevent startup blocking
+    # The thread was causing event loop deadlock during application startup
+    # First trade will execute on the first scheduled interval instead
+    # initial_trade = threading.Thread(target=execute_trade, daemon=True)
+    # initial_trade.start()

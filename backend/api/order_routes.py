@@ -123,7 +123,7 @@ async def create_new_order(request: OrderCreateRequest, db: Session = Depends(ge
         # Resolve trading account for the user (default user initialized in backend/main.py has at least one account)
         account = (
             db.query(Account)
-            .filter(Account.user_id == user.id, Account.is_active == "true")
+            .filter(Account.user_id == user.id, Account.is_active == True)
             .first()
         )
         if not account:

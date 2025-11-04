@@ -30,7 +30,7 @@ async def list_all_accounts(db: Session = Depends(get_db)):
     try:
         from database.models import User
 
-        accounts = db.query(Account).filter(Account.is_active == "true").all()
+        accounts = db.query(Account).filter(Account.is_active == True).all()
 
         result = []
         for account in accounts:
@@ -48,7 +48,7 @@ async def list_all_accounts(db: Session = Depends(get_db)):
                     "model": account.model,
                     "base_url": account.base_url,
                     "api_key": account.api_key,
-                    "is_active": account.is_active == "true",
+                    "is_active": account.is_active,
                 }
             )
 
@@ -64,7 +64,7 @@ async def get_specific_account_overview(account_id: int, db: Session = Depends(g
     try:
         # Get the specific account
         account = (
-            db.query(Account).filter(Account.id == account_id, Account.is_active == "true").first()
+            db.query(Account).filter(Account.id == account_id, Account.is_active == True).first()
         )
 
         if not account:
@@ -115,7 +115,7 @@ async def get_account_overview(db: Session = Depends(get_db)):
     """Get overview for the default account (for paper trading demo)"""
     try:
         # Get the first active account (default account)
-        account = db.query(Account).filter(Account.is_active == "true").first()
+        account = db.query(Account).filter(Account.is_active == True).first()
 
         if not account:
             raise HTTPException(status_code=404, detail="No active account found")
@@ -220,7 +220,7 @@ async def create_new_account(payload: dict, db: Session = Depends(get_db)):
             "model": new_account.model,
             "base_url": new_account.base_url,
             "api_key": new_account.api_key,
-            "is_active": new_account.is_active == "true",
+            "is_active": new_account.is_active,
         }
     except HTTPException:
         raise
@@ -236,7 +236,7 @@ async def update_account_settings(account_id: int, payload: dict, db: Session = 
         logger.info(f"Updating account {account_id} with payload: {payload}")
 
         account = (
-            db.query(Account).filter(Account.id == account_id, Account.is_active == "true").first()
+            db.query(Account).filter(Account.id == account_id, Account.is_active == True).first()
         )
 
         if not account:
@@ -293,7 +293,7 @@ async def update_account_settings(account_id: int, payload: dict, db: Session = 
             "model": account.model,
             "base_url": account.base_url,
             "api_key": account.api_key,
-            "is_active": account.is_active == "true",
+            "is_active": account.is_active,
         }
     except HTTPException:
         raise
@@ -323,7 +323,7 @@ async def get_asset_curve_by_timeframe(timeframe: str = "1d", db: Session = Depe
         period = timeframe_map[timeframe]
 
         # Get all active accounts
-        accounts = db.query(Account).filter(Account.is_active == "true").all()
+        accounts = db.query(Account).filter(Account.is_active == True).all()
         if not accounts:
             return []
 

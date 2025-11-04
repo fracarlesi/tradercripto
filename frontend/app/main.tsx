@@ -7,7 +7,7 @@ import { Toaster, toast } from 'react-hot-toast'
 let __WS_SINGLETON__: WebSocket | null = null;
 
 const resolveWsUrl = () => {
-  if (typeof window === 'undefined') return 'ws://localhost:5611/ws'
+  if (typeof window === 'undefined') return 'ws://localhost:8000/ws'
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   return `${protocol}//${window.location.host}/ws`
 }
@@ -29,7 +29,6 @@ interface Account {
   user_id: number
   name: string
   account_type: string
-  initial_capital: number
   current_cash: number
   frozen_cash: number
 }
@@ -80,8 +79,8 @@ function App() {
         
         const handleOpen = () => {
           console.log('WebSocket connected')
-          // Start with hardcoded default user for paper trading
-          ws!.send(JSON.stringify({ type: 'bootstrap', username: 'default', initial_capital: 10000 }))
+          // Bootstrap with default user - balance will be fetched from Hyperliquid
+          ws!.send(JSON.stringify({ type: 'bootstrap', username: 'default' }))
         }
         
         const handleMessage = (e: MessageEvent) => {

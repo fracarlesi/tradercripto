@@ -6,6 +6,7 @@ This module provides async WebSocket support with:
 - Proper cleanup on disconnect
 """
 
+import asyncio  # FIX: Add asyncio import
 import json
 from datetime import datetime
 
@@ -143,6 +144,22 @@ async def _send_snapshot_async(db: AsyncSession, account_id: int):
         db: Database session
         account_id: Account ID
     """
+    try:
+        await _send_snapshot_async_impl(db, account_id)
+    except Exception as e:
+        import traceback
+        import sys
+        print(f"\n\n{'='*80}", file=sys.stderr)
+        print(f"FATAL ERROR in _send_snapshot_async:", file=sys.stderr)
+        print(f"{'='*80}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        print(f"{'='*80}\n\n", file=sys.stderr)
+        raise
+
+
+async def _send_snapshot_async_impl(db: AsyncSession, account_id: int):
+    """Implementation of snapshot sending."""
+    logger.info(f"=== SENDING SNAPSHOT FOR ACCOUNT {account_id} ===")
     # Get account
     result = await db.execute(select(Account).where(Account.id == account_id))
     account = result.scalar_one_or_none()
@@ -159,19 +176,25 @@ async def _send_snapshot_async(db: AsyncSession, account_id: int):
 
     try:
         user_state = await hyperliquid_trading_service.get_user_state_async()
-        margin = user_state.get('marginSummary', {})
+
+        # Validate response structure
+        if not user_state or 'marginSummary' not in user_state:
+            raise ValueError(f"Invalid Hyperliquid response: {user_state}")
+
+        margin = user_state['marginSummary']
         hl_positions = user_state.get('assetPositions', [])
 
-        account_value = float(margin.get('accountValue', '0'))
-        total_margin_used = float(margin.get('totalMarginUsed', '0'))
+        # accountValue and totalMarginUsed are always strings from Hyperliquid API
+        account_value = float(margin['accountValue'])
+        total_margin_used = float(margin['totalMarginUsed'])
 
-        # Calculate position value from Hyperliquid
+        # Calculate position value from Hyperliquid using CURRENT market prices (not entry prices!)
         positions_value = 0
         for p in hl_positions:
             pos = p.get('position', {})
-            size = float(pos.get('szi', '0'))
-            entry_px = float(pos.get('entryPx', '0'))
-            positions_value += size * entry_px
+            # Use positionValue from Hyperliquid which already includes current market price
+            position_value = float(pos.get('positionValue', '0'))
+            positions_value += abs(position_value)  # Use abs() because shorts have negative positionValue
 
         cash_available = account_value - positions_value
 
@@ -182,10 +205,6 @@ async def _send_snapshot_async(db: AsyncSession, account_id: int):
         cash_available = 0
         total_margin_used = 0
         positions_value = 0
-
-    # Get historical data from DB (positions, orders, trades)
-    result = await db.execute(select(Position).where(Position.account_id == account_id))
-    positions = result.scalars().all()
 
     # Get orders (limit to recent 20)
     result = await db.execute(
@@ -229,22 +248,84 @@ async def _send_snapshot_async(db: AsyncSession, account_id: int):
         "positions_value": positions_value,  # Real-time from Hyperliquid
     }
 
-    # Enrich positions (simplified - no real-time price fetching)
-    enriched_positions = [
-        {
-            "id": p.id,
-            "account_id": p.account_id,
-            "symbol": p.symbol,
-            "name": p.symbol,  # Position model doesn't have name field
-            "market": "CRYPTO",  # Hyperliquid is crypto only
-            "quantity": float(p.quantity),
-            "available_quantity": float(p.available_quantity),
-            "avg_cost": float(p.average_cost),
-            "last_price": None,  # Would need async price fetching
-            "market_value": None,
-        }
-        for p in positions
-    ]
+    # Fetch current market prices
+    try:
+        all_mids = await hyperliquid_trading_service.get_all_mids_async()
+    except Exception as e:
+        logger.error(f"Failed to fetch market prices from Hyperliquid: {e}")
+        all_mids = {}
+
+    # Build positions list DIRECTLY from Hyperliquid (NO DATABASE!)
+    # Single source of truth: only positions that exist on Hyperliquid are shown
+    enriched_positions = []
+    for asset_pos in hl_positions:
+        pos = asset_pos.get('position', {})
+        coin = pos.get('coin', '')
+        if not coin:
+            continue
+
+        size = float(pos.get('szi', '0'))
+        entry_px = float(pos.get('entryPx', '0'))
+        position_value = float(pos.get('positionValue', '0'))
+        unrealized_pnl = float(pos.get('unrealizedPnl', '0'))
+        return_on_equity = float(pos.get('returnOnEquity', '0'))
+        margin_used = float(pos.get('marginUsed', '0'))
+
+        # Get current market price
+        current_price = all_mids.get(coin)
+        if current_price is None:
+            logger.warning(f"No current price available for {coin}, using entry price")
+            current_price = entry_px
+        else:
+            current_price = float(current_price)
+
+        enriched_positions.append({
+            "id": 0,  # No database ID - this is real-time from Hyperliquid
+            "account_id": account_id,
+            "symbol": coin,
+            "name": coin,
+            "market": "CRYPTO",
+            "quantity": abs(size),  # Absolute value, side determined by sign
+            "available_quantity": abs(size),
+            "avg_cost": entry_px,
+            "last_price": current_price,
+            "market_value": abs(position_value),
+            "unrealized_pnl": unrealized_pnl,
+            "return_on_equity": return_on_equity,
+            "margin_used": margin_used,
+        })
+
+    # Get asset curve data for the chart (default timeframe: 1h)
+    # FIX: Call async function directly to avoid event loop deadlock
+    import asyncio
+    from services.asset_curve_calculator import get_all_asset_curves_data_new_async
+    from database.connection import SessionLocal
+
+    def get_curves_sync():
+        """Sync wrapper that creates its own session for the curve calculation"""
+        try:
+            # Create a new sync session for this operation
+            sync_db = SessionLocal()
+            try:
+                # Run the async function in a new event loop (safe because we're in a thread)
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    curves = loop.run_until_complete(
+                        get_all_asset_curves_data_new_async(sync_db, "1h")
+                    )
+                    logger.info(f"Asset curves calculated: {len(curves)} points")
+                    return curves
+                finally:
+                    loop.close()
+            finally:
+                sync_db.close()
+        except Exception as e:
+            logger.error(f"Failed to calculate asset curves: {e}", exc_info=True)
+            return []
+
+    # Execute in a thread pool to avoid blocking the async event loop
+    all_asset_curves = await asyncio.to_thread(get_curves_sync)
 
     # Build response
     response_data = {
@@ -299,6 +380,7 @@ async def _send_snapshot_async(db: AsyncSession, account_id: int):
             }
             for d in ai_decisions
         ],
+        "all_asset_curves": all_asset_curves,
         "timestamp": datetime.now().timestamp(),
     }
 
@@ -358,7 +440,6 @@ async def websocket_endpoint_async(websocket: WebSocket):
                         user = await UserRepository.get_or_create_user(db, username)
 
                         # Get or create default account
-                        initial_capital = float(msg.get("initial_capital", 1000.0))
                         account = await AccountRepository.get_or_create_default_account(
                             db, user.id
                         )
@@ -382,6 +463,9 @@ async def websocket_endpoint_async(websocket: WebSocket):
                             )
                             await _send_snapshot_async(db, account_id)
                         except Exception as e:
+                            import traceback
+                            import sys
+                            traceback.print_exc(file=sys.stderr)
                             logger.error(
                                 "Failed to send bootstrap response",
                                 extra={"context": {"error": str(e)}},
@@ -440,10 +524,193 @@ async def websocket_endpoint_async(websocket: WebSocket):
                         except Exception:
                             break
 
+                    elif kind == "get_asset_curve":
+                        # Get asset curve data with specific timeframe
+                        timeframe = msg.get("timeframe", "1h")
+                        if timeframe not in ["5m", "1h", "1d"]:
+                            await websocket.send_text(
+                                json.dumps(
+                                    {
+                                        "type": "error",
+                                        "message": "Invalid timeframe. Must be 5m, 1h, or 1d",
+                                    }
+                                )
+                            )
+                            continue
+
+                        # FIX: Use asyncio.to_thread() to avoid deadlock
+                        from services.asset_curve_calculator import get_all_asset_curves_data_new_async
+                        from database.connection import SessionLocal
+
+                        def get_curves_sync():
+                            sync_db = SessionLocal()
+                            try:
+                                loop = asyncio.new_event_loop()
+                                asyncio.set_event_loop(loop)
+                                try:
+                                    curves = loop.run_until_complete(
+                                        get_all_asset_curves_data_new_async(sync_db, timeframe)
+                                    )
+                                    return curves
+                                finally:
+                                    loop.close()
+                            finally:
+                                sync_db.close()
+
+                        asset_curves = await asyncio.to_thread(get_curves_sync)
+
+                        await websocket.send_text(
+                            json.dumps(
+                                {
+                                    "type": "asset_curve_data",
+                                    "timeframe": timeframe,
+                                    "data": asset_curves,
+                                }
+                            )
+                        )
+
+                    elif kind == "switch_user":
+                        # Switch to different user account
+                        target_username = msg.get("username")
+                        if not target_username:
+                            await websocket.send_text(
+                                json.dumps({"type": "error", "message": "username required"})
+                            )
+                            continue
+
+                        # Unregister from current account if any
+                        if account_id is not None:
+                            manager.unregister(account_id, websocket)
+
+                        # Find or create target user
+                        target_user = await UserRepository.get_or_create_user(db, target_username)
+                        user_id = target_user.id
+
+                        # Get or create default account for this user
+                        target_account = await AccountRepository.get_or_create_default_account(
+                            db, user_id
+                        )
+                        account_id = target_account.id
+
+                        # Register to new account
+                        manager.register(account_id, websocket)
+
+                        # Send confirmation
+                        await manager.send_to_account(
+                            account_id,
+                            {
+                                "type": "user_switched",
+                                "user": {"id": target_user.id, "username": target_user.username},
+                            },
+                        )
+                        await _send_snapshot_async(db, account_id)
+
+                    elif kind == "place_order":
+                        # Place trading order via Hyperliquid
+                        if account_id is None:
+                            await websocket.send_text(
+                                json.dumps({"type": "error", "message": "not authenticated"})
+                            )
+                            continue
+
+                        try:
+                            # Get account
+                            result = await db.execute(select(Account).where(Account.id == account_id))
+                            account = result.scalar_one_or_none()
+
+                            if not account:
+                                await websocket.send_text(
+                                    json.dumps({"type": "error", "message": "account not found"})
+                                )
+                                continue
+
+                            # Extract order parameters
+                            symbol = msg.get("symbol")
+                            name = msg.get("name", symbol)
+                            market = msg.get("market", "CRYPTO")
+                            side = msg.get("side")
+                            order_type = msg.get("order_type")
+                            price = msg.get("price")
+                            quantity = msg.get("quantity")
+
+                            # Validate required parameters
+                            if not all([symbol, side, order_type, quantity]):
+                                await websocket.send_text(
+                                    json.dumps(
+                                        {"type": "error", "message": "missing required parameters"}
+                                    )
+                                )
+                                continue
+
+                            # Convert quantity to float
+                            try:
+                                quantity = float(quantity)
+                            except (ValueError, TypeError):
+                                await websocket.send_text(
+                                    json.dumps({"type": "error", "message": "invalid quantity"})
+                                )
+                                continue
+
+                            # Import order creation service
+                            from services.order_matching import create_order
+
+                            # Create the order
+                            order = create_order(
+                                db=db,
+                                account=account,
+                                symbol=symbol,
+                                name=name,
+                                side=side,
+                                order_type=order_type,
+                                price=price,
+                                quantity=quantity,
+                            )
+
+                            # Commit the order
+                            await db.commit()
+
+                            # Send success response
+                            await manager.send_to_account(
+                                account_id, {"type": "order_pending", "order_id": order.id}
+                            )
+
+                            # Send updated snapshot
+                            await _send_snapshot_async(db, account_id)
+
+                        except ValueError as e:
+                            # Business logic errors (insufficient funds, etc.)
+                            try:
+                                await websocket.send_text(
+                                    json.dumps({"type": "error", "message": str(e)})
+                                )
+                            except Exception:
+                                break
+                        except Exception as e:
+                            # Unexpected errors
+                            logger.error(
+                                "Order placement error",
+                                extra={"context": {"account_id": account_id, "error": str(e)}},
+                            )
+                            try:
+                                await websocket.send_text(
+                                    json.dumps(
+                                        {
+                                            "type": "error",
+                                            "message": f"order placement failed: {str(e)}",
+                                        }
+                                    )
+                                )
+                            except Exception:
+                                break
+
                     else:
+                        logger.warning(
+                            f"Unknown WebSocket message type received: {kind}",
+                            extra={"context": {"message_type": kind, "full_message": msg}},
+                        )
                         try:
                             await websocket.send_text(
-                                json.dumps({"type": "error", "message": "unknown message"})
+                                json.dumps({"type": "error", "message": f"unknown message type: {kind}"})
                             )
                         except Exception:
                             break
@@ -458,6 +725,7 @@ async def websocket_endpoint_async(websocket: WebSocket):
                                 "error": str(e),
                             }
                         },
+                        exc_info=True,  # FIX: Add traceback to logs
                     )
                     try:
                         await websocket.send_text(

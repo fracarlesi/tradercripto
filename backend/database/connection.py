@@ -4,7 +4,7 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 from config.settings import settings
-from sqlalchemy import create_engine as create_sync_engine
+from sqlalchemy import create_engine as create_sync_engine, event
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -12,7 +12,16 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import NullPool, QueuePool
+from sqlalchemy.pool import NullPool, QueuePool, StaticPool
+
+
+def _set_sqlite_pragma(dbapi_conn, connection_record):
+    """Enable WAL mode and other performance optimizations for SQLite."""
+    cursor = dbapi_conn.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")  # Enable Write-Ahead Logging
+    cursor.execute("PRAGMA synchronous=NORMAL")  # Balance between safety and speed
+    cursor.execute("PRAGMA busy_timeout=30000")  # 30 seconds timeout
+    cursor.close()
 
 
 def create_engine() -> AsyncEngine:
@@ -29,9 +38,14 @@ def create_engine() -> AsyncEngine:
     }
 
     if is_sqlite:
-        # SQLite configuration
-        engine_kwargs["poolclass"] = NullPool  # SQLite doesn't support connection pooling well
-        engine_kwargs["connect_args"] = {"check_same_thread": False}
+        # SQLite configuration - use StaticPool for async to share single connection
+        # StaticPool maintains ONE persistent connection shared across all sessions
+        # This prevents "database is locked" errors in async environments
+        engine_kwargs["poolclass"] = StaticPool
+        engine_kwargs["connect_args"] = {
+            "check_same_thread": False,
+            "timeout": 30.0,  # Increased timeout for concurrent access (default is 5.0)
+        }
     else:
         # PostgreSQL configuration
         engine_kwargs["poolclass"] = QueuePool
@@ -40,7 +54,13 @@ def create_engine() -> AsyncEngine:
         engine_kwargs["pool_timeout"] = settings.db_pool_timeout
         engine_kwargs["pool_pre_ping"] = True  # Verify connections before using
 
-    return create_async_engine(settings.database_url, **engine_kwargs)
+    engine = create_async_engine(settings.database_url, **engine_kwargs)
+
+    # Register SQLite optimizations event listener
+    if is_sqlite:
+        event.listen(engine.sync_engine, "connect", _set_sqlite_pragma)
+
+    return engine
 
 
 # Global async engine instance

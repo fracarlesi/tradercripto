@@ -59,7 +59,7 @@ async def list_user_accounts(session_token: str, db: Session = Depends(get_db)):
                 current_cash=float(account.current_cash),
                 frozen_cash=float(account.frozen_cash),
                 account_type=account.account_type,
-                is_active=account.is_active == "true",
+                is_active=account.is_active,
             )
             for account in accounts
         ]
@@ -107,7 +107,7 @@ async def create_trading_account(
             current_cash=float(account.current_cash),
             frozen_cash=float(account.frozen_cash),
             account_type=account.account_type,
-            is_active=account.is_active == "true",
+            is_active=account.is_active,
         )
 
     except HTTPException:
@@ -141,7 +141,7 @@ async def get_account_details(account_id: int, session_token: str, db: Session =
             current_cash=float(account.current_cash),
             frozen_cash=float(account.frozen_cash),
             account_type=account.account_type,
-            is_active=account.is_active == "true",
+            is_active=account.is_active,
         )
 
     except HTTPException:
@@ -193,7 +193,7 @@ async def update_trading_account(
             current_cash=float(updated_account.current_cash),
             frozen_cash=float(updated_account.frozen_cash),
             account_type=updated_account.account_type,
-            is_active=updated_account.is_active == "true",
+            is_active=updated_account.is_active,
         )
 
     except HTTPException:
@@ -246,7 +246,7 @@ async def get_or_create_default(session_token: str, db: Session = Depends(get_db
             current_cash=float(account.current_cash),
             frozen_cash=float(account.frozen_cash),
             account_type=account.account_type,
-            is_active=account.is_active == "true",
+            is_active=account.is_active,
         )
 
     except HTTPException:

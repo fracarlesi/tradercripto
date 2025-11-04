@@ -46,7 +46,7 @@ async def register_user(user_data: UserCreate, db: Session = Depends(get_db)):
         )
 
         return UserOut(
-            id=user.id, username=user.username, email=user.email, is_active=user.is_active == "true"
+            id=user.id, username=user.username, email=user.email, is_active=user.is_active
         )
 
     except HTTPException:
@@ -75,7 +75,7 @@ async def login_user(login_data: UserLogin, db: Session = Depends(get_db)):
                 id=user.id,
                 username=user.username,
                 email=user.email,
-                is_active=user.is_active == "true",
+                is_active=user.is_active,
             ),
             session_token=session.session_token,
             expires_at=session.expires_at.isoformat(),
@@ -100,7 +100,7 @@ async def get_user_profile(session_token: str, db: Session = Depends(get_db)):
             raise HTTPException(status_code=404, detail="User not found")
 
         return UserOut(
-            id=user.id, username=user.username, email=user.email, is_active=user.is_active == "true"
+            id=user.id, username=user.username, email=user.email, is_active=user.is_active
         )
 
     except HTTPException:
@@ -133,7 +133,7 @@ async def update_user_profile(
             raise HTTPException(status_code=404, detail="User not found")
 
         return UserOut(
-            id=user.id, username=user.username, email=user.email, is_active=user.is_active == "true"
+            id=user.id, username=user.username, email=user.email, is_active=user.is_active
         )
 
     except HTTPException:
@@ -146,13 +146,13 @@ async def update_user_profile(
 @router.get("/", response_model=list[UserOut])
 async def list_users(db: Session = Depends(get_db)):
     try:
-        users = db.query(User).filter(User.is_active == "true").order_by(User.username).all()
+        users = db.query(User).filter(User.is_active == True).order_by(User.username).all()
         return [
             UserOut(
                 id=user.id,
                 username=user.username,
                 email=user.email,
-                is_active=user.is_active == "true",
+                is_active=user.is_active,
             )
             for user in users
         ]
