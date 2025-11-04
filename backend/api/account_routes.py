@@ -42,9 +42,8 @@ async def list_all_accounts(db: Session = Depends(get_db)):
                     "username": user.username if user else "unknown",
                     "name": account.name,
                     "account_type": account.account_type,
-                    "initial_capital": float(account.initial_capital),
-                    "current_cash": float(account.current_cash),
-                    "frozen_cash": float(account.frozen_cash),
+                    # Balance data now fetched from Hyperliquid API in real-time
+                    # See GET /api/accounts/{account_id}/overview for balance
                     "model": account.model,
                     "base_url": account.base_url,
                     "api_key": account.api_key,

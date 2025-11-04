@@ -111,12 +111,6 @@ class Account(Base):
     base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     api_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
-    # DEPRECATED Balance Fields (kept for backward compatibility - DO NOT USE)
-    # Always fetch real-time balance from Hyperliquid API instead
-    initial_capital: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
-    current_cash: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
-    frozen_cash: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
-
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
