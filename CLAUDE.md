@@ -285,4 +285,67 @@ class Account:
 
 **Action**: When refactoring or identifying obsolete code, **delete it immediately** - do NOT ask for permission.
 
+## 🔍 EXCEPTION HANDLING & LOGGING - IDENTIFIED IMPROVEMENTS
+
+**Status**: Identified during 2025-11-04 refactoring analysis
+
+**Issue**: 42 files contain `except Exception as e` patterns that may lack proper logging with stack traces.
+
+**Files Requiring Review**:
+- api/*_routes.py (10 files)
+- services/*.py (20+ files)
+- scripts/maintenance/*.py (8 files)
+- scripts/testing/*.py (4 files)
+
+**Best Practices to Apply**:
+1. **Always include exc_info=True** in error logs:
+   ```python
+   # ❌ WRONG - No stack trace
+   except Exception as e:
+       logger.error(f"Error: {e}")
+
+   # ✅ CORRECT - Full stack trace
+   except Exception as e:
+       logger.error(f"Error: {e}", exc_info=True)
+   ```
+
+2. **Catch specific exceptions** instead of bare `Exception`:
+   ```python
+   # ❌ WRONG - Too broad
+   except Exception as e:
+       pass
+
+   # ✅ CORRECT - Specific exceptions
+   except (ValueError, KeyError, TypeError) as e:
+       logger.error(f"Data error: {e}", exc_info=True)
+   except HyperliquidAPIError as e:
+       logger.error(f"API error: {e}", exc_info=True)
+   ```
+
+3. **Fail fast** - Don't silently catch and continue:
+   ```python
+   # ❌ WRONG - Silent failure
+   except Exception:
+       pass  # Hides bugs
+
+   # ✅ CORRECT - Log and re-raise or return error
+   except Exception as e:
+       logger.error(f"Critical error: {e}", exc_info=True)
+       raise  # Or return error response
+   ```
+
+**TODO**: Systematic review of identified 42 files to apply best practices (future task)
+
+## 📚 MCP SERVER DOCUMENTATION
+
+**See `.claudemcp.md`** for complete MCP server configuration and usage guidelines.
+
+Quick reference for 4 active MCP servers:
+1. **claude-context**: Semantic code search (re-index before each use!)
+2. **context7**: Library documentation lookup
+3. **playwright**: Browser automation and testing
+4. **perplexity-ask**: Web research and best practices
+
+**Critical Rule**: ALWAYS re-index claude-context with `force=true` and wait 15 seconds before searching.
+
 <!-- MANUAL ADDITIONS END -->
