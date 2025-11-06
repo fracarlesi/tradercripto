@@ -273,34 +273,13 @@ class CryptoForecaster:
         """Salva le previsioni in un file CSV"""
         summary = self.get_predictions_summary()
         summary.to_csv(filename, index=False)
-        print(f"Previsioni salvate in {filename}")
 
 
-# Esempio di utilizzo
-if __name__ == "__main__":
-    # Lista di ticker da analizzare
-    tickers = ['BTC-USD', 'ETH-USD', 'BNB-USD']
-    
+def get_crypto_forecasts(tickers = ['BTC-USD', 'ETH-USD', 'BNB-USD']):
     # Crea l'istanza del forecaster
     forecaster = CryptoForecaster(tickers)
-    
-    # Scarica i dati (sia minuto che ora)
-    print("Scaricamento dati in corso...")
     forecaster.download_data(timeframe='both')
-    
-    # Genera tutte le previsioni
-    print("\nGenerazione previsioni...")
     forecaster.forecast_all()
-    
-    # Mostra riepilogo previsioni
-    print("\nRIEPILOGO PREVISIONI:")
-    print("="*80)
     summary = forecaster.get_predictions_summary()
-    print(summary.to_string(index=False))
+    return summary.to_string(index=False)
     
-    # Visualizza grafici per BTC
-    print("\nVisualizzazione grafici BTC-USD...")
-    forecaster.plot_forecast('BTC-USD', timeframe='both')
-    
-    # Salva previsioni
-    forecaster.save_predictions()

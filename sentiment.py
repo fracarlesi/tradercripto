@@ -78,18 +78,18 @@ def get_latest_fear_and_greed():
     
     return None
 
-# --- Loop Principale del Trading Agent ---
-
-if __name__ == "__main__":
-    print("Avvio del Trading Agent (Sentiment Analysis)...")
-    print("\n--- Inizio ciclo (ogni 3 minuti) ---")
-    print("Recupero il sentiment del mercato (Fear & Greed Index)...")
-    
-    sentiment = get_latest_fear_and_greed()
-    
-    if sentiment:
-        print(f"Sentiment attuale ({sentiment['timestamp']}):")
-        print(f"  Valore: {sentiment['valore']}")
-        print(f"  Classificazione: {sentiment['classificazione']}")
+# get sentiment
+def get_sentiment() -> str:
+    """
+    Restituisce una stringa formattata con l'ultimo Fear & Greed Index.
+    """
+    sentiment_data = get_latest_fear_and_greed()
+    if sentiment_data:
+        return (
+            f"Sentiment del mercato (Fear & Greed Index):\n"
+            f"  Valore: {sentiment_data['valore']}\n"
+            f"  Classificazione: {sentiment_data['classificazione']}\n"
+            f"  Timestamp: {sentiment_data['timestamp']}"
+        )
     else:
-        print("Impossibile recuperare il sentiment. Riprovo nel prossimo ciclo.")
+        return "Impossibile recuperare il sentiment del mercato."

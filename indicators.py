@@ -56,6 +56,37 @@ class CryptoTechnicalAnalysis:
         """Calcola l'ATR (Average True Range)"""
         return ta.volatility.AverageTrueRange(high, low, close, window=period).average_true_range()
     
+    def calculate_pivot_points(self, high: float, low: float, close: float) -> Dict[str, float]:
+        """
+        Calcola i Pivot Points classici
+        
+        Args:
+            high: Massimo del periodo precedente
+            low: Minimo del periodo precedente
+            close: Chiusura del periodo precedente
+            
+        Returns:
+            Dizionario con PP, S1, S2, R1, R2
+        """
+        # Pivot Point principale
+        pp = (high + low + close) / 3
+        
+        # Livelli di supporto
+        s1 = (2 * pp) - high
+        s2 = pp - (high - low)
+        
+        # Livelli di resistenza
+        r1 = (2 * pp) - low
+        r2 = pp + (high - low)
+        
+        return {
+            'pp': pp,
+            's1': s1,
+            's2': s2,
+            'r1': r1,
+            'r2': r2
+        }
+    
     def get_funding_rate(self, symbol: str) -> float:
         """
         Recupera il funding rate per i perpetual futures
@@ -109,8 +140,6 @@ class CryptoTechnicalAnalysis:
         # Prepara il simbolo per l'exchange
         symbol = f"{ticker}/USDT"
         
-        print(f"Recupero dati per {symbol}...")
-        
         # 1. DATI INTRADAY (1 minuto) - ultimi 10 minuti
         df_1m = self.fetch_ohlcv(symbol, '1m', limit=100)
         
@@ -139,15 +168,34 @@ class CryptoTechnicalAnalysis:
         
         last_10_4h = df_4h.tail(10)
         
-        # 3. OPEN INTEREST E FUNDING RATE
+        # 3. CALCOLA PIVOT POINTS
+        # Usa i dati giornalieri per calcolare i pivot points
+        df_daily = self.fetch_ohlcv(symbol, '1d', limit=2)
+        if len(df_daily) >= 2:
+            # Usa i dati del giorno precedente
+            prev_day = df_daily.iloc[-2]
+            pivot_points = self.calculate_pivot_points(
+                prev_day['high'], 
+                prev_day['low'], 
+                prev_day['close']
+            )
+        else:
+            # Se non abbiamo dati giornalieri, usa i dati 4H
+            pivot_points = self.calculate_pivot_points(
+                df_4h['high'].iloc[-1], 
+                df_4h['low'].iloc[-1], 
+                df_4h['close'].iloc[-1]
+            )
+        
+        # 4. OPEN INTEREST E FUNDING RATE
         oi_data = self.get_open_interest(symbol)
         funding_rate = self.get_funding_rate(symbol)
         
-        # 4. VALORI CORRENTI
+        # 5. VALORI CORRENTI
         current_data = df_1m.iloc[-1]
         current_4h = df_4h.iloc[-1]
         
-        # 5. COMPILA IL RISULTATO
+        # 6. COMPILA IL RISULTATO
         result = {
             'ticker': ticker,
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -159,6 +207,9 @@ class CryptoTechnicalAnalysis:
                 'macd': current_data['macd'],
                 'rsi_7': current_data['rsi_7']
             },
+            
+            # PIVOT POINTS
+            'pivot_points': pivot_points,
             
             # OPEN INTEREST E FUNDING
             'derivatives': {
@@ -213,6 +264,13 @@ class CryptoTechnicalAnalysis:
         output += f"current_macd = {curr['macd']:.3f}, "
         output += f"current_rsi (7 period) = {curr['rsi_7']:.3f}\n\n"
         
+        # PIVOT POINTS
+        pivot = data['pivot_points']
+        output += f"Pivot Points (based on previous day):\n"
+        output += f"R2 = {pivot['r2']:.2f}, R1 = {pivot['r1']:.2f}, "
+        output += f"PP = {pivot['pp']:.2f}, "
+        output += f"S1 = {pivot['s1']:.2f}, S2 = {pivot['s2']:.2f}\n\n"
+        
         # DERIVATIVES
         deriv = data['derivatives']
         output += f"In addition, here is the latest {data['ticker']} open interest and funding rate for perps:\n"
@@ -246,33 +304,38 @@ class CryptoTechnicalAnalysis:
         return output
 
 
-def main():
-    """Funzione principale per testare il sistema"""
+def analyze_multiple_tickers(tickers: List[str], exchange_name: str = 'binance') -> str:
+    """
+    Analizza multipli ticker e ritorna tutto il testo formattato
     
+    Args:
+        tickers: Lista di ticker da analizzare (es. ['BTC', 'ETH', 'BNB'])
+        exchange_name: Nome dell'exchange (default: binance)
+        
+    Returns:
+        Stringa con tutti i dati formattati
+    """
     # Crea l'analizzatore
-    analyzer = CryptoTechnicalAnalysis(exchange_name='binance')
+    analyzer = CryptoTechnicalAnalysis(exchange_name=exchange_name)
     
-    # Lista di ticker da analizzare
-    tickers = ['BTC', 'ETH', 'SOL', 'BNB', 'DOGE', 'XRP']  # Aggiungi altri ticker se necessario
+    # Accumula tutti i risultati
+    full_output = ""
     
     for ticker in tickers:
         try:
             # Ottieni l'analisi completa
             data = analyzer.get_complete_analysis(ticker)
             
-            # Stampa l'output formattato
-            print(analyzer.format_output(data))
-            
-            # Salva anche in formato JSON se necessario
-            import json
-            with open(f'{ticker}_analysis.json', 'w') as f:
-                json.dump(data, f, indent=2)
+            # Aggiungi l'output formattato
+            full_output += analyzer.format_output(data)
             
         except Exception as e:
-            print(f"Errore nell'analisi di {ticker}: {e}")
-            import traceback
-            traceback.print_exc()
+            full_output += f"\n{'='*80}\n"
+            full_output += f"ERRORE nell'analisi di {ticker}: {str(e)}\n"
+            full_output += f"{'='*80}\n\n"
+    
+    return full_output
 
-
-if __name__ == "__main__":
-    main()
+tickers = ['BTC', 'ETH', 'BNB']
+result = analyze_multiple_tickers(tickers)
+print(result)
