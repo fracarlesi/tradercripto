@@ -1,5 +1,6 @@
 """Application startup initialization service"""
 
+import asyncio
 import logging
 import threading
 
@@ -65,6 +66,28 @@ def initialize_services() -> None:
             task_id="portfolio_snapshot_capture",
         )
         logger.info("Portfolio snapshot capture task started (5-minute interval)")
+
+        # Add counterfactual learning tasks
+        from services.learning import calculate_counterfactuals_batch, run_self_analysis
+
+        def calculate_counterfactuals_wrapper():
+            """
+            Wrapper for counterfactual calculation batch job.
+            Calculates counterfactual P&L for decision snapshots older than 24h.
+            """
+            try:
+                processed = asyncio.run(calculate_counterfactuals_batch(limit=100))
+                if processed > 0:
+                    logger.info(f"✅ Calculated counterfactuals for {processed} snapshots")
+            except Exception as e:
+                logger.error(f"Counterfactual calculation failed: {e}", exc_info=True)
+
+        task_scheduler.add_interval_task(
+            task_func=calculate_counterfactuals_wrapper,
+            interval_seconds=3600,  # Every 1 hour
+            task_id="counterfactual_calculation",
+        )
+        logger.info("Counterfactual calculation task started (1-hour interval)")
 
         logger.info("All services initialized successfully")
 
