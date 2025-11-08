@@ -9,81 +9,6 @@ from services.scheduler import setup_market_tasks, start_scheduler, task_schedul
 logger = logging.getLogger(__name__)
 
 
-# Learning system async job wrappers (must be defined at module level for APScheduler)
-async def calculate_counterfactuals_wrapper():
-    """
-    Async wrapper for counterfactual calculation batch job.
-    Calculates counterfactual P&L for decision snapshots older than 24h.
-    """
-    try:
-        from services.learning import calculate_counterfactuals_batch
-
-        processed = await calculate_counterfactuals_batch(limit=100)
-        if processed > 0:
-            logger.info(f"✅ Calculated counterfactuals for {processed} snapshots")
-    except Exception as e:
-        logger.error(f"Counterfactual calculation failed: {e}", exc_info=True)
-
-
-async def auto_self_analysis_wrapper():
-    """
-    Async wrapper for automatic self-analysis.
-    Runs DeepSeek self-analysis every 3h if enough data available (50+ snapshots).
-    """
-    try:
-        from database.connection import async_session_factory
-        from database.models import DecisionSnapshot, Account
-        from services.learning import run_self_analysis
-        from sqlalchemy import select, and_
-
-        async with async_session_factory() as db:
-            # Get all active AI accounts
-            stmt = select(Account).where(
-                and_(Account.is_active == True, Account.account_type == "AI")
-            )
-            result = await db.execute(stmt)
-            accounts = result.scalars().all()
-
-            for account in accounts:
-                # Count snapshots with counterfactuals
-                count_stmt = select(DecisionSnapshot).where(
-                    and_(
-                        DecisionSnapshot.account_id == account.id,
-                        DecisionSnapshot.regret.isnot(None),
-                    )
-                )
-                count_result = await db.execute(count_stmt)
-                total_snapshots = len(count_result.scalars().all())
-
-                # Run analysis if we have enough data (50+ snapshots)
-                if total_snapshots >= 50:
-                    logger.info(
-                        f"Running auto self-analysis for account {account.id} "
-                        f"({total_snapshots} snapshots)"
-                    )
-
-                    analysis = await run_self_analysis(
-                        account_id=account.id, limit=100, min_regret=None
-                    )
-
-                    # Log summary
-                    if "error" not in analysis:
-                        logger.info(
-                            f"✅ Self-analysis complete for account {account.id}: "
-                            f"Regret=${analysis.get('total_regret_usd', 0):.2f}, "
-                            f"Accuracy={analysis.get('accuracy_rate', 0):.1%}"
-                        )
-
-                        # Log suggested weights (not auto-applied for safety)
-                        suggested_weights = analysis.get("suggested_weights", {})
-                        logger.info(
-                            f"💡 Suggested weights for account {account.id}: {suggested_weights}"
-                        )
-
-    except Exception as e:
-        logger.error(f"Auto self-analysis failed: {e}", exc_info=True)
-
-
 def initialize_services() -> None:
     """Initialize all services"""
     try:
@@ -140,24 +65,6 @@ def initialize_services() -> None:
             task_id="portfolio_snapshot_capture",
         )
         logger.info("Portfolio snapshot capture task started (5-minute interval)")
-
-        # Schedule counterfactuals calculation every hour using APScheduler
-        from services.infrastructure.scheduler import scheduler_service
-
-        scheduler_service.add_sync_job(
-            job_func=calculate_counterfactuals_wrapper,
-            interval_seconds=3600,  # Every 1 hour
-            job_id="counterfactual_calculation",
-        )
-        logger.info("Counterfactual calculation task started (1-hour interval)")
-
-        # Schedule self-analysis every 3 hours
-        scheduler_service.add_sync_job(
-            job_func=auto_self_analysis_wrapper,
-            interval_seconds=10800,  # Every 3 hours (3 * 3600)
-            job_id="auto_self_analysis",
-        )
-        logger.info("Auto self-analysis task started (3-hour interval)")
 
         logger.info("All services initialized successfully")
 
