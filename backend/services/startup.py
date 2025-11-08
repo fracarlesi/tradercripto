@@ -69,34 +69,35 @@ def initialize_services() -> None:
         # Add counterfactual learning tasks
         from services.learning import calculate_counterfactuals_batch, run_self_analysis
 
-        def calculate_counterfactuals_wrapper():
+        async def calculate_counterfactuals_wrapper():
             """
-            Wrapper for counterfactual calculation batch job.
+            Async wrapper for counterfactual calculation batch job.
             Calculates counterfactual P&L for decision snapshots older than 24h.
             """
             try:
-                processed = asyncio.run(calculate_counterfactuals_batch(limit=100))
+                processed = await calculate_counterfactuals_batch(limit=100)
                 if processed > 0:
                     logger.info(f"✅ Calculated counterfactuals for {processed} snapshots")
             except Exception as e:
                 logger.error(f"Counterfactual calculation failed: {e}", exc_info=True)
 
-        def auto_self_analysis_wrapper():
+        async def auto_self_analysis_wrapper():
             """
-            Wrapper for automatic self-analysis.
-            Runs DeepSeek self-analysis every 12h if enough data available (50+ snapshots).
+            Async wrapper for automatic self-analysis.
+            Runs DeepSeek self-analysis every 3h if enough data available (50+ snapshots).
             """
             try:
+                from database.connection import async_session_factory
                 from database.models import DecisionSnapshot, Account
                 from sqlalchemy import select, and_
 
-                db = SessionLocal()
-                try:
+                async with async_session_factory() as db:
                     # Get all active AI accounts
                     stmt = select(Account).where(
                         and_(Account.is_active == True, Account.account_type == "AI")
                     )
-                    accounts = db.execute(stmt).scalars().all()
+                    result = await db.execute(stmt)
+                    accounts = result.scalars().all()
 
                     for account in accounts:
                         # Count snapshots with counterfactuals
@@ -106,7 +107,8 @@ def initialize_services() -> None:
                                 DecisionSnapshot.regret.isnot(None),
                             )
                         )
-                        total_snapshots = len(db.execute(count_stmt).scalars().all())
+                        count_result = await db.execute(count_stmt)
+                        total_snapshots = len(count_result.scalars().all())
 
                         # Run analysis if we have enough data (50+ snapshots)
                         if total_snapshots >= 50:
@@ -115,8 +117,8 @@ def initialize_services() -> None:
                                 f"({total_snapshots} snapshots)"
                             )
 
-                            analysis = asyncio.run(
-                                run_self_analysis(account_id=account.id, limit=100, min_regret=None)
+                            analysis = await run_self_analysis(
+                                account_id=account.id, limit=100, min_regret=None
                             )
 
                             # Log summary
@@ -132,8 +134,6 @@ def initialize_services() -> None:
                                 logger.info(
                                     f"💡 Suggested weights for account {account.id}: {suggested_weights}"
                                 )
-                finally:
-                    db.close()
 
             except Exception as e:
                 logger.error(f"Auto self-analysis failed: {e}", exc_info=True)
