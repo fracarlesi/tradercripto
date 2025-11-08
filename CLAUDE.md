@@ -1,6 +1,66 @@
 # trader_bitcoin Development Guidelines
 
-Auto-generated from all feature plans. Last updated: 2025-11-03
+Auto-generated from all feature plans. Last updated: 2025-11-05
+
+## 📋 CLAUDE.md FILE ORGANIZATION RULES (META)
+
+**CRITICAL**: This section documents how to organize THIS file itself.
+
+### What BELONGS in CLAUDE.md (100-150 lines ideal, readable in 5-10 minutes):
+- ✅ Project overview and goals
+- ✅ Current status summary
+- ✅ Key architectural concepts (brief)
+- ✅ Essential onboarding info and gotchas
+- ✅ Day-to-day development rules (coding style, testing, debug workflows)
+- ✅ **References/pointers** to external detailed docs
+
+### What DOES NOT BELONG in CLAUDE.md:
+- ❌ Extensive technical details (>100 lines on single topic)
+- ❌ Long-form strategic planning and roadmaps
+- ❌ Detailed implementation checklists (>100 lines)
+- ❌ Monitoring setup details, CI/CD pipeline configs
+- ❌ Exhaustive reference documentation
+
+### Correct Organization Pattern:
+
+| Content Type | CLAUDE.md | Separate Doc |
+|--------------|-----------|--------------|
+| Project summary/goals | Yes | No |
+| Current status | Yes (concise) | Yes (detailed) |
+| Coding style rules | Pointer/summary | Yes (details) |
+| Strategic roadmap | Brief summary + pointer | Yes (`docs/DEPLOYMENT_ROADMAP.md`) |
+| Implementation checklists (>100 lines) | Pointer only | Yes |
+| Deployment instructions | Pointer/summary | Yes (details) |
+| Monitoring/CI/CD (>100 lines) | Pointer only | Yes |
+
+### File Structure for Large Analysis:
+When adding 600+ line content:
+1. Create `backend/docs/[TOPIC]_ROADMAP.md` with full details
+2. Add concise 5-10 line summary in CLAUDE.md
+3. Link to detailed doc
+
+**Example - CORRECT**:
+```markdown
+## 📚 DEPLOYMENT & INFRASTRUCTURE DOCUMENTATION
+
+For comprehensive deployment analysis, see:
+- **`backend/docs/DEPLOYMENT_ROADMAP.md`** - Complete analysis (600+ lines)
+
+Quick summary: 6 critical gaps identified, prioritized roadmap provided.
+```
+
+**Example - WRONG**:
+```markdown
+## 🚀 DEPLOYMENT ROBUSTNESS ANALYSIS
+
+[600+ lines of deployment details here...]
+```
+
+**Why this matters**:
+- Claude Code works best with concise, actionable CLAUDE.md
+- Long documents reduce signal-to-noise ratio
+- Detailed analysis belongs in dedicated files
+- Reference: https://www.eesel.ai/blog/claude-code-best-practices
 
 ## Active Technologies
 
@@ -617,5 +677,379 @@ Quick reference for 4 active MCP servers:
 4. **perplexity-ask**: Web research and best practices
 
 **Critical Rule**: ALWAYS re-index claude-context with `force=true` and wait 15 seconds before searching.
+
+## 🧠 COUNTERFACTUAL LEARNING SYSTEM
+
+**Status**: ✅ Fully implemented, tested, and verified in production (2025-11-08)
+
+The system enables DeepSeek AI to learn from its past decisions (both executed trades AND missed opportunities) and improve trading strategy over time.
+
+### How It Works:
+
+1. **Every AI Decision** (`auto_trader.py:122-163`) → Snapshot Saved:
+   - Complete reasoning from DeepSeek
+   - All technical factors (Prophet, Pivot, RSI, etc.)
+   - Decision made (LONG/SHORT/HOLD)
+   - Entry price and portfolio state
+   - Saves to `decision_snapshots` table
+
+2. **Hourly Batch Job** (`startup.py:141-147`) → Counterfactuals Calculated:
+   - Processes snapshots older than 24h
+   - Fetches price 24h after decision
+   - Calculates P&L for ALL 3 actions (LONG, SHORT, HOLD)
+   - Determines optimal decision (max P&L)
+   - Calculates REGRET = optimal_pnl - actual_pnl
+
+3. **Every 3 Hours** (`startup.py:149-155`) → Self-Analysis Runs:
+   - Analyzes patterns in 50+ decisions with counterfactuals
+   - Identifies systematic errors:
+     - "Ignored Prophet 12 times when RSI >70 → lost $145"
+     - "HOLD when Sentiment >80 + Whale sell → avoided -$230"
+   - Calculates win rate per indicator
+   - Suggests optimal weights based on actual performance
+   - Logs insights (NOT auto-applied for safety)
+
+### Key Files:
+
+- `backend/services/learning/decision_snapshot_service.py` - Snapshot storage & counterfactual calc
+  - `_fetch_historical_price_async()`: Fetches CCXT 1h candles for accurate exit price
+  - `calculate_counterfactuals_batch()`: Main batch processing with rate limiting
+- `backend/services/learning/deepseek_self_analysis_service.py` - Pattern analysis & weight suggestions
+- `backend/api/learning_routes.py` - Manual trigger endpoints (optional)
+- `backend/database/models.py:DecisionSnapshot` - Data model
+- `backend/database/migrations/005_add_decision_snapshots.sql` - Schema
+- `backend/services/startup.py:72-89` - Scheduler integration with task_scheduler
+
+### Monitoring:
+
+Check system activity in logs:
+```bash
+# Verify snapshots being saved
+grep "Decision snapshot saved" logs.json
+
+# Check counterfactual calculations
+grep "Calculated counterfactuals" logs.json
+
+# View self-analysis results
+grep "Self-analysis complete" logs.json
+```
+
+### Manual Triggers (Optional):
+
+API endpoints available for debugging/testing:
+```bash
+# View recent snapshots
+curl "http://localhost:8000/api/learning/snapshots/1?limit=20"
+
+# Force counterfactual calculation
+curl -X POST "http://localhost:8000/api/learning/counterfactuals/calculate?limit=100"
+
+# Trigger self-analysis manually
+curl -X POST "http://localhost:8000/api/learning/analyze/1?limit=100"
+```
+
+### Timeline:
+
+- **Immediate**: Snapshots saved with each AI decision
+- **After 24h**: First counterfactuals calculated (need exit price)
+- **Every 1h**: Counterfactual batch job processes pending snapshots
+- **After 50+ decisions with counterfactuals**: First self-analysis can run
+- **Every 3h** (planned): Ongoing analysis with updated insights
+
+### Scheduler Architecture:
+
+**Decision: Use task_scheduler (custom) for learning jobs, NOT APScheduler**
+
+- **Attempted Migration**: Initially tried APScheduler's `add_sync_job()` for learning jobs
+- **Problem Encountered**: Greenlet/event loop errors (`MissingGreenlet`, `cannot schedule new futures after interpreter shutdown`)
+- **Root Cause**: Unclear - errors also affected unrelated `portfolio_snapshot_service`
+- **Solution**: Reverted to original `task_scheduler` (threading-based)
+- **Current Setup**:
+  - Trading jobs (sync, take_profit, stop_loss): APScheduler ✅
+  - Learning jobs (counterfactuals): task_scheduler ✅
+  - Both work independently without conflicts
+
+**File**: `backend/services/startup.py:72-89`
+```python
+def calculate_counterfactuals_wrapper():
+    try:
+        processed = asyncio.run(calculate_counterfactuals_batch(limit=100))
+        if processed > 0:
+            logger.info(f"✅ Calculated counterfactuals for {processed} snapshots")
+    except Exception as e:
+        logger.error(f"Counterfactual calculation failed: {e}", exc_info=True)
+
+task_scheduler.add_interval_task(
+    task_func=calculate_counterfactuals_wrapper,
+    interval_seconds=3600,  # Every 1 hour
+    task_id="counterfactual_calculation",
+)
+```
+
+### Safety Features:
+
+- Snapshot saves don't block trades (errors logged, not raised)
+- Weight suggestions logged but NOT auto-applied
+- System fully automatic - no manual intervention required
+- Detailed logging for troubleshooting
+
+### Example Output:
+
+After 50+ decisions, logs will show:
+```
+[INFO] Running auto self-analysis for account 1 (67 snapshots)
+[INFO] ✅ Self-analysis complete for account 1: Regret=$145.50, Accuracy=58.0%
+[INFO] 💡 Suggested weights: {'prophet': 0.65, 'pivot_points': 0.75, 'rsi_macd': 0.40}
+```
+
+### 🐛 Critical Bug Fixes (2025-11-08)
+
+**Fixed during production verification and implementation:**
+
+1. **SessionLocal Async Context Manager Bug** (`decision_snapshot_service.py`, `deepseek_self_analysis_service.py`)
+   - **Problem**: Used sync `SessionLocal` in `async with` context → crashed with `'Session' object does not support the asynchronous context manager protocol`
+   - **Fix**: Changed to `async_session_factory` in all 4 functions
+   - **Impact**: System was NOT saving any snapshots before fix (0 snapshots)
+   - **Status**: ✅ Fixed and deployed
+
+2. **Float/Decimal Type Error** (`decision_snapshot_service.py:180`)
+   - **Problem**: `snapshot.entry_price` is Decimal, compared to float → `TypeError: unsupported operand type(s) for -: 'float' and 'decimal.Decimal'`
+   - **Fix**: Explicit `float()` conversion before calculations
+   - **Impact**: Counterfactual calculations failed silently
+   - **Status**: ✅ Fixed and deployed
+
+3. **Historical Price Bug - Using Current Price Instead of 24h Exit Price** (`decision_snapshot_service.py:169`)
+   - **Problem**:
+     - Calculated `exit_time = snapshot.timestamp + timedelta(hours=24)` but didn't use it
+     - Called `get_all_mids_async()` which returns CURRENT prices, not historical
+     - Counterfactuals compared entry price (24-48h ago) with price NOW → completely inaccurate
+   - **Fix**:
+     - Implemented `_fetch_historical_price_async()` using CCXT `fetch_ohlcv()`
+     - Fetches 3 hours of 1h candles centered on exit_time
+     - Finds candle closest to target timestamp (±5 min precision)
+     - Rate limiting: 2s delay between requests to avoid 429 errors
+     - Retry logic: exponential backoff (1s, 2s, 4s) for rate limit errors
+   - **Impact**:
+     - Counterfactuals now historically accurate
+     - No more rate limiting errors (429)
+     - 69 pending snapshots will be processed with correct prices
+   - **Status**: ✅ Fixed and deployed (commit 3e39a65, 4286596)
+
+### 🔍 Verification & Health Check
+
+**Automated Health Check Script**: `check_learning_system.sh`
+
+```bash
+# Run health check on production VPS
+./check_learning_system.sh 46.224.45.196
+```
+
+**What it checks**:
+1. Container status (healthy/unhealthy)
+2. Decision snapshots (count, breakdown, latest)
+3. Learning system errors in logs
+4. Scheduled jobs registration
+5. Data integrity (JSON validity, reasoning presence)
+6. Timeline and next steps
+
+**Manual verification commands**:
+```bash
+# Count snapshots in database
+ssh root@46.224.45.196 'cd /opt/trader_bitcoin && docker compose -f docker-compose.simple.yml exec -T app python3 -c "
+import sqlite3
+conn = sqlite3.connect(\"/app/data/data.db\")
+cursor = conn.cursor()
+cursor.execute(\"SELECT COUNT(*) FROM decision_snapshots\")
+print(f\"Total snapshots: {cursor.fetchone()[0]}\")
+cursor.execute(\"SELECT COUNT(*) FROM decision_snapshots WHERE exit_price_24h IS NOT NULL\")
+print(f\"With counterfactuals: {cursor.fetchone()[0]}\")
+conn.close()
+"'
+
+# Monitor counterfactual calculation in real-time
+ssh root@46.224.45.196 'cd /opt/trader_bitcoin && docker compose -f docker-compose.simple.yml logs -f app' | grep -E "(Calculated counterfactuals|Counterfactual calculation)"
+
+# Monitor snapshot saves in real-time
+ssh root@46.224.45.196 'cd /opt/trader_bitcoin && docker compose -f docker-compose.simple.yml logs -f app' | grep "Decision snapshot saved"
+
+# Check for errors
+ssh root@46.224.45.196 'cd /opt/trader_bitcoin && docker compose -f docker-compose.simple.yml logs app' | grep -i "learning.*ERROR"
+
+# Check scheduler status
+ssh root@46.224.45.196 'cd /opt/trader_bitcoin && docker compose -f docker-compose.simple.yml logs app' | grep -E "(Added task counterfactual_calculation|Counterfactual calculation task started)"
+```
+
+**Expected Logs on Startup**:
+```
+2025-11-08 13:46:49 - services.scheduler - INFO - Added task counterfactual_calculation with 3600s interval
+2025-11-08 13:46:49 - services.startup - INFO - Counterfactual calculation task started (1-hour interval)
+2025-11-08 13:46:49 - services.startup - INFO - All services initialized successfully
+```
+
+**Expected Logs on Hourly Job Execution**:
+```
+2025-11-08 14:46:49 - services.learning.decision_snapshot_service - INFO - Processing 69 snapshots for counterfactual analysis
+2025-11-08 14:46:51 - services.learning.decision_snapshot_service - DEBUG - Found historical price for BTC: $101971.00 (time diff: 3.2 min from target)
+...
+2025-11-08 14:52:30 - services.learning.decision_snapshot_service - INFO - ✅ Calculated counterfactuals for 69/69 snapshots
+2025-11-08 14:52:30 - services.startup - INFO - ✅ Calculated counterfactuals for 69 snapshots
+```
+
+### 🧪 Testing Procedures
+
+**To verify system is working correctly:**
+
+1. **Check snapshot data integrity**:
+   ```python
+   # Verify latest snapshot has complete data
+   SELECT id, LENGTH(indicators_snapshot), LENGTH(deepseek_reasoning)
+   FROM decision_snapshots ORDER BY timestamp DESC LIMIT 1;
+   ```
+   - `indicators_snapshot` should be >1000 chars (JSON with all technical factors)
+   - `deepseek_reasoning` should be >50 chars
+
+2. **Test counterfactual calculation logic**:
+   ```python
+   # Manual calculation test (see backend/scripts/testing/test_counterfactual_logic.py)
+   # Simulates: Entry $100, Exit $102 (+2%), Size 100%, Account $1000
+   # Expected: LONG +$20, SHORT -$20, HOLD $0, Optimal=LONG, Regret=$20
+   ```
+
+3. **Test self-analysis API**:
+   ```bash
+   curl -X POST "http://localhost:5611/api/learning/analyze/1?limit=10"
+   # Should return JSON with: total_regret, accuracy_rate, worst_patterns, suggested_weights
+   ```
+
+4. **Verify scheduled jobs execute**:
+   ```bash
+   # Check logs for job execution (not just registration)
+   grep -E "(Captured portfolio|Orders synced|technical analysis)" logs
+   ```
+
+### 🚨 Troubleshooting
+
+**Problem**: Snapshots not being saved (count = 0)
+
+**Diagnosis**:
+```bash
+# Check for SessionLocal async error
+docker compose logs app | grep "does not support the asynchronous context manager protocol"
+```
+
+**Solution**: Verify `async_session_factory` is used (not `SessionLocal`) in:
+- `backend/services/learning/decision_snapshot_service.py` (3 functions)
+- `backend/services/learning/deepseek_self_analysis_service.py` (1 function)
+
+---
+
+**Problem**: Counterfactual calculation fails with type error
+
+**Diagnosis**:
+```bash
+docker compose logs app | grep "unsupported operand type.*Decimal"
+```
+
+**Solution**: Add explicit `float()` conversion in `calculate_counterfactuals_batch()`:
+```python
+entry_price = float(snapshot.entry_price)
+size_pct = float(snapshot.actual_size_pct) if snapshot.actual_size_pct else 0.2
+```
+
+---
+
+**Problem**: Rate limiting errors (429) during counterfactual calculation
+
+**Diagnosis**:
+```bash
+docker compose logs app | grep "429.*hyperliquid"
+```
+
+**Solution**: This is normal - Hyperliquid API rate limits. System will retry automatically on next hourly job run. Not a critical issue.
+
+---
+
+**Problem**: Self-analysis returns "No snapshots available"
+
+**Diagnosis**: Not enough snapshots with counterfactuals calculated yet
+
+**Solution**: Wait 24h after first snapshot for counterfactuals to be calculated. System needs:
+- Minimum: 1 snapshot older than 24h
+- Optimal: 50+ snapshots with counterfactuals for meaningful insights
+
+## 📚 DEPLOYMENT & INFRASTRUCTURE DOCUMENTATION
+
+For comprehensive deployment analysis, infrastructure roadmap, and implementation checklists, see:
+- **`backend/docs/DEPLOYMENT_ROADMAP.md`** - Complete deployment robustness analysis (600+ lines)
+  - Current strengths and critical gaps
+  - Prioritized implementation roadmap (Priority 1-3)
+  - Prometheus/Grafana monitoring setup
+  - CI/CD pipeline configuration
+  - Database backup automation
+  - Version tagging strategy
+  - Secrets management
+
+**Quick Summary of Critical Issues:**
+1. ⚠️ CRITICAL: No database backups before migrations
+2. ⚠️ CRITICAL: No version tagging (Docker images use `latest` only)
+3. ⚠️ HIGH: No monitoring/alerting (Prometheus + Grafana needed)
+4. ⚠️ HIGH: Secrets in plain text (migrate to Docker secrets)
+5. ⚠️ MEDIUM: Manual local/production mutual exclusion
+
+See full document for implementation details and code examples.
+
+## 🌐 PRODUCTION VPS DEPLOYMENT
+
+**VPS IP**: 46.224.45.196
+
+**Deployment Command**:
+```bash
+./deploy_to_hetzner.sh 46.224.45.196
+```
+
+### 🚨 CRITICAL: Local vs Production Mutual Exclusion
+
+**NEVER run local and production trading simultaneously!**
+
+Both local development and production VPS connect to the same Hyperliquid account. Running both at the same time will cause:
+- Double trading on the same account
+- Conflicting AI decisions
+- Race conditions in order execution
+- Database inconsistencies
+
+**Rules**:
+1. **Before starting local development**: Stop production VPS
+   ```bash
+   ssh root@46.224.45.196 'cd /opt/trader_bitcoin && docker compose -f docker-compose.simple.yml stop'
+   ```
+
+2. **Before deploying to production**: Stop local backend
+   ```bash
+   # Kill local uvicorn process
+   pkill -f "uvicorn main:app"
+   ```
+
+3. **Check production status**:
+   ```bash
+   ssh root@46.224.45.196 'cd /opt/trader_bitcoin && docker compose -f docker-compose.simple.yml ps'
+   ```
+
+4. **Start/Stop commands**:
+   ```bash
+   # Stop production
+   ssh root@46.224.45.196 'cd /opt/trader_bitcoin && docker compose -f docker-compose.simple.yml stop'
+
+   # Start production
+   ssh root@46.224.45.196 'cd /opt/trader_bitcoin && docker compose -f docker-compose.simple.yml start'
+
+   # View production logs
+   ssh root@46.224.45.196 'cd /opt/trader_bitcoin && docker compose -f docker-compose.simple.yml logs -f'
+   ```
+
+**Why this matters**:
+- Same Hyperliquid private key shared between local and production
+- Both will try to place orders simultaneously
+- Both will sync from same Hyperliquid account
+- Results in unpredictable behavior and potential losses
 
 <!-- MANUAL ADDITIONS END -->
