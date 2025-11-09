@@ -141,21 +141,22 @@ async def lifespan(app: FastAPI):
             job_func=reset_ai_usage_daily, hour=0, minute=0, job_id="ai_usage_daily_reset"
         )
 
-        # Add stop-loss check job (every 30 seconds) - FIX 3
-        from services.auto_trader import check_stop_loss_async, check_take_profit_async
+        # Add stop-loss check job (every 60 seconds) - Optimized to reduce API calls
+        from services.auto_trader import check_stop_loss_async  # , check_take_profit_async
 
         scheduler_service.add_sync_job(
             job_func=check_stop_loss_async,
-            interval_seconds=30,
+            interval_seconds=60,
             job_id="stop_loss_check"
         )
 
-        # Add take-profit check job (every 30 seconds) - lock in profits at +5%
-        scheduler_service.add_sync_job(
-            job_func=check_take_profit_async,
-            interval_seconds=30,
-            job_id="take_profit_check"
-        )
+        # Take-profit disabled - let AI decide when to sell in profit
+        # This allows AI to ride trends beyond +5% if momentum continues
+        # scheduler_service.add_sync_job(
+        #     job_func=check_take_profit_async,
+        #     interval_seconds=30,
+        #     job_id="take_profit_check"
+        # )
 
     except Exception as e:
         print(f"Warning: Failed to start scheduler: {e}")
@@ -400,6 +401,7 @@ try:
     from api.accounts_async import router as accounts_async_router
     from api.ai_routes import router as ai_router  # AI usage tracking (T100)
     from api.health_routes import router as health_router
+    from api.learning_routes import router as learning_router  # Counterfactual learning
     from api.market_data_async import router as market_data_async_router
     from api.orders_async import router as orders_async_router
     from api.sync_routes import router as sync_router
@@ -410,6 +412,7 @@ try:
     app.include_router(market_data_async_router)
     app.include_router(orders_async_router)
     app.include_router(ai_router)  # AI usage tracking endpoint (T100)
+    app.include_router(learning_router)  # Counterfactual learning & self-analysis
 except ImportError:
     pass  # New routes not available yet
 

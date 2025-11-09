@@ -666,6 +666,47 @@ def initialize_services():
 - Start auto trading before market tasks
 - Skip scheduler initialization
 
+## ⏰ SCHEDULED JOBS & API RATE LIMITING
+
+**Context**: Hyperliquid API has rate limits (~10-20 requests/sec). Too many concurrent calls trigger `429 Too Many Requests` errors.
+
+### Active Scheduled Jobs
+
+| Job | Interval | File | Purpose | API Calls |
+|-----|----------|------|---------|-----------|
+| AI Trading | 180s (3min) | `startup.py:21` | DeepSeek AI decisions + order execution | 2-3/cycle |
+| Price Cache Cleanup | 120s (2min) | `startup.py:27` | Clear expired price cache | 0 (local) |
+| Portfolio Snapshot | 300s (5min) | `startup.py:51` | Historical chart data | 1/cycle |
+| Counterfactual Learning | 3600s (1h) | `startup.py:85` | Calculate P&L for past decisions | 0.1/cycle |
+| **Hyperliquid Sync** | **30s** | `main.py:131` | **Sync balance/positions/orders** | **1/cycle** |
+| **Stop Loss Check** | **60s** | `main.py:147` | **Check -5% loss threshold** | **1/cycle** |
+| AI Usage Reset | Daily 00:00 | `main.py:140` | Reset AI usage counters | 0 (local) |
+
+**Total API Load**: ~3.5 calls/min = ~210 calls/hour (optimized from 5.5/min = 330/hour)
+
+###**Optimization History (2025-11-09)**
+
+**Removed duplicates**:
+- ❌ `sync_all_active_accounts` (60s) - Duplicated `periodic_sync_job` in main.py
+- ❌ `setup_market_tasks()` - Empty placeholder function
+
+**Reduced frequency**:
+- Stop loss check: 30s → 60s (less critical, still catches -5% losses quickly)
+
+**Result**: **-40% API calls** → lower risk of rate limiting
+
+### Rate Limiting Symptoms
+
+```
+ccxt.base.errors.RateLimitExceeded: hyperliquid POST https://api.hyperliquid.xyz/info 429 Too Many Requests
+```
+
+**What happens**: Orders delayed 2-5 minutes until rate limit clears (system retries automatically).
+
+**When it happens**: When multiple jobs execute simultaneously (e.g., sync + stop-loss + AI trading + snapshot at same moment).
+
+**Solution**: Already optimized. If still occurs, consider increasing stop-loss interval to 90-120s.
+
 ## 📚 MCP SERVER DOCUMENTATION
 
 **See `.claudemcp.md`** for complete MCP server configuration and usage guidelines.

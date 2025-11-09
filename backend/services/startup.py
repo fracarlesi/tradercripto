@@ -17,10 +17,6 @@ def initialize_services() -> None:
         start_scheduler()
         logger.info("Scheduler service started")
 
-        # Set up market-related scheduled tasks
-        setup_market_tasks()
-        logger.info("Market scheduled tasks have been set up")
-
         # Start automatic cryptocurrency trading task (3-minute interval for DeepSeek Chat)
         schedule_auto_trading(interval_seconds=180)
         logger.info("Automatic cryptocurrency trading task started (3-minute interval)")
@@ -35,16 +31,8 @@ def initialize_services() -> None:
         )
         logger.info("Price cache cleanup task started (2-minute interval)")
 
-        # Add Hyperliquid account sync task (every 60 seconds)
-        # This ensures local database stays in sync with on-chain state
-        from services.trading.hyperliquid_sync_service import sync_all_active_accounts
-
-        task_scheduler.add_interval_task(
-            task_func=sync_all_active_accounts,
-            interval_seconds=60,  # Sync every minute
-            task_id="hyperliquid_account_sync",
-        )
-        logger.info("Hyperliquid account sync task started (1-minute interval)")
+        # NOTE: Hyperliquid account sync is now handled by APScheduler in main.py (periodic_sync_job every 30s)
+        # Removed duplicate sync_all_active_accounts task to reduce API calls
 
         # Add portfolio snapshot capture task (every 5 minutes)
         # Captures periodic snapshots of portfolio value from Hyperliquid for historical charts
