@@ -16,6 +16,7 @@ from services.ai_decision_service import (
     save_ai_decision,
 )
 from services.asset_calculator import calc_positions_value
+from services.learning import save_decision_snapshot
 from services.technical_analysis_service import calculate_technical_factors
 from services.trading.hyperliquid_trading_service import hyperliquid_trading_service
 
@@ -50,7 +51,7 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
     - API key validation (skips demo keys)
     - Decision caching (10-minute window to avoid duplicate trades)
     - Position validation (check existing positions before trading)
-    - Capital limits (respect max_ratio and MAX_CAPITAL_USD from settings)
+    - Capital limits (respect max_ratio per trade, default 20%)
     - Error handling with detailed logging
     """
     logger.info(f"=== AI Trading Cycle Started (max_ratio={max_ratio}) ===")
@@ -104,11 +105,12 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
         logger.info("Calling AI for trading decision...")
 
         # Use decision cache to avoid redundant API calls
+        # NOTE: call_ai_for_decision is now async (for pivot points calculation)
         decision = _decision_cache.get_or_generate_decision(
             price=prices.get("BTC", 0.0),  # Use BTC price as market state indicator
             position=portfolio["total_assets"],
             news_summary="",  # News fetched inside call_ai_for_decision
-            generate_func=lambda: call_ai_for_decision(account, portfolio, prices),
+            generate_func=lambda: asyncio.run(call_ai_for_decision(account, portfolio, prices)),
         )
 
         if not decision:
@@ -116,6 +118,49 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
             return
 
         logger.info(f"AI Decision: {decision}")
+
+        # Save decision snapshot for counterfactual learning (even for HOLD decisions)
+        try:
+            # Build indicators snapshot with available data
+            indicators_snapshot = {
+                "technical_factors": technical_factors,
+                "prices": prices,
+                "portfolio_value": portfolio.get("total_assets", 0),
+                "available_cash": portfolio.get("available_cash", 0),
+            }
+
+            # Get symbol and price for snapshot
+            symbol = decision.get("symbol", "BTC")
+            entry_price = prices.get(symbol, 0.0)
+
+            # Map operation to decision format (BUY -> LONG, SELL -> HOLD, etc.)
+            operation = decision.get("operation", "hold").lower()
+            actual_decision = "LONG" if operation == "buy" else "SHORT" if operation == "short" else "HOLD"
+
+            # Save snapshot asynchronously
+            asyncio.run(
+                save_decision_snapshot(
+                    account_id=account.id,
+                    symbol=symbol,
+                    indicators_snapshot=indicators_snapshot,
+                    deepseek_reasoning=decision.get("reason", "No reasoning provided"),
+                    actual_decision=actual_decision,
+                    actual_size_pct=decision.get("target_portion_of_balance", 0.0),
+                    entry_price=entry_price,
+                )
+            )
+
+            logger.info(
+                f"✅ Decision snapshot saved: {symbol} {actual_decision} @ ${entry_price:.2f}"
+            )
+
+        except Exception as e:
+            # Don't fail the trade if snapshot save fails
+            logger.error(
+                f"Failed to save decision snapshot: {e}",
+                extra={"context": {"account_id": account.id, "error": str(e)}},
+                exc_info=True,
+            )
 
         # 5. Check margin safety BEFORE opening new positions (FIX 5)
         operation = decision.get("operation", "").lower()
@@ -437,6 +482,42 @@ def _validate_decision(
             "reason": f"target_portion {target_portion} exceeds 100%",
         }
 
+    # 4b. INTELLIGENT CAPITAL ALLOCATION VALIDATION (only for BUY/SHORT operations)
+    # Rule: Allow >25% allocation ONLY for exceptional opportunities
+    # Exceptional = score >= 0.85 AND momentum >= 0.90
+    if operation in ["buy", "short"] and target_portion > 0.25:
+        # Get technical factors from portfolio if available
+        technical_factors = portfolio.get("technical_factors", {})
+        recommendations = technical_factors.get("recommendations", [])
+
+        # Find technical score for this symbol
+        symbol_data = next((r for r in recommendations if r["symbol"] == symbol), None)
+
+        if symbol_data:
+            score = symbol_data["score"]
+            momentum = symbol_data["momentum"]
+
+            # Rule: >25% allocation requires score >= 0.85 AND momentum >= 0.90
+            if score < 0.85 or momentum < 0.90:
+                logger.warning(
+                    f"AI requested {target_portion:.1%} allocation on {symbol} but score={score:.3f}, "
+                    f"momentum={momentum:.3f} (not exceptional enough). Capping to 25% for diversification."
+                )
+                target_portion = 0.25  # Cap to 25% for diversification
+                decision["target_portion_of_balance"] = target_portion  # Update decision
+            else:
+                logger.info(
+                    f"⚡ EXCEPTIONAL OPPORTUNITY: {symbol} score={score:.3f}, momentum={momentum:.3f}. "
+                    f"Allowing {target_portion:.1%} allocation."
+                )
+        else:
+            # If no technical data available, default to safety (cap at 25%)
+            logger.warning(
+                f"No technical data for {symbol} - capping allocation to 25% for safety"
+            )
+            target_portion = 0.25
+            decision["target_portion_of_balance"] = target_portion
+
     # 5. Validate leverage (1-10x allowed)
     if leverage < 1 or leverage > 10:
         return {"valid": False, "reason": f"Leverage {leverage} out of range (1-10)"}
@@ -539,11 +620,38 @@ def _execute_order_async(decision: dict[str, Any], order_size: float, leverage: 
                 is_buy = False
                 reduce_only = False
             elif operation == "sell":
-                # For sell, check current position direction
-                # If we have a LONG position (quantity > 0), sell is is_buy=False
-                # If we have a SHORT position (quantity < 0), sell is is_buy=True
-                # For simplicity, use is_buy=False (most common case: closing LONG)
-                is_buy = False
+                # For sell, we MUST check current position direction from Hyperliquid
+                # LONG (szi > 0) → sell with is_buy=False (close by selling)
+                # SHORT (szi < 0) → sell with is_buy=True (close by buying)
+                # Fetch position from Hyperliquid to determine direction
+                user_state = loop.run_until_complete(hyperliquid_trading_service.get_user_state_async())
+                hl_positions = user_state.get('assetPositions', [])
+
+                # Find position for this symbol
+                current_position = next(
+                    (p for p in hl_positions if p['position']['coin'] == symbol),
+                    None
+                )
+
+                if not current_position:
+                    logger.error(f"Cannot sell {symbol}: no position found in Hyperliquid")
+                    return {"status": "error", "message": f"No position found for {symbol}"}
+
+                # Get signed size (szi): positive = LONG, negative = SHORT
+                szi = float(current_position['position']['szi'])
+
+                if szi > 0:
+                    # LONG position → sell by is_buy=False
+                    is_buy = False
+                    logger.info(f"Closing LONG position: {symbol} szi={szi} → SELL (is_buy=False)")
+                elif szi < 0:
+                    # SHORT position → sell by is_buy=True (buy to close short)
+                    is_buy = True
+                    logger.info(f"Closing SHORT position: {symbol} szi={szi} → BUY (is_buy=True)")
+                else:
+                    logger.error(f"Position {symbol} has zero size (szi={szi})")
+                    return {"status": "error", "message": f"Position {symbol} has zero size"}
+
                 reduce_only = True
             else:
                 logger.error(f"Unknown operation: {operation}")
