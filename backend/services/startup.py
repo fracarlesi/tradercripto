@@ -21,7 +21,7 @@ def initialize_services() -> None:
         setup_market_tasks()
         logger.info("Market scheduled tasks have been set up")
 
-        # Start automatic cryptocurrency trading simulation task (3-minute interval)
+        # Start automatic cryptocurrency trading task (3-minute interval for DeepSeek Chat)
         schedule_auto_trading(interval_seconds=180)
         logger.info("Automatic cryptocurrency trading task started (3-minute interval)")
 
