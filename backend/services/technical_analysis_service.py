@@ -11,6 +11,8 @@ Based on open-alpha-arena methodology.
 """
 
 import logging
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 import pandas as pd
@@ -21,10 +23,20 @@ from services.market_data.hyperliquid_market_data import get_kline_data_from_hyp
 
 logger = logging.getLogger(__name__)
 
+# Number of parallel workers for fetching kline data
+# Reduced from 10 to 3 to avoid Hyperliquid API rate limiting (429 errors)
+# 3 workers = slower but reliable (no 429 errors, technical scores always available)
+MAX_WORKERS = 3
+
+# Retry configuration for transient API failures
+MAX_RETRIES = 2  # Retry failed fetches up to 2 times
+RETRY_DELAY = 1.0  # Initial delay between retries (seconds)
+RETRY_BACKOFF = 1.5  # Exponential backoff multiplier
+
 
 def fetch_historical_data(symbols: list[str], period: str = "1d", count: int = 70) -> dict[str, pd.DataFrame]:
     """
-    Fetch historical OHLCV data for multiple symbols.
+    Fetch historical OHLCV data for multiple symbols in parallel.
 
     Args:
         symbols: List of symbols to fetch (e.g., ["BTC", "ETH", "SOL"])
@@ -39,43 +51,114 @@ def fetch_historical_data(symbols: list[str], period: str = "1d", count: int = 7
     """
     history = {}
 
-    for symbol in symbols:
-        try:
-            # Fetch klines from Hyperliquid
-            klines = get_kline_data_from_hyperliquid(symbol, period=period, count=count)
+    def fetch_single_symbol(symbol: str) -> tuple[str, pd.DataFrame | None]:
+        """
+        Helper function to fetch data for a single symbol with retry logic.
 
-            if not klines or len(klines) < 2:
-                logger.warning(f"Insufficient data for {symbol}: {len(klines) if klines else 0} candles")
-                continue
+        Implements exponential backoff for transient API failures.
+        Distinguishes between "no data available" (skip) vs "API error" (retry).
 
-            # Convert to DataFrame
-            df = pd.DataFrame(klines)
+        Returns:
+            Tuple of (symbol, DataFrame) or (symbol, None) if failed/no data
+        """
+        last_exception = None
+        retry_delay = RETRY_DELAY
 
-            # Rename columns to match factor calculation format
-            df = df.rename(columns={
-                'datetime_str': 'Date',
-                'open': 'Open',
-                'high': 'High',
-                'low': 'Low',
-                'close': 'Close',
-                'volume': 'Volume'
-            })
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                # Fetch klines from Hyperliquid
+                klines = get_kline_data_from_hyperliquid(symbol, period=period, count=count)
 
-            # Convert Date to datetime
-            df['Date'] = pd.to_datetime(df['Date'])
+                # Check if we got data
+                if not klines or len(klines) < 2:
+                    # No data available - this is expected for some symbols (newly listed, delisted, etc.)
+                    # Don't retry, just log once and skip
+                    if attempt == 0:  # Only log on first attempt
+                        logger.debug(f"No historical data for {symbol} (0 candles) - skipping")
+                    return symbol, None
 
-            # Sort by date (oldest first)
-            df = df.sort_values('Date', ascending=True).reset_index(drop=True)
+                # Convert to DataFrame
+                df = pd.DataFrame(klines)
 
-            # Keep only required columns
-            df = df[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']]
+                # Rename columns to match factor calculation format
+                df = df.rename(columns={
+                    'datetime_str': 'Date',
+                    'open': 'Open',
+                    'high': 'High',
+                    'low': 'Low',
+                    'close': 'Close',
+                    'volume': 'Volume'
+                })
 
-            history[symbol] = df
-            logger.info(f"Fetched {len(df)} candles for {symbol}")
+                # Convert Date to datetime
+                df['Date'] = pd.to_datetime(df['Date'])
 
-        except Exception as e:
-            logger.error(f"Failed to fetch historical data for {symbol}: {e}", exc_info=True)
-            continue
+                # Sort by date (oldest first)
+                df = df.sort_values('Date', ascending=True).reset_index(drop=True)
+
+                # Keep only required columns
+                df = df[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']]
+
+                logger.info(f"✅ Fetched {len(df)} candles for {symbol}")
+                return symbol, df
+
+            except Exception as e:
+                last_exception = e
+
+                # Check if this is a retryable error
+                is_retryable = any(
+                    err_type in str(type(e).__name__).lower()
+                    for err_type in ['timeout', 'connection', 'http', 'network']
+                )
+
+                if is_retryable and attempt < MAX_RETRIES:
+                    # Retry with exponential backoff
+                    logger.warning(
+                        f"Retryable error fetching {symbol} (attempt {attempt + 1}/{MAX_RETRIES + 1}): "
+                        f"{type(e).__name__} - {str(e)[:100]}. Retrying in {retry_delay:.1f}s..."
+                    )
+                    time.sleep(retry_delay)
+                    retry_delay *= RETRY_BACKOFF
+                else:
+                    # Non-retryable error or max retries reached
+                    logger.error(
+                        f"Failed to fetch {symbol} after {attempt + 1} attempts: {e}",
+                        exc_info=(attempt == MAX_RETRIES)  # Full traceback only on last attempt
+                    )
+                    return symbol, None
+
+        # Should never reach here, but just in case
+        logger.error(f"Unexpected: Failed to fetch {symbol} after all retries")
+        return symbol, None
+
+    # Parallel execution with ThreadPoolExecutor
+    logger.info(f"Fetching historical data for {len(symbols)} symbols using {MAX_WORKERS} parallel workers")
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        # Submit all fetch tasks
+        future_to_symbol = {executor.submit(fetch_single_symbol, symbol): symbol
+                           for symbol in symbols}
+
+        # Collect results as they complete
+        for future in as_completed(future_to_symbol):
+            symbol, df = future.result()
+            if df is not None:
+                history[symbol] = df
+
+    # Log detailed summary
+    success_rate = (len(history) / len(symbols) * 100) if symbols else 0
+    logger.info(
+        f"✅ Successfully fetched data for {len(history)}/{len(symbols)} symbols ({success_rate:.1f}%)"
+    )
+
+    # Log sample of successful symbols for debugging
+    if history:
+        successful_symbols = list(history.keys())[:10]
+        logger.info(f"Sample successful symbols: {', '.join(successful_symbols)}")
+
+    # Note: Symbols without data are expected (newly listed, delisted, or perpetual contracts like kPEPE)
+    # These are automatically filtered out - only symbols with 70+ days of historical data are analyzed
+    logger.debug(f"Skipped {len(symbols) - len(history)} symbols (no historical data available)")
 
     return history
 
