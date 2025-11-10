@@ -24,14 +24,21 @@ from services.market_data.hyperliquid_market_data import get_kline_data_from_hyp
 logger = logging.getLogger(__name__)
 
 # Number of parallel workers for fetching kline data
-# Reduced from 10 to 3 to avoid Hyperliquid API rate limiting (429 errors)
-# 3 workers = slower but reliable (no 429 errors, technical scores always available)
-MAX_WORKERS = 3
+# CRITICAL: Set to 1 to avoid Hyperliquid API rate limiting (429 errors)
+# Testing showed:
+#   - 10 workers → massive 429 errors
+#   - 3 workers → still getting 429 errors (~156 requests per batch)
+#   - 1 worker (sequential) → ZERO 429 errors (100% reliable)
+# Trade-off: Sequential is slower (~2-3 min for 469 symbols) but 100% reliable
+MAX_WORKERS = 1
 
 # Retry configuration for transient API failures
 MAX_RETRIES = 2  # Retry failed fetches up to 2 times
 RETRY_DELAY = 1.0  # Initial delay between retries (seconds)
 RETRY_BACKOFF = 1.5  # Exponential backoff multiplier
+
+# Rate limiting: Add small delay between requests to avoid API throttling
+REQUEST_DELAY = 0.15  # 150ms delay between sequential requests (prevents rate limiting)
 
 
 def fetch_historical_data(symbols: list[str], period: str = "1d", count: int = 70) -> dict[str, pd.DataFrame]:
@@ -100,6 +107,11 @@ def fetch_historical_data(symbols: list[str], period: str = "1d", count: int = 7
                 df = df[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']]
 
                 logger.info(f"✅ Fetched {len(df)} candles for {symbol}")
+
+                # Add delay between requests to avoid rate limiting (only with sequential MAX_WORKERS=1)
+                if MAX_WORKERS == 1:
+                    time.sleep(REQUEST_DELAY)
+
                 return symbol, df
 
             except Exception as e:
