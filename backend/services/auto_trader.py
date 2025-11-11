@@ -90,9 +90,9 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
 
         # 3.5. Calculate technical factors (CRITICAL: momentum + support analysis)
         logger.info("Calculating technical analysis factors...")
-        # Use ALL symbols from prices dict (real-time available symbols)
-        available_symbols = list(prices.keys())
-        logger.info(f"Analyzing {len(available_symbols)} available symbols: {', '.join(available_symbols)}")
+        # Filter out index symbols (@ prefix) - only keep tradable spot assets (222 symbols)
+        available_symbols = [s for s in prices.keys() if not s.startswith('@')]
+        logger.info(f"Analyzing {len(available_symbols)} tradable symbols (excluded {len([s for s in prices.keys() if s.startswith('@')])} index '@' symbols)")
         technical_factors = calculate_technical_factors(available_symbols)
         logger.info(
             f"Technical analysis: {len(technical_factors.get('recommendations', []))} symbols analyzed"
