@@ -161,13 +161,13 @@ async def lifespan(app: FastAPI):
         )
         logger.info("AI trading job scheduled (APScheduler, non-blocking, 10-minute interval)")
 
-        # Add take-profit check job (every 60 seconds) - Automatically locks in +5% profits
+        # Add take-profit check job (every 60 seconds) - Automatically locks in +10% profits
         scheduler_service.add_sync_job(
             job_func=check_take_profit_async,
             interval_seconds=60,
             job_id="take_profit_check"
         )
-        logger.info("Take-profit job scheduled (every 60 seconds, +5% threshold)")
+        logger.info("Take-profit job scheduled (every 60 seconds, +10% threshold)")
 
     except Exception as e:
         print(f"Warning: Failed to start scheduler: {e}")

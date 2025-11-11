@@ -1,0 +1,4719 @@
+{
+  "metadata": {
+    "timestamp": "2025-11-11T13:59:15.042520",
+    "version": "2.0.0",
+    "symbols_analyzed": 117,
+    "cycle_duration_ms": 10
+  },
+  "symbols": [
+    {
+      "symbol": "MERL",
+      "price": 0.365255,
+      "technical_analysis": {
+        "score": 0.9836,
+        "momentum": 0.9671,
+        "support": 1.0,
+        "signal": "STRONG_BUY",
+        "rank": 1
+      },
+      "pivot_points": {
+        "PP": 0.35,
+        "R1": 0.36,
+        "R2": 0.38,
+        "R3": 0.39,
+        "S1": 0.33,
+        "S2": 0.32,
+        "S3": 0.3,
+        "current_zone": "bullish",
+        "signal": "bullish_zone",
+        "distance_to_support_pct": 10.81,
+        "distance_to_resistance_pct": 2.7
+      },
+      "prophet_forecast": {
+        "current_price": 0.36836,
+        "forecast_6h": 0.3649612997392653,
+        "forecast_24h": 0.3696589554736195,
+        "change_pct_6h": -0.92,
+        "change_pct_24h": 0.35,
+        "trend": "neutral",
+        "confidence": 0.971,
+        "confidence_interval_24h": [
+          0.3586463388214861,
+          0.380042709407031
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "ZEC",
+      "price": 496.235,
+      "technical_analysis": {
+        "score": 0.6204,
+        "momentum": 0.8162,
+        "support": 0.4245,
+        "signal": "BUY",
+        "rank": 2
+      },
+      "pivot_points": {
+        "PP": 573.11,
+        "R1": 633.05,
+        "R2": 743.49,
+        "R3": 803.43,
+        "S1": 462.67,
+        "S2": 402.73,
+        "S3": 292.29,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 6.28,
+        "distance_to_resistance_pct": -28.23
+      },
+      "prophet_forecast": {
+        "current_price": 493.54,
+        "forecast_6h": 522.4136245800461,
+        "forecast_24h": 566.1187879281046,
+        "change_pct_6h": 5.85,
+        "change_pct_24h": 14.71,
+        "trend": "up",
+        "confidence": 0.948,
+        "confidence_interval_24h": [
+          537.5011334983305,
+          595.8272241013178
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "ZEREBRO",
+      "price": 0.033011,
+      "technical_analysis": {
+        "score": 0.5909,
+        "momentum": 0.3077,
+        "support": 0.8741,
+        "signal": "HOLD",
+        "rank": 3
+      },
+      "pivot_points": {
+        "PP": 0.04,
+        "R1": 0.04,
+        "R2": 0.05,
+        "R3": 0.05,
+        "S1": 0.03,
+        "S2": 0.03,
+        "S3": 0.03,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -33.33
+      },
+      "prophet_forecast": {
+        "current_price": 0.033548,
+        "forecast_6h": 0.029674172544039756,
+        "forecast_24h": 0.024413288069472995,
+        "change_pct_6h": -11.55,
+        "change_pct_24h": -27.23,
+        "trend": "down",
+        "confidence": 0.948,
+        "confidence_interval_24h": [
+          0.023186583188536232,
+          0.025716367599402244
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "BNB",
+      "price": 979.325,
+      "technical_analysis": {
+        "score": 0.5546,
+        "momentum": 0.4087,
+        "support": 0.7004,
+        "signal": "HOLD",
+        "rank": 4
+      },
+      "pivot_points": {
+        "PP": 995.05,
+        "R1": 1014.75,
+        "R2": 1038.11,
+        "R3": 1057.81,
+        "S1": 971.69,
+        "S2": 951.99,
+        "S3": 928.63,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 0.95,
+        "distance_to_resistance_pct": -3.44
+      },
+      "prophet_forecast": {
+        "current_price": 979.88,
+        "forecast_6h": 997.5831363296948,
+        "forecast_24h": 1056.1387390317466,
+        "change_pct_6h": 1.81,
+        "change_pct_24h": 7.78,
+        "trend": "up",
+        "confidence": 0.989,
+        "confidence_interval_24h": [
+          1044.5264501272547,
+          1067.900820387044
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "SKY",
+      "price": 0.05328,
+      "technical_analysis": {
+        "score": 0.5523,
+        "momentum": 0.9969,
+        "support": 0.1078,
+        "signal": "HOLD",
+        "rank": 5
+      },
+      "pivot_points": {
+        "PP": 0.06,
+        "R1": 0.06,
+        "R2": 0.06,
+        "R3": 0.06,
+        "S1": 0.05,
+        "S2": 0.05,
+        "S3": 0.05,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -20.0
+      },
+      "prophet_forecast": null,
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "NIL",
+      "price": 0.18262,
+      "technical_analysis": {
+        "score": 0.523,
+        "momentum": 0.1534,
+        "support": 0.8926,
+        "signal": "HOLD",
+        "rank": 6
+      },
+      "pivot_points": {
+        "PP": 0.19,
+        "R1": 0.2,
+        "R2": 0.21,
+        "R3": 0.21,
+        "S1": 0.18,
+        "S2": 0.17,
+        "S3": 0.17,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -11.11
+      },
+      "prophet_forecast": {
+        "current_price": 0.18288,
+        "forecast_6h": 0.1894247822124094,
+        "forecast_24h": 0.21439537838265135,
+        "change_pct_6h": 3.58,
+        "change_pct_24h": 17.23,
+        "trend": "up",
+        "confidence": 0.978,
+        "confidence_interval_24h": [
+          0.2094021852927558,
+          0.21889861154950482
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "POL",
+      "price": 0.177545,
+      "technical_analysis": {
+        "score": 0.512,
+        "momentum": 0.024,
+        "support": 1.0,
+        "signal": "HOLD",
+        "rank": 7
+      },
+      "pivot_points": {
+        "PP": 0.18,
+        "R1": 0.19,
+        "R2": 0.19,
+        "R3": 0.19,
+        "S1": 0.18,
+        "S2": 0.17,
+        "S3": 0.17,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -5.56
+      },
+      "prophet_forecast": {
+        "current_price": 0.1775,
+        "forecast_6h": 0.18186154824350584,
+        "forecast_24h": 0.19575025892544787,
+        "change_pct_6h": 2.46,
+        "change_pct_24h": 10.28,
+        "trend": "up",
+        "confidence": 0.984,
+        "confidence_interval_24h": [
+          0.19266287024805442,
+          0.19873458744761224
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "TAO",
+      "price": 370.83,
+      "technical_analysis": {
+        "score": 0.5093,
+        "momentum": 0.0192,
+        "support": 0.9994,
+        "signal": "HOLD",
+        "rank": 8
+      },
+      "pivot_points": {
+        "PP": 384.57,
+        "R1": 401.07,
+        "R2": 415.34,
+        "R3": 431.84,
+        "S1": 370.3,
+        "S2": 353.8,
+        "S3": 339.53,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 0.57,
+        "distance_to_resistance_pct": -7.69
+      },
+      "prophet_forecast": null,
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "ZRO",
+      "price": 1.58165,
+      "technical_analysis": {
+        "score": 0.5056,
+        "momentum": 0.0184,
+        "support": 0.9928,
+        "signal": "HOLD",
+        "rank": 9
+      },
+      "pivot_points": {
+        "PP": 1.65,
+        "R1": 1.73,
+        "R2": 1.85,
+        "R3": 1.93,
+        "S1": 1.54,
+        "S2": 1.46,
+        "S3": 1.34,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 3.14,
+        "distance_to_resistance_pct": -8.81
+      },
+      "prophet_forecast": {
+        "current_price": 1.5852,
+        "forecast_6h": 1.6513021335085816,
+        "forecast_24h": 1.7145932562721649,
+        "change_pct_6h": 4.17,
+        "change_pct_24h": 8.16,
+        "trend": "up",
+        "confidence": 0.977,
+        "confidence_interval_24h": [
+          1.6743736152563788,
+          1.7523632799614033
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "SUSHI",
+      "price": 0.50585,
+      "technical_analysis": {
+        "score": 0.504,
+        "momentum": 0.0114,
+        "support": 0.9966,
+        "signal": "HOLD",
+        "rank": 10
+      },
+      "pivot_points": {
+        "PP": 0.56,
+        "R1": 0.63,
+        "R2": 0.7,
+        "R3": 0.77,
+        "S1": 0.5,
+        "S2": 0.43,
+        "S3": 0.36,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 1.96,
+        "distance_to_resistance_pct": -23.53
+      },
+      "prophet_forecast": {
+        "current_price": 0.5036,
+        "forecast_6h": 0.5291836863265124,
+        "forecast_24h": 0.5315154426720208,
+        "change_pct_6h": 5.08,
+        "change_pct_24h": 5.54,
+        "trend": "up",
+        "confidence": 0.969,
+        "confidence_interval_24h": [
+          0.5157804359946101,
+          0.5491759764707677
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "ADA",
+      "price": 0.575895,
+      "technical_analysis": {
+        "score": 0.5023,
+        "momentum": 0.0047,
+        "support": 1.0,
+        "signal": "HOLD",
+        "rank": 11
+      },
+      "pivot_points": {
+        "PP": 0.59,
+        "R1": 0.61,
+        "R2": 0.62,
+        "R3": 0.64,
+        "S1": 0.58,
+        "S2": 0.56,
+        "S3": 0.55,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -5.17
+      },
+      "prophet_forecast": {
+        "current_price": 0.57845,
+        "forecast_6h": 0.5826249869659124,
+        "forecast_24h": 0.6171438802314683,
+        "change_pct_6h": 0.72,
+        "change_pct_24h": 6.69,
+        "trend": "up",
+        "confidence": 0.985,
+        "confidence_interval_24h": [
+          0.6079777566638397,
+          0.6261363313890369
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "SEI",
+      "price": 0.180225,
+      "technical_analysis": {
+        "score": 0.5021,
+        "momentum": 0.0043,
+        "support": 1.0,
+        "signal": "HOLD",
+        "rank": 12
+      },
+      "pivot_points": {
+        "PP": 0.19,
+        "R1": 0.2,
+        "R2": 0.2,
+        "R3": 0.21,
+        "S1": 0.18,
+        "S2": 0.17,
+        "S3": 0.17,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -11.11
+      },
+      "prophet_forecast": {
+        "current_price": 0.1809,
+        "forecast_6h": 0.18435138936447504,
+        "forecast_24h": 0.18908894760083247,
+        "change_pct_6h": 1.91,
+        "change_pct_24h": 4.53,
+        "trend": "up",
+        "confidence": 0.982,
+        "confidence_interval_24h": [
+          0.18567911090511457,
+          0.19252361092160858
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "RENDER",
+      "price": 2.4101,
+      "technical_analysis": {
+        "score": 0.5018,
+        "momentum": 0.0036,
+        "support": 1.0,
+        "signal": "HOLD",
+        "rank": 13
+      },
+      "pivot_points": {
+        "PP": 2.56,
+        "R1": 2.73,
+        "R2": 2.94,
+        "R3": 3.12,
+        "S1": 2.34,
+        "S2": 2.17,
+        "S3": 1.95,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 3.31,
+        "distance_to_resistance_pct": -12.81
+      },
+      "prophet_forecast": {
+        "current_price": 2.4087,
+        "forecast_6h": 2.409554332083255,
+        "forecast_24h": 2.425928111809044,
+        "change_pct_6h": 0.04,
+        "change_pct_24h": 0.72,
+        "trend": "neutral",
+        "confidence": 0.963,
+        "confidence_interval_24h": [
+          2.3403851613129496,
+          2.5185964479303746
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "INJ",
+      "price": 7.7152,
+      "technical_analysis": {
+        "score": 0.4967,
+        "momentum": 0.0085,
+        "support": 0.9849,
+        "signal": "HOLD",
+        "rank": 14
+      },
+      "pivot_points": {
+        "PP": 8.08,
+        "R1": 8.65,
+        "R2": 9.12,
+        "R3": 9.68,
+        "S1": 7.61,
+        "S2": 7.05,
+        "S3": 6.58,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 1.42,
+        "distance_to_resistance_pct": -12.05
+      },
+      "prophet_forecast": {
+        "current_price": 7.6564,
+        "forecast_6h": 7.586517834646765,
+        "forecast_24h": 7.6488983587115875,
+        "change_pct_6h": -0.91,
+        "change_pct_24h": -0.1,
+        "trend": "neutral",
+        "confidence": 0.977,
+        "confidence_interval_24h": [
+          7.460063733335695,
+          7.818059118464555
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "ALGO",
+      "price": 0.179775,
+      "technical_analysis": {
+        "score": 0.4907,
+        "momentum": 0.0095,
+        "support": 0.9719,
+        "signal": "HOLD",
+        "rank": 15
+      },
+      "pivot_points": {
+        "PP": 0.19,
+        "R1": 0.19,
+        "R2": 0.2,
+        "R3": 0.21,
+        "S1": 0.18,
+        "S2": 0.17,
+        "S3": 0.16,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -5.56
+      },
+      "prophet_forecast": {
+        "current_price": 0.17935,
+        "forecast_6h": 0.18155041013677176,
+        "forecast_24h": 0.18392017851751202,
+        "change_pct_6h": 1.23,
+        "change_pct_24h": 2.55,
+        "trend": "up",
+        "confidence": 0.983,
+        "confidence_interval_24h": [
+          0.18064222734681565,
+          0.18686614553896105
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "LINEA",
+      "price": 0.012614,
+      "technical_analysis": {
+        "score": 0.4907,
+        "momentum": 0.0147,
+        "support": 0.9666,
+        "signal": "HOLD",
+        "rank": 16
+      },
+      "pivot_points": {
+        "PP": 0.01,
+        "R1": 0.01,
+        "R2": 0.01,
+        "R3": 0.01,
+        "S1": 0.01,
+        "S2": 0.01,
+        "S3": 0.01,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": 0.0
+      },
+      "prophet_forecast": {
+        "current_price": 0.012629,
+        "forecast_6h": 0.012417752346343501,
+        "forecast_24h": 0.013409356686898657,
+        "change_pct_6h": -1.67,
+        "change_pct_24h": 6.18,
+        "trend": "up",
+        "confidence": 0.977,
+        "confidence_interval_24h": [
+          0.013098236210309913,
+          0.013718015398387216
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "STX",
+      "price": 0.42465,
+      "technical_analysis": {
+        "score": 0.4842,
+        "momentum": 0.0153,
+        "support": 0.9531,
+        "signal": "HOLD",
+        "rank": 17
+      },
+      "pivot_points": {
+        "PP": 0.43,
+        "R1": 0.44,
+        "R2": 0.45,
+        "R3": 0.46,
+        "S1": 0.42,
+        "S2": 0.41,
+        "S3": 0.4,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 2.33,
+        "distance_to_resistance_pct": -2.33
+      },
+      "prophet_forecast": null,
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "AAVE",
+      "price": 216.235,
+      "technical_analysis": {
+        "score": 0.4776,
+        "momentum": 0.0012,
+        "support": 0.954,
+        "signal": "HOLD",
+        "rank": 20
+      },
+      "pivot_points": {
+        "PP": 222.83,
+        "R1": 234.96,
+        "R2": 241.75,
+        "R3": 253.88,
+        "S1": 216.04,
+        "S2": 203.91,
+        "S3": 197.12,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 0.34,
+        "distance_to_resistance_pct": -8.39
+      },
+      "prophet_forecast": {
+        "current_price": 216.24,
+        "forecast_6h": 217.04879182182768,
+        "forecast_24h": 222.58745903604012,
+        "change_pct_6h": 0.37,
+        "change_pct_24h": 2.94,
+        "trend": "up",
+        "confidence": 0.983,
+        "confidence_interval_24h": [
+          218.93110112845332,
+          226.64929933637683
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "LINK",
+      "price": 16.0025,
+      "technical_analysis": {
+        "score": 0.4755,
+        "momentum": 0.0056,
+        "support": 0.9453,
+        "signal": "HOLD",
+        "rank": 21
+      },
+      "pivot_points": {
+        "PP": 16.28,
+        "R1": 16.78,
+        "R2": 17.18,
+        "R3": 17.67,
+        "S1": 15.88,
+        "S2": 15.39,
+        "S3": 14.98,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 0.75,
+        "distance_to_resistance_pct": -4.88
+      },
+      "prophet_forecast": {
+        "current_price": 16.01,
+        "forecast_6h": 16.366396350461155,
+        "forecast_24h": 17.4323615760233,
+        "change_pct_6h": 2.23,
+        "change_pct_24h": 8.88,
+        "trend": "up",
+        "confidence": 0.985,
+        "confidence_interval_24h": [
+          17.14037433730672,
+          17.676257740972492
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "LTC",
+      "price": 101.84,
+      "technical_analysis": {
+        "score": 0.4726,
+        "momentum": 0.0271,
+        "support": 0.9181,
+        "signal": "HOLD",
+        "rank": 22
+      },
+      "pivot_points": {
+        "PP": 106.62,
+        "R1": 109.92,
+        "R2": 115.59,
+        "R3": 118.89,
+        "S1": 100.95,
+        "S2": 97.65,
+        "S3": 91.98,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 0.87,
+        "distance_to_resistance_pct": -7.93
+      },
+      "prophet_forecast": {
+        "current_price": 102.21,
+        "forecast_6h": 102.62961800435191,
+        "forecast_24h": 103.89731501892788,
+        "change_pct_6h": 0.41,
+        "change_pct_24h": 1.65,
+        "trend": "up",
+        "confidence": 0.978,
+        "confidence_interval_24h": [
+          101.57172377004193,
+          106.08759939830652
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "IP",
+      "price": 3.66715,
+      "technical_analysis": {
+        "score": 0.47,
+        "momentum": 0.0486,
+        "support": 0.8914,
+        "signal": "HOLD",
+        "rank": 23
+      },
+      "pivot_points": {
+        "PP": 3.85,
+        "R1": 4.09,
+        "R2": 4.27,
+        "R3": 4.51,
+        "S1": 3.67,
+        "S2": 3.43,
+        "S3": 3.25,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -11.44
+      },
+      "prophet_forecast": {
+        "current_price": 3.6631,
+        "forecast_6h": 3.8855817581889536,
+        "forecast_24h": 3.8136297827163834,
+        "change_pct_6h": 6.07,
+        "change_pct_24h": 4.11,
+        "trend": "up",
+        "confidence": 0.974,
+        "confidence_interval_24h": [
+          3.720096253785597,
+          3.9162342008054556
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "CRV",
+      "price": 0.49415,
+      "technical_analysis": {
+        "score": 0.4662,
+        "momentum": 0.0224,
+        "support": 0.9101,
+        "signal": "HOLD",
+        "rank": 24
+      },
+      "pivot_points": {
+        "PP": 0.51,
+        "R1": 0.55,
+        "R2": 0.59,
+        "R3": 0.63,
+        "S1": 0.48,
+        "S2": 0.44,
+        "S3": 0.41,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 4.0,
+        "distance_to_resistance_pct": -10.0
+      },
+      "prophet_forecast": {
+        "current_price": 0.49491,
+        "forecast_6h": 0.509115181322481,
+        "forecast_24h": 0.5170122990290131,
+        "change_pct_6h": 2.87,
+        "change_pct_24h": 4.47,
+        "trend": "up",
+        "confidence": 0.98,
+        "confidence_interval_24h": [
+          0.5073326814799866,
+          0.52768695358065
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "MNT",
+      "price": 1.258,
+      "technical_analysis": {
+        "score": 0.4634,
+        "momentum": 0.3767,
+        "support": 0.5502,
+        "signal": "HOLD",
+        "rank": 25
+      },
+      "pivot_points": {
+        "PP": 1.33,
+        "R1": 1.37,
+        "R2": 1.42,
+        "R3": 1.46,
+        "S1": 1.28,
+        "S2": 1.24,
+        "S3": 1.19,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": -1.59,
+        "distance_to_resistance_pct": -8.73
+      },
+      "prophet_forecast": {
+        "current_price": 1.2477,
+        "forecast_6h": 1.3080491704950066,
+        "forecast_24h": 1.2938389813121016,
+        "change_pct_6h": 4.84,
+        "change_pct_24h": 3.7,
+        "trend": "up",
+        "confidence": 0.981,
+        "confidence_interval_24h": [
+          1.2681579334343518,
+          1.3175370556956547
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "MORPHO",
+      "price": 1.98695,
+      "technical_analysis": {
+        "score": 0.4473,
+        "momentum": 0.0019,
+        "support": 0.8926,
+        "signal": "HOLD",
+        "rank": 26
+      },
+      "pivot_points": {
+        "PP": 2.0,
+        "R1": 2.04,
+        "R2": 2.06,
+        "R3": 2.1,
+        "S1": 1.98,
+        "S2": 1.94,
+        "S3": 1.92,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 0.5,
+        "distance_to_resistance_pct": -2.51
+      },
+      "prophet_forecast": {
+        "current_price": 1.988,
+        "forecast_6h": 2.0599703153406934,
+        "forecast_24h": 2.2186968865515873,
+        "change_pct_6h": 3.62,
+        "change_pct_24h": 11.6,
+        "trend": "up",
+        "confidence": 0.985,
+        "confidence_interval_24h": [
+          2.185920982756278,
+          2.2517440264295567
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "PURR",
+      "price": 0.10531,
+      "technical_analysis": {
+        "score": 0.4466,
+        "momentum": 0.1567,
+        "support": 0.7366,
+        "signal": "HOLD",
+        "rank": 27
+      },
+      "pivot_points": {
+        "PP": 0.11,
+        "R1": 0.12,
+        "R2": 0.12,
+        "R3": 0.12,
+        "S1": 0.11,
+        "S2": 0.1,
+        "S3": 0.1,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -9.09
+      },
+      "prophet_forecast": {
+        "current_price": 0.10506,
+        "forecast_6h": 0.10574655709417002,
+        "forecast_24h": 0.11201518753730577,
+        "change_pct_6h": 0.65,
+        "change_pct_24h": 6.62,
+        "trend": "up",
+        "confidence": 0.974,
+        "confidence_interval_24h": [
+          0.10885956246098229,
+          0.11475573619798861
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "PURR/USDC",
+      "price": 0.105335,
+      "technical_analysis": {
+        "score": 0.4466,
+        "momentum": 0.1567,
+        "support": 0.7366,
+        "signal": "HOLD",
+        "rank": 28
+      },
+      "pivot_points": {
+        "PP": 0.11,
+        "R1": 0.12,
+        "R2": 0.12,
+        "R3": 0.13,
+        "S1": 0.1,
+        "S2": 0.1,
+        "S3": 0.09,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 9.09,
+        "distance_to_resistance_pct": -9.09
+      },
+      "prophet_forecast": {
+        "current_price": 0.10517,
+        "forecast_6h": 0.10568065879913086,
+        "forecast_24h": 0.11181868524122951,
+        "change_pct_6h": 0.49,
+        "change_pct_24h": 6.32,
+        "trend": "up",
+        "confidence": 0.973,
+        "confidence_interval_24h": [
+          0.10880138134718317,
+          0.11493687627563808
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "TRB",
+      "price": 26.6385,
+      "technical_analysis": {
+        "score": 0.4463,
+        "momentum": 0.0136,
+        "support": 0.879,
+        "signal": "HOLD",
+        "rank": 29
+      },
+      "pivot_points": {
+        "PP": 26.84,
+        "R1": 27.78,
+        "R2": 28.47,
+        "R3": 29.4,
+        "S1": 26.15,
+        "S2": 25.21,
+        "S3": 24.52,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 2.32,
+        "distance_to_resistance_pct": -3.77
+      },
+      "prophet_forecast": {
+        "current_price": 26.773,
+        "forecast_6h": 26.673071738082832,
+        "forecast_24h": 26.836100005367705,
+        "change_pct_6h": -0.37,
+        "change_pct_24h": 0.24,
+        "trend": "neutral",
+        "confidence": 0.974,
+        "confidence_interval_24h": [
+          26.099360861391023,
+          27.501455931975446
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "SNX",
+      "price": 0.80136,
+      "technical_analysis": {
+        "score": 0.4403,
+        "momentum": 0.3718,
+        "support": 0.5089,
+        "signal": "HOLD",
+        "rank": 30
+      },
+      "pivot_points": {
+        "PP": 0.87,
+        "R1": 0.9,
+        "R2": 0.94,
+        "R3": 0.97,
+        "S1": 0.83,
+        "S2": 0.8,
+        "S3": 0.77,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": -2.47,
+        "distance_to_resistance_pct": -11.11
+      },
+      "prophet_forecast": {
+        "current_price": 0.80209,
+        "forecast_6h": 0.7980237543312126,
+        "forecast_24h": 0.7940192064177329,
+        "change_pct_6h": -0.51,
+        "change_pct_24h": -1.01,
+        "trend": "down",
+        "confidence": 0.979,
+        "confidence_interval_24h": [
+          0.7777492428867531,
+          0.8107703907015293
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "XLM",
+      "price": 0.29042,
+      "technical_analysis": {
+        "score": 0.4379,
+        "momentum": 0.0013,
+        "support": 0.8746,
+        "signal": "HOLD",
+        "rank": 31
+      },
+      "pivot_points": {
+        "PP": 0.3,
+        "R1": 0.31,
+        "R2": 0.33,
+        "R3": 0.34,
+        "S1": 0.29,
+        "S2": 0.27,
+        "S3": 0.26,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -6.9
+      },
+      "prophet_forecast": {
+        "current_price": 0.29095,
+        "forecast_6h": 0.28503504186114736,
+        "forecast_24h": 0.2913873124041104,
+        "change_pct_6h": -2.03,
+        "change_pct_24h": 0.15,
+        "trend": "neutral",
+        "confidence": 0.987,
+        "confidence_interval_24h": [
+          0.2875684017147417,
+          0.2954277006171864
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "LDO",
+      "price": 0.85635,
+      "technical_analysis": {
+        "score": 0.434,
+        "momentum": 0.0114,
+        "support": 0.8565,
+        "signal": "HOLD",
+        "rank": 32
+      },
+      "pivot_points": {
+        "PP": 0.88,
+        "R1": 0.93,
+        "R2": 0.98,
+        "R3": 1.03,
+        "S1": 0.83,
+        "S2": 0.78,
+        "S3": 0.73,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 3.49,
+        "distance_to_resistance_pct": -8.14
+      },
+      "prophet_forecast": {
+        "current_price": 0.86963,
+        "forecast_6h": 0.8688982799240229,
+        "forecast_24h": 0.8929433280325518,
+        "change_pct_6h": -0.08,
+        "change_pct_24h": 2.68,
+        "trend": "up",
+        "confidence": 0.979,
+        "confidence_interval_24h": [
+          0.8726628364706661,
+          0.9110185063959281
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "IMX",
+      "price": 0.45145,
+      "technical_analysis": {
+        "score": 0.434,
+        "momentum": 0.0481,
+        "support": 0.8198,
+        "signal": "HOLD",
+        "rank": 33
+      },
+      "pivot_points": {
+        "PP": 0.46,
+        "R1": 0.48,
+        "R2": 0.5,
+        "R3": 0.52,
+        "S1": 0.45,
+        "S2": 0.42,
+        "S3": 0.41,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -6.67
+      },
+      "prophet_forecast": {
+        "current_price": 0.45204,
+        "forecast_6h": 0.4720153636890789,
+        "forecast_24h": 0.47073651567795755,
+        "change_pct_6h": 4.42,
+        "change_pct_24h": 4.14,
+        "trend": "up",
+        "confidence": 0.982,
+        "confidence_interval_24h": [
+          0.461958362651467,
+          0.4792304743580398
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "IOTA",
+      "price": 0.1461,
+      "technical_analysis": {
+        "score": 0.4336,
+        "momentum": 0.0061,
+        "support": 0.861,
+        "signal": "HOLD",
+        "rank": 34
+      },
+      "pivot_points": {
+        "PP": 0.15,
+        "R1": 0.15,
+        "R2": 0.16,
+        "R3": 0.16,
+        "S1": 0.14,
+        "S2": 0.14,
+        "S3": 0.13,
+        "current_zone": "bearish",
+        "signal": "short_opportunity",
+        "distance_to_support_pct": 6.67,
+        "distance_to_resistance_pct": 0.0
+      },
+      "prophet_forecast": {
+        "current_price": 0.14639,
+        "forecast_6h": 0.14751738417867138,
+        "forecast_24h": 0.15006816963140127,
+        "change_pct_6h": 0.77,
+        "change_pct_24h": 2.51,
+        "trend": "up",
+        "confidence": 0.983,
+        "confidence_interval_24h": [
+          0.1474939823940677,
+          0.1525640971672537
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "STRK",
+      "price": 0.16565,
+      "technical_analysis": {
+        "score": 0.4294,
+        "momentum": 0.0379,
+        "support": 0.8209,
+        "signal": "HOLD",
+        "rank": 35
+      },
+      "pivot_points": {
+        "PP": 0.18,
+        "R1": 0.21,
+        "R2": 0.25,
+        "R3": 0.28,
+        "S1": 0.14,
+        "S2": 0.11,
+        "S3": 0.07,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 17.65,
+        "distance_to_resistance_pct": -23.53
+      },
+      "prophet_forecast": null,
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "TRUMP",
+      "price": 8.27645,
+      "technical_analysis": {
+        "score": 0.4231,
+        "momentum": 0.0063,
+        "support": 0.8398,
+        "signal": "HOLD",
+        "rank": 36
+      },
+      "pivot_points": {
+        "PP": 8.7,
+        "R1": 9.76,
+        "R2": 10.64,
+        "R3": 11.7,
+        "S1": 7.82,
+        "S2": 6.77,
+        "S3": 5.89,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 5.78,
+        "distance_to_resistance_pct": -17.59
+      },
+      "prophet_forecast": null,
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "MELANIA",
+      "price": 0.14653,
+      "technical_analysis": {
+        "score": 0.4046,
+        "momentum": 0.0206,
+        "support": 0.7886,
+        "signal": "HOLD",
+        "rank": 37
+      },
+      "pivot_points": {
+        "PP": 0.17,
+        "R1": 0.23,
+        "R2": 0.29,
+        "R3": 0.34,
+        "S1": 0.11,
+        "S2": 0.05,
+        "S3": -0.01,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 26.67,
+        "distance_to_resistance_pct": -53.33
+      },
+      "prophet_forecast": {
+        "current_price": 0.14997,
+        "forecast_6h": 0.1691265739103299,
+        "forecast_24h": 0.1572303225684807,
+        "change_pct_6h": 12.77,
+        "change_pct_24h": 4.84,
+        "trend": "up",
+        "confidence": 0.934,
+        "confidence_interval_24h": [
+          0.14682723056341854,
+          0.16746633683569126
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "PEOPLE",
+      "price": 0.011965,
+      "technical_analysis": {
+        "score": 0.4009,
+        "momentum": 0.0376,
+        "support": 0.7641,
+        "signal": "HOLD",
+        "rank": 38
+      },
+      "pivot_points": {
+        "PP": 0.01,
+        "R1": 0.01,
+        "R2": 0.01,
+        "R3": 0.01,
+        "S1": 0.01,
+        "S2": 0.01,
+        "S3": 0.01,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": 0.0
+      },
+      "prophet_forecast": {
+        "current_price": 0.011995,
+        "forecast_6h": 0.012173114074928933,
+        "forecast_24h": 0.012269180649085346,
+        "change_pct_6h": 1.48,
+        "change_pct_24h": 2.29,
+        "trend": "up",
+        "confidence": 0.947,
+        "confidence_interval_24h": [
+          0.011605918295078023,
+          0.01291292213679641
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "XRP",
+      "price": 2.44825,
+      "technical_analysis": {
+        "score": 0.3975,
+        "momentum": 0.0011,
+        "support": 0.7939,
+        "signal": "SELL",
+        "rank": 39
+      },
+      "pivot_points": {
+        "PP": 2.48,
+        "R1": 2.62,
+        "R2": 2.72,
+        "R3": 2.86,
+        "S1": 2.39,
+        "S2": 2.25,
+        "S3": 2.15,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 2.85,
+        "distance_to_resistance_pct": -6.5
+      },
+      "prophet_forecast": null,
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "BSV",
+      "price": 24.796,
+      "technical_analysis": {
+        "score": 0.3848,
+        "momentum": 0.0185,
+        "support": 0.7511,
+        "signal": "SELL",
+        "rank": 40
+      },
+      "pivot_points": {
+        "PP": 25.26,
+        "R1": 26.12,
+        "R2": 26.64,
+        "R3": 27.5,
+        "S1": 24.75,
+        "S2": 23.89,
+        "S3": 23.38,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 0.48,
+        "distance_to_resistance_pct": -5.03
+      },
+      "prophet_forecast": {
+        "current_price": 24.959,
+        "forecast_6h": 25.981276825861986,
+        "forecast_24h": 27.319894679833215,
+        "change_pct_6h": 4.1,
+        "change_pct_24h": 9.46,
+        "trend": "up",
+        "confidence": 0.985,
+        "confidence_interval_24h": [
+          26.886598326140092,
+          27.720812896769317
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "NXPC",
+      "price": 0.410725,
+      "technical_analysis": {
+        "score": 0.3826,
+        "momentum": 0.022,
+        "support": 0.7433,
+        "signal": "SELL",
+        "rank": 41
+      },
+      "pivot_points": {
+        "PP": 0.39,
+        "R1": 0.41,
+        "R2": 0.43,
+        "R3": 0.45,
+        "S1": 0.38,
+        "S2": 0.35,
+        "S3": 0.34,
+        "current_zone": "bullish",
+        "signal": "short_opportunity",
+        "distance_to_support_pct": 7.32,
+        "distance_to_resistance_pct": 0.0
+      },
+      "prophet_forecast": {
+        "current_price": 0.39449,
+        "forecast_6h": 0.4115429998787905,
+        "forecast_24h": 0.4330965695479426,
+        "change_pct_6h": 4.32,
+        "change_pct_24h": 9.79,
+        "trend": "up",
+        "confidence": 0.982,
+        "confidence_interval_24h": [
+          0.42532255778808464,
+          0.44132503509049864
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "XPL",
+      "price": 0.280845,
+      "technical_analysis": {
+        "score": 0.3801,
+        "momentum": 0.1676,
+        "support": 0.5926,
+        "signal": "SELL",
+        "rank": 42
+      },
+      "pivot_points": {
+        "PP": 0.31,
+        "R1": 0.33,
+        "R2": 0.35,
+        "R3": 0.36,
+        "S1": 0.3,
+        "S2": 0.28,
+        "S3": 0.27,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": -7.14,
+        "distance_to_resistance_pct": -17.86
+      },
+      "prophet_forecast": {
+        "current_price": 0.27955,
+        "forecast_6h": 0.3003578612708219,
+        "forecast_24h": 0.346844416462679,
+        "change_pct_6h": 7.44,
+        "change_pct_24h": 24.07,
+        "trend": "up",
+        "confidence": 0.967,
+        "confidence_interval_24h": [
+          0.33583036270973904,
+          0.3585942082719458
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "WLFI",
+      "price": 0.152145,
+      "technical_analysis": {
+        "score": 0.3701,
+        "momentum": 0.0249,
+        "support": 0.7154,
+        "signal": "SELL",
+        "rank": 43
+      },
+      "pivot_points": {
+        "PP": 0.15,
+        "R1": 0.17,
+        "R2": 0.19,
+        "R3": 0.22,
+        "S1": 0.13,
+        "S2": 0.11,
+        "S3": 0.09,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 13.33,
+        "distance_to_resistance_pct": -13.33
+      },
+      "prophet_forecast": null,
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "CAKE",
+      "price": 2.59,
+      "technical_analysis": {
+        "score": 0.348,
+        "momentum": 0.0631,
+        "support": 0.633,
+        "signal": "SELL",
+        "rank": 45
+      },
+      "pivot_points": {
+        "PP": 2.59,
+        "R1": 2.73,
+        "R2": 2.84,
+        "R3": 2.98,
+        "S1": 2.48,
+        "S2": 2.34,
+        "S3": 2.23,
+        "current_zone": "bullish",
+        "signal": "bullish_zone",
+        "distance_to_support_pct": 4.62,
+        "distance_to_resistance_pct": -5.0
+      },
+      "prophet_forecast": {
+        "current_price": 2.5965,
+        "forecast_6h": 2.6693727177214197,
+        "forecast_24h": 2.7178312236888447,
+        "change_pct_6h": 2.81,
+        "change_pct_24h": 4.67,
+        "trend": "up",
+        "confidence": 0.98,
+        "confidence_interval_24h": [
+          2.663862911333885,
+          2.7733791511542094
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "ZEN",
+      "price": 13.3215,
+      "technical_analysis": {
+        "score": 0.3369,
+        "momentum": 0.3769,
+        "support": 0.2969,
+        "signal": "SELL",
+        "rank": 47
+      },
+      "pivot_points": {
+        "PP": 13.88,
+        "R1": 14.91,
+        "R2": 16.87,
+        "R3": 17.9,
+        "S1": 11.92,
+        "S2": 10.89,
+        "S3": 8.93,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 10.64,
+        "distance_to_resistance_pct": -11.77
+      },
+      "prophet_forecast": {
+        "current_price": 13.264,
+        "forecast_6h": 13.685131082114706,
+        "forecast_24h": 13.751363079415135,
+        "change_pct_6h": 3.17,
+        "change_pct_24h": 3.67,
+        "trend": "up",
+        "confidence": 0.938,
+        "confidence_interval_24h": [
+          12.932652377126194,
+          14.636160196598818
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "AERO",
+      "price": 1.2338,
+      "technical_analysis": {
+        "score": 0.3362,
+        "momentum": 0.0012,
+        "support": 0.6712,
+        "signal": "SELL",
+        "rank": 48
+      },
+      "pivot_points": {
+        "PP": 1.16,
+        "R1": 1.28,
+        "R2": 1.37,
+        "R3": 1.5,
+        "S1": 1.06,
+        "S2": 0.94,
+        "S3": 0.84,
+        "current_zone": "bullish",
+        "signal": "bullish_zone",
+        "distance_to_support_pct": 14.52,
+        "distance_to_resistance_pct": -3.23
+      },
+      "prophet_forecast": {
+        "current_price": 1.2367,
+        "forecast_6h": 1.2446319776278159,
+        "forecast_24h": 1.3108214707962684,
+        "change_pct_6h": 0.64,
+        "change_pct_24h": 5.99,
+        "trend": "up",
+        "confidence": 0.968,
+        "confidence_interval_24h": [
+          1.2693834607310095,
+          1.3523536949885628
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "ZORA",
+      "price": 0.060808,
+      "technical_analysis": {
+        "score": 0.3282,
+        "momentum": 0.5606,
+        "support": 0.0958,
+        "signal": "SELL",
+        "rank": 49
+      },
+      "pivot_points": {
+        "PP": 0.06,
+        "R1": 0.07,
+        "R2": 0.07,
+        "R3": 0.07,
+        "S1": 0.06,
+        "S2": 0.06,
+        "S3": 0.05,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -16.67
+      },
+      "prophet_forecast": {
+        "current_price": 0.060978,
+        "forecast_6h": 0.06781935845982041,
+        "forecast_24h": 0.07606615708264881,
+        "change_pct_6h": 11.22,
+        "change_pct_24h": 24.74,
+        "trend": "up",
+        "confidence": 0.975,
+        "confidence_interval_24h": [
+          0.07399002957320544,
+          0.07786196192581456
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "RESOLV",
+      "price": 0.14463,
+      "technical_analysis": {
+        "score": 0.328,
+        "momentum": 0.0078,
+        "support": 0.6482,
+        "signal": "SELL",
+        "rank": 50
+      },
+      "pivot_points": {
+        "PP": 0.12,
+        "R1": 0.13,
+        "R2": 0.14,
+        "R3": 0.16,
+        "S1": 0.1,
+        "S2": 0.09,
+        "S3": 0.07,
+        "current_zone": "bullish",
+        "signal": "bullish_zone",
+        "distance_to_support_pct": 28.57,
+        "distance_to_resistance_pct": 7.14
+      },
+      "prophet_forecast": {
+        "current_price": 0.141,
+        "forecast_6h": 0.1361797452568798,
+        "forecast_24h": 0.1497629748305297,
+        "change_pct_6h": -3.42,
+        "change_pct_24h": 6.21,
+        "trend": "up",
+        "confidence": 0.958,
+        "confidence_interval_24h": [
+          0.14326240262916806,
+          0.15593027400917397
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "PAXG",
+      "price": 4134.05,
+      "technical_analysis": {
+        "score": 0.327,
+        "momentum": 0.0401,
+        "support": 0.6139,
+        "signal": "SELL",
+        "rank": 51
+      },
+      "pivot_points": {
+        "PP": 4083.47,
+        "R1": 4163.33,
+        "R2": 4212.47,
+        "R3": 4292.33,
+        "S1": 4034.33,
+        "S2": 3954.47,
+        "S3": 3905.33,
+        "current_zone": "bullish",
+        "signal": "short_opportunity",
+        "distance_to_support_pct": 2.41,
+        "distance_to_resistance_pct": -0.71
+      },
+      "prophet_forecast": {
+        "current_price": 4122.8,
+        "forecast_6h": 4137.064409091565,
+        "forecast_24h": 4261.020397861791,
+        "change_pct_6h": 0.35,
+        "change_pct_24h": 3.35,
+        "trend": "up",
+        "confidence": 0.983,
+        "confidence_interval_24h": [
+          4188.362256437893,
+          4331.44032411921
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "NEO",
+      "price": 5.2377,
+      "technical_analysis": {
+        "score": 0.3218,
+        "momentum": 0.0262,
+        "support": 0.6173,
+        "signal": "SELL",
+        "rank": 52
+      },
+      "pivot_points": {
+        "PP": 5.38,
+        "R1": 5.51,
+        "R2": 5.64,
+        "R3": 5.76,
+        "S1": 5.25,
+        "S2": 5.12,
+        "S3": 4.99,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": -0.19,
+        "distance_to_resistance_pct": -5.15
+      },
+      "prophet_forecast": {
+        "current_price": 5.243,
+        "forecast_6h": 5.575954163544441,
+        "forecast_24h": 6.280222121460965,
+        "change_pct_6h": 6.35,
+        "change_pct_24h": 19.78,
+        "trend": "up",
+        "confidence": 0.98,
+        "confidence_interval_24h": [
+          6.155155156397741,
+          6.410210213674427
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "S",
+      "price": 0.14403,
+      "technical_analysis": {
+        "score": 0.3168,
+        "momentum": 0.0422,
+        "support": 0.5914,
+        "signal": "SELL",
+        "rank": 53
+      },
+      "pivot_points": {
+        "PP": 0.15,
+        "R1": 0.16,
+        "R2": 0.17,
+        "R3": 0.17,
+        "S1": 0.15,
+        "S2": 0.14,
+        "S3": 0.13,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": -7.14,
+        "distance_to_resistance_pct": -14.29
+      },
+      "prophet_forecast": {
+        "current_price": 0.1443,
+        "forecast_6h": 0.1417842883572425,
+        "forecast_24h": 0.147079614883509,
+        "change_pct_6h": -1.74,
+        "change_pct_24h": 1.93,
+        "trend": "up",
+        "confidence": 0.966,
+        "confidence_interval_24h": [
+          0.14199190004608206,
+          0.15205165576665886
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "MANTA",
+      "price": 0.11291,
+      "technical_analysis": {
+        "score": 0.3113,
+        "momentum": 0.0264,
+        "support": 0.5962,
+        "signal": "SELL",
+        "rank": 54
+      },
+      "pivot_points": {
+        "PP": 0.12,
+        "R1": 0.12,
+        "R2": 0.13,
+        "R3": 0.14,
+        "S1": 0.11,
+        "S2": 0.1,
+        "S3": 0.09,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -9.09
+      },
+      "prophet_forecast": {
+        "current_price": 0.11243,
+        "forecast_6h": 0.11239454828048213,
+        "forecast_24h": 0.11527609970077818,
+        "change_pct_6h": -0.03,
+        "change_pct_24h": 2.53,
+        "trend": "up",
+        "confidence": 0.974,
+        "confidence_interval_24h": [
+          0.11234178315817255,
+          0.11831770935290276
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "SYRUP",
+      "price": 0.452155,
+      "technical_analysis": {
+        "score": 0.2919,
+        "momentum": 0.0077,
+        "support": 0.5762,
+        "signal": "STRONG_SELL",
+        "rank": 55
+      },
+      "pivot_points": {
+        "PP": 0.47,
+        "R1": 0.49,
+        "R2": 0.51,
+        "R3": 0.53,
+        "S1": 0.45,
+        "S2": 0.43,
+        "S3": 0.41,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -8.89
+      },
+      "prophet_forecast": null,
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "MAVIA",
+      "price": 0.08896,
+      "technical_analysis": {
+        "score": 0.2891,
+        "momentum": 0.2828,
+        "support": 0.2954,
+        "signal": "STRONG_SELL",
+        "rank": 56
+      },
+      "pivot_points": {
+        "PP": 0.09,
+        "R1": 0.09,
+        "R2": 0.1,
+        "R3": 0.1,
+        "S1": 0.09,
+        "S2": 0.09,
+        "S3": 0.08,
+        "current_zone": "bearish",
+        "signal": "short_opportunity",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": 0.0
+      },
+      "prophet_forecast": {
+        "current_price": 0.08894,
+        "forecast_6h": 0.09132584965172616,
+        "forecast_24h": 0.0957321468698808,
+        "change_pct_6h": 2.68,
+        "change_pct_24h": 7.64,
+        "trend": "up",
+        "confidence": 0.961,
+        "confidence_interval_24h": [
+          0.09208549429084055,
+          0.0994704945321016
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "ORDI",
+      "price": 5.0051,
+      "technical_analysis": {
+        "score": 0.2871,
+        "momentum": 0.0064,
+        "support": 0.5678,
+        "signal": "STRONG_SELL",
+        "rank": 57
+      },
+      "pivot_points": {
+        "PP": 5.22,
+        "R1": 5.45,
+        "R2": 5.72,
+        "R3": 5.95,
+        "S1": 4.96,
+        "S2": 4.72,
+        "S3": 4.46,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 1.0,
+        "distance_to_resistance_pct": -8.78
+      },
+      "prophet_forecast": {
+        "current_price": 5.0124,
+        "forecast_6h": 4.744528388476808,
+        "forecast_24h": 4.832960534463294,
+        "change_pct_6h": -5.34,
+        "change_pct_24h": -3.58,
+        "trend": "down",
+        "confidence": 0.942,
+        "confidence_interval_24h": [
+          4.545102271748065,
+          5.107064159219673
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "ZETA",
+      "price": 0.10935,
+      "technical_analysis": {
+        "score": 0.2853,
+        "momentum": 0.0349,
+        "support": 0.5357,
+        "signal": "STRONG_SELL",
+        "rank": 58
+      },
+      "pivot_points": {
+        "PP": 0.11,
+        "R1": 0.11,
+        "R2": 0.11,
+        "R3": 0.12,
+        "S1": 0.11,
+        "S2": 0.11,
+        "S3": 0.11,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": 0.0
+      },
+      "prophet_forecast": {
+        "current_price": 0.10926,
+        "forecast_6h": 0.11466537887433922,
+        "forecast_24h": 0.12812615052907222,
+        "change_pct_6h": 4.95,
+        "change_pct_24h": 17.27,
+        "trend": "up",
+        "confidence": 0.982,
+        "confidence_interval_24h": [
+          0.1258408571519449,
+          0.13033517009721443
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "TRX",
+      "price": 0.299055,
+      "technical_analysis": {
+        "score": 0.2842,
+        "momentum": 0.0767,
+        "support": 0.4918,
+        "signal": "STRONG_SELL",
+        "rank": 59
+      },
+      "pivot_points": {
+        "PP": 0.29,
+        "R1": 0.3,
+        "R2": 0.3,
+        "R3": 0.31,
+        "S1": 0.29,
+        "S2": 0.29,
+        "S3": 0.29,
+        "current_zone": "bullish",
+        "signal": "bullish_zone",
+        "distance_to_support_pct": 3.33,
+        "distance_to_resistance_pct": 0.0
+      },
+      "prophet_forecast": {
+        "current_price": 0.29825,
+        "forecast_6h": 0.3039743062432788,
+        "forecast_24h": 0.31823594558901197,
+        "change_pct_6h": 1.92,
+        "change_pct_24h": 6.7,
+        "trend": "up",
+        "confidence": 0.994,
+        "confidence_interval_24h": [
+          0.31597826047415645,
+          0.32003553953266534
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "LAYER",
+      "price": 0.23759,
+      "technical_analysis": {
+        "score": 0.2784,
+        "momentum": 0.0028,
+        "support": 0.5541,
+        "signal": "STRONG_SELL",
+        "rank": 60
+      },
+      "pivot_points": {
+        "PP": 0.25,
+        "R1": 0.26,
+        "R2": 0.26,
+        "R3": 0.27,
+        "S1": 0.25,
+        "S2": 0.24,
+        "S3": 0.24,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": -4.17,
+        "distance_to_resistance_pct": -8.33
+      },
+      "prophet_forecast": {
+        "current_price": 0.2371,
+        "forecast_6h": 0.2429490818702849,
+        "forecast_24h": 0.24267131805163575,
+        "change_pct_6h": 2.47,
+        "change_pct_24h": 2.35,
+        "trend": "up",
+        "confidence": 0.971,
+        "confidence_interval_24h": [
+          0.2360460628782884,
+          0.2502480989951268
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "VIRTUAL",
+      "price": 1.36205,
+      "technical_analysis": {
+        "score": 0.2738,
+        "momentum": 0.0487,
+        "support": 0.4988,
+        "signal": "STRONG_SELL",
+        "rank": 61
+      },
+      "pivot_points": {
+        "PP": 1.5,
+        "R1": 1.6,
+        "R2": 1.74,
+        "R3": 1.84,
+        "S1": 1.37,
+        "S2": 1.27,
+        "S3": 1.13,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -16.79
+      },
+      "prophet_forecast": null,
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "ZK",
+      "price": 0.053609,
+      "technical_analysis": {
+        "score": 0.2675,
+        "momentum": 0.038,
+        "support": 0.497,
+        "signal": "STRONG_SELL",
+        "rank": 62
+      },
+      "pivot_points": {
+        "PP": 0.06,
+        "R1": 0.06,
+        "R2": 0.07,
+        "R3": 0.08,
+        "S1": 0.05,
+        "S2": 0.05,
+        "S3": 0.04,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -20.0
+      },
+      "prophet_forecast": {
+        "current_price": 0.053888,
+        "forecast_6h": 0.06328965868021937,
+        "forecast_24h": 0.07597763558228292,
+        "change_pct_6h": 17.45,
+        "change_pct_24h": 40.99,
+        "trend": "up",
+        "confidence": 0.954,
+        "confidence_interval_24h": [
+          0.0722775991525447,
+          0.07932172537841696
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "PROVE",
+      "price": 0.57342,
+      "technical_analysis": {
+        "score": 0.2653,
+        "momentum": 0.1232,
+        "support": 0.4074,
+        "signal": "STRONG_SELL",
+        "rank": 63
+      },
+      "pivot_points": {
+        "PP": 0.6,
+        "R1": 0.61,
+        "R2": 0.63,
+        "R3": 0.65,
+        "S1": 0.58,
+        "S2": 0.56,
+        "S3": 0.55,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": -1.75,
+        "distance_to_resistance_pct": -7.02
+      },
+      "prophet_forecast": {
+        "current_price": 0.57122,
+        "forecast_6h": 0.5747752765541299,
+        "forecast_24h": 0.5971996085460463,
+        "change_pct_6h": 0.62,
+        "change_pct_24h": 4.55,
+        "trend": "up",
+        "confidence": 0.983,
+        "confidence_interval_24h": [
+          0.5868141462111734,
+          0.6074762032129005
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "AIXBT",
+      "price": 0.06232,
+      "technical_analysis": {
+        "score": 0.2575,
+        "momentum": 0.0109,
+        "support": 0.5042,
+        "signal": "STRONG_SELL",
+        "rank": 64
+      },
+      "pivot_points": {
+        "PP": 0.07,
+        "R1": 0.07,
+        "R2": 0.07,
+        "R3": 0.08,
+        "S1": 0.06,
+        "S2": 0.06,
+        "S3": 0.06,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -16.67
+      },
+      "prophet_forecast": {
+        "current_price": 0.062181,
+        "forecast_6h": 0.061855970475041724,
+        "forecast_24h": 0.06227220657202821,
+        "change_pct_6h": -0.52,
+        "change_pct_24h": 0.15,
+        "trend": "neutral",
+        "confidence": 0.975,
+        "confidence_interval_24h": [
+          0.06071671575436837,
+          0.06378380861508498
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "SPX",
+      "price": 0.67681,
+      "technical_analysis": {
+        "score": 0.2515,
+        "momentum": 0.068,
+        "support": 0.435,
+        "signal": "STRONG_SELL",
+        "rank": 65
+      },
+      "pivot_points": {
+        "PP": 0.73,
+        "R1": 0.75,
+        "R2": 0.78,
+        "R3": 0.8,
+        "S1": 0.7,
+        "S2": 0.68,
+        "S3": 0.65,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": -2.94,
+        "distance_to_resistance_pct": -10.29
+      },
+      "prophet_forecast": {
+        "current_price": 0.67496,
+        "forecast_6h": 0.7204807838387792,
+        "forecast_24h": 0.7734304959797923,
+        "change_pct_6h": 6.74,
+        "change_pct_24h": 14.59,
+        "trend": "up",
+        "confidence": 0.972,
+        "confidence_interval_24h": [
+          0.7503000979539072,
+          0.7941922144113251
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "USUAL",
+      "price": 0.03181,
+      "technical_analysis": {
+        "score": 0.2493,
+        "momentum": 0.0066,
+        "support": 0.4919,
+        "signal": "STRONG_SELL",
+        "rank": 66
+      },
+      "pivot_points": {
+        "PP": 0.03,
+        "R1": 0.03,
+        "R2": 0.04,
+        "R3": 0.04,
+        "S1": 0.03,
+        "S2": 0.03,
+        "S3": 0.03,
+        "current_zone": "bearish",
+        "signal": "short_opportunity",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": 0.0
+      },
+      "prophet_forecast": {
+        "current_price": 0.03181,
+        "forecast_6h": 0.03397920820199775,
+        "forecast_24h": 0.036783845113971404,
+        "change_pct_6h": 6.82,
+        "change_pct_24h": 15.64,
+        "trend": "up",
+        "confidence": 0.979,
+        "confidence_interval_24h": [
+          0.035954589286331363,
+          0.037518596802735386
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "RUNE",
+      "price": 0.79102,
+      "technical_analysis": {
+        "score": 0.2469,
+        "momentum": 0.0222,
+        "support": 0.4716,
+        "signal": "STRONG_SELL",
+        "rank": 67
+      },
+      "pivot_points": {
+        "PP": 0.83,
+        "R1": 0.84,
+        "R2": 0.86,
+        "R3": 0.87,
+        "S1": 0.81,
+        "S2": 0.8,
+        "S3": 0.79,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": -2.53,
+        "distance_to_resistance_pct": -6.33
+      },
+      "prophet_forecast": {
+        "current_price": 0.792,
+        "forecast_6h": 0.7904489160142859,
+        "forecast_24h": 0.8042482610566714,
+        "change_pct_6h": -0.2,
+        "change_pct_24h": 1.55,
+        "trend": "up",
+        "confidence": 0.985,
+        "confidence_interval_24h": [
+          0.7924257554049082,
+          0.8161968838920105
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "MINA",
+      "price": 0.14762,
+      "technical_analysis": {
+        "score": 0.2435,
+        "momentum": 0.0194,
+        "support": 0.4677,
+        "signal": "STRONG_SELL",
+        "rank": 68
+      },
+      "pivot_points": {
+        "PP": 0.16,
+        "R1": 0.16,
+        "R2": 0.17,
+        "R3": 0.18,
+        "S1": 0.15,
+        "S2": 0.15,
+        "S3": 0.14,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -6.67
+      },
+      "prophet_forecast": {
+        "current_price": 0.14757,
+        "forecast_6h": 0.1372818978529434,
+        "forecast_24h": 0.14042221326264254,
+        "change_pct_6h": -6.97,
+        "change_pct_24h": -4.84,
+        "trend": "down",
+        "confidence": 0.945,
+        "confidence_interval_24h": [
+          0.13267835285259372,
+          0.1481702389415421
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "NEAR",
+      "price": 2.65115,
+      "technical_analysis": {
+        "score": 0.2399,
+        "momentum": 0.0832,
+        "support": 0.3966,
+        "signal": "STRONG_SELL",
+        "rank": 69
+      },
+      "pivot_points": {
+        "PP": 2.9,
+        "R1": 3.04,
+        "R2": 3.3,
+        "R3": 3.44,
+        "S1": 2.64,
+        "S2": 2.5,
+        "S3": 2.24,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 0.38,
+        "distance_to_resistance_pct": -14.72
+      },
+      "prophet_forecast": {
+        "current_price": 2.6605,
+        "forecast_6h": 2.6692211988288475,
+        "forecast_24h": 2.694809960378905,
+        "change_pct_6h": 0.33,
+        "change_pct_24h": 1.29,
+        "trend": "up",
+        "confidence": 0.969,
+        "confidence_interval_24h": [
+          2.61124154749547,
+          2.779576211430766
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "WLD",
+      "price": 0.79608,
+      "technical_analysis": {
+        "score": 0.229,
+        "momentum": 0.0989,
+        "support": 0.3591,
+        "signal": "STRONG_SELL",
+        "rank": 70
+      },
+      "pivot_points": {
+        "PP": 0.83,
+        "R1": 0.85,
+        "R2": 0.87,
+        "R3": 0.89,
+        "S1": 0.81,
+        "S2": 0.79,
+        "S3": 0.77,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": -1.25,
+        "distance_to_resistance_pct": -6.25
+      },
+      "prophet_forecast": null,
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "SOPH",
+      "price": 0.022313,
+      "technical_analysis": {
+        "score": 0.2218,
+        "momentum": 0.0362,
+        "support": 0.4073,
+        "signal": "STRONG_SELL",
+        "rank": 72
+      },
+      "pivot_points": {
+        "PP": 0.02,
+        "R1": 0.02,
+        "R2": 0.02,
+        "R3": 0.03,
+        "S1": 0.02,
+        "S2": 0.02,
+        "S3": 0.02,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": 0.0
+      },
+      "prophet_forecast": {
+        "current_price": 0.022377,
+        "forecast_6h": 0.022758153634374136,
+        "forecast_24h": 0.022995835733748866,
+        "change_pct_6h": 1.7,
+        "change_pct_24h": 2.77,
+        "trend": "up",
+        "confidence": 0.985,
+        "confidence_interval_24h": [
+          0.02265437566347378,
+          0.023362706537113042
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "MOODENG",
+      "price": 0.094926,
+      "technical_analysis": {
+        "score": 0.2179,
+        "momentum": 0.037,
+        "support": 0.3988,
+        "signal": "STRONG_SELL",
+        "rank": 73
+      },
+      "pivot_points": {
+        "PP": 0.1,
+        "R1": 0.1,
+        "R2": 0.1,
+        "R3": 0.11,
+        "S1": 0.09,
+        "S2": 0.09,
+        "S3": 0.09,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 10.0,
+        "distance_to_resistance_pct": 0.0
+      },
+      "prophet_forecast": {
+        "current_price": 0.095133,
+        "forecast_6h": 0.09693761862989157,
+        "forecast_24h": 0.0986889360611544,
+        "change_pct_6h": 1.9,
+        "change_pct_24h": 3.74,
+        "trend": "up",
+        "confidence": 0.974,
+        "confidence_interval_24h": [
+          0.09609208059949734,
+          0.10129603259375979
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "MAV",
+      "price": 0.033222,
+      "technical_analysis": {
+        "score": 0.2096,
+        "momentum": 0.0038,
+        "support": 0.4154,
+        "signal": "STRONG_SELL",
+        "rank": 74
+      },
+      "pivot_points": {
+        "PP": 0.03,
+        "R1": 0.04,
+        "R2": 0.04,
+        "R3": 0.04,
+        "S1": 0.03,
+        "S2": 0.03,
+        "S3": 0.03,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -33.33
+      },
+      "prophet_forecast": {
+        "current_price": 0.033274,
+        "forecast_6h": 0.03398082267651352,
+        "forecast_24h": 0.03422628493580443,
+        "change_pct_6h": 2.12,
+        "change_pct_24h": 2.86,
+        "trend": "up",
+        "confidence": 0.978,
+        "confidence_interval_24h": [
+          0.03341027264766251,
+          0.03494812360145625
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "YZY",
+      "price": 0.369015,
+      "technical_analysis": {
+        "score": 0.2076,
+        "momentum": 0.0002,
+        "support": 0.415,
+        "signal": "STRONG_SELL",
+        "rank": 75
+      },
+      "pivot_points": {
+        "PP": 0.39,
+        "R1": 0.39,
+        "R2": 0.4,
+        "R3": 0.41,
+        "S1": 0.38,
+        "S2": 0.37,
+        "S3": 0.37,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": -2.7,
+        "distance_to_resistance_pct": -5.41
+      },
+      "prophet_forecast": null,
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "SUI",
+      "price": 2.08605,
+      "technical_analysis": {
+        "score": 0.207,
+        "momentum": 0.0021,
+        "support": 0.4119,
+        "signal": "STRONG_SELL",
+        "rank": 76
+      },
+      "pivot_points": {
+        "PP": 2.17,
+        "R1": 2.22,
+        "R2": 2.29,
+        "R3": 2.34,
+        "S1": 2.11,
+        "S2": 2.05,
+        "S3": 1.99,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": -0.48,
+        "distance_to_resistance_pct": -5.71
+      },
+      "prophet_forecast": null,
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "VVV",
+      "price": 1.2753,
+      "technical_analysis": {
+        "score": 0.2069,
+        "momentum": 0.0758,
+        "support": 0.338,
+        "signal": "STRONG_SELL",
+        "rank": 77
+      },
+      "pivot_points": {
+        "PP": 1.35,
+        "R1": 1.39,
+        "R2": 1.42,
+        "R3": 1.46,
+        "S1": 1.32,
+        "S2": 1.28,
+        "S3": 1.25,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": -3.12,
+        "distance_to_resistance_pct": -8.59
+      },
+      "prophet_forecast": null,
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "UNI",
+      "price": 8.50485,
+      "technical_analysis": {
+        "score": 0.2019,
+        "momentum": 0.0236,
+        "support": 0.3802,
+        "signal": "STRONG_SELL",
+        "rank": 78
+      },
+      "pivot_points": {
+        "PP": 8.66,
+        "R1": 10.77,
+        "R2": 12.19,
+        "R3": 14.3,
+        "S1": 7.25,
+        "S2": 5.13,
+        "S3": 3.72,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 14.91,
+        "distance_to_resistance_pct": -26.41
+      },
+      "prophet_forecast": {
+        "current_price": 8.4499,
+        "forecast_6h": 9.290006139301479,
+        "forecast_24h": 9.436158308106132,
+        "change_pct_6h": 9.94,
+        "change_pct_24h": 11.67,
+        "trend": "up",
+        "confidence": 0.959,
+        "confidence_interval_24h": [
+          9.023297344872255,
+          9.800022237213371
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "KAITO",
+      "price": 0.86544,
+      "technical_analysis": {
+        "score": 0.1995,
+        "momentum": 0.0689,
+        "support": 0.33,
+        "signal": "STRONG_SELL",
+        "rank": 80
+      },
+      "pivot_points": {
+        "PP": 0.9,
+        "R1": 0.92,
+        "R2": 0.94,
+        "R3": 0.96,
+        "S1": 0.88,
+        "S2": 0.86,
+        "S3": 0.84,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": -1.15,
+        "distance_to_resistance_pct": -5.75
+      },
+      "prophet_forecast": {
+        "current_price": 0.86698,
+        "forecast_6h": 0.8685185618636988,
+        "forecast_24h": 0.8821433271457583,
+        "change_pct_6h": 0.18,
+        "change_pct_24h": 1.75,
+        "trend": "up",
+        "confidence": 0.984,
+        "confidence_interval_24h": [
+          0.8678162795854739,
+          0.8959535457962312
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "BERA",
+      "price": 1.61845,
+      "technical_analysis": {
+        "score": 0.1988,
+        "momentum": 0.0411,
+        "support": 0.3565,
+        "signal": "STRONG_SELL",
+        "rank": 81
+      },
+      "pivot_points": {
+        "PP": 1.72,
+        "R1": 1.79,
+        "R2": 1.9,
+        "R3": 1.97,
+        "S1": 1.62,
+        "S2": 1.54,
+        "S3": 1.44,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -10.49
+      },
+      "prophet_forecast": {
+        "current_price": 1.6275,
+        "forecast_6h": 1.5822333462485705,
+        "forecast_24h": 1.5623409607260634,
+        "change_pct_6h": -2.78,
+        "change_pct_24h": -4.0,
+        "trend": "down",
+        "confidence": 0.983,
+        "confidence_interval_24h": [
+          1.5352272919620416,
+          1.588240839194831
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "SUPER",
+      "price": 0.31058,
+      "technical_analysis": {
+        "score": 0.1938,
+        "momentum": 0.0187,
+        "support": 0.3689,
+        "signal": "STRONG_SELL",
+        "rank": 82
+      },
+      "pivot_points": {
+        "PP": 0.32,
+        "R1": 0.33,
+        "R2": 0.34,
+        "R3": 0.35,
+        "S1": 0.32,
+        "S2": 0.31,
+        "S3": 0.3,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": -3.23,
+        "distance_to_resistance_pct": -6.45
+      },
+      "prophet_forecast": null,
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "XAI",
+      "price": 0.0227,
+      "technical_analysis": {
+        "score": 0.1923,
+        "momentum": 0.0171,
+        "support": 0.3675,
+        "signal": "STRONG_SELL",
+        "rank": 84
+      },
+      "pivot_points": {
+        "PP": 0.02,
+        "R1": 0.02,
+        "R2": 0.02,
+        "R3": 0.03,
+        "S1": 0.02,
+        "S2": 0.02,
+        "S3": 0.02,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": 0.0
+      },
+      "prophet_forecast": {
+        "current_price": 0.02272,
+        "forecast_6h": 0.022594988598898122,
+        "forecast_24h": 0.022601586751924464,
+        "change_pct_6h": -0.55,
+        "change_pct_24h": -0.52,
+        "trend": "neutral",
+        "confidence": 0.979,
+        "confidence_interval_24h": [
+          0.022115260286603697,
+          0.023083677818448858
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "CHILLGUY",
+      "price": 0.022398,
+      "technical_analysis": {
+        "score": 0.192,
+        "momentum": 0.0278,
+        "support": 0.3561,
+        "signal": "STRONG_SELL",
+        "rank": 85
+      },
+      "pivot_points": {
+        "PP": 0.02,
+        "R1": 0.02,
+        "R2": 0.03,
+        "R3": 0.03,
+        "S1": 0.02,
+        "S2": 0.02,
+        "S3": 0.02,
+        "current_zone": "bearish",
+        "signal": "short_opportunity",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": 0.0
+      },
+      "prophet_forecast": {
+        "current_price": 0.022364,
+        "forecast_6h": 0.022209487962472137,
+        "forecast_24h": 0.022644278139096648,
+        "change_pct_6h": -0.69,
+        "change_pct_24h": 1.25,
+        "trend": "up",
+        "confidence": 0.974,
+        "confidence_interval_24h": [
+          0.022047911009363926,
+          0.023238007005859863
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "JTO",
+      "price": 0.74674,
+      "technical_analysis": {
+        "score": 0.1876,
+        "momentum": 0.0134,
+        "support": 0.3618,
+        "signal": "STRONG_SELL",
+        "rank": 86
+      },
+      "pivot_points": {
+        "PP": 0.81,
+        "R1": 0.84,
+        "R2": 0.88,
+        "R3": 0.92,
+        "S1": 0.77,
+        "S2": 0.73,
+        "S3": 0.69,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": -2.67,
+        "distance_to_resistance_pct": -12.0
+      },
+      "prophet_forecast": {
+        "current_price": 0.75375,
+        "forecast_6h": 0.7512258260351612,
+        "forecast_24h": 0.7498056005670841,
+        "change_pct_6h": -0.33,
+        "change_pct_24h": -0.52,
+        "trend": "neutral",
+        "confidence": 0.974,
+        "confidence_interval_24h": [
+          0.7300388430648882,
+          0.7684035580877011
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "SAGA",
+      "price": 0.09697,
+      "technical_analysis": {
+        "score": 0.1861,
+        "momentum": 0.0176,
+        "support": 0.3546,
+        "signal": "STRONG_SELL",
+        "rank": 87
+      },
+      "pivot_points": {
+        "PP": 0.1,
+        "R1": 0.11,
+        "R2": 0.11,
+        "R3": 0.12,
+        "S1": 0.1,
+        "S2": 0.09,
+        "S3": 0.09,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -10.0
+      },
+      "prophet_forecast": {
+        "current_price": 0.09697,
+        "forecast_6h": 0.09764945997283311,
+        "forecast_24h": 0.0977428532731297,
+        "change_pct_6h": 0.7,
+        "change_pct_24h": 0.8,
+        "trend": "neutral",
+        "confidence": 0.975,
+        "confidence_interval_24h": [
+          0.09532564053230778,
+          0.10028313477678888
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "UMA",
+      "price": 1.0091,
+      "technical_analysis": {
+        "score": 0.1797,
+        "momentum": 0.0259,
+        "support": 0.3334,
+        "signal": "STRONG_SELL",
+        "rank": 88
+      },
+      "pivot_points": {
+        "PP": 1.05,
+        "R1": 1.07,
+        "R2": 1.1,
+        "R3": 1.12,
+        "S1": 1.02,
+        "S2": 1.0,
+        "S3": 0.97,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": -0.99,
+        "distance_to_resistance_pct": -5.94
+      },
+      "prophet_forecast": {
+        "current_price": 1.0091,
+        "forecast_6h": 1.0198787222196894,
+        "forecast_24h": 1.0681002711979577,
+        "change_pct_6h": 1.07,
+        "change_pct_24h": 5.85,
+        "trend": "up",
+        "confidence": 0.981,
+        "confidence_interval_24h": [
+          1.047840964198804,
+          1.0881332542949744
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "TNSR",
+      "price": 0.05105,
+      "technical_analysis": {
+        "score": 0.1729,
+        "momentum": 0.0171,
+        "support": 0.3287,
+        "signal": "STRONG_SELL",
+        "rank": 89
+      },
+      "pivot_points": {
+        "PP": 0.05,
+        "R1": 0.05,
+        "R2": 0.06,
+        "R3": 0.06,
+        "S1": 0.05,
+        "S2": 0.05,
+        "S3": 0.05,
+        "current_zone": "bearish",
+        "signal": "short_opportunity",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": 0.0
+      },
+      "prophet_forecast": {
+        "current_price": 0.05104,
+        "forecast_6h": 0.05104967878317127,
+        "forecast_24h": 0.051601838016049444,
+        "change_pct_6h": 0.02,
+        "change_pct_24h": 1.1,
+        "trend": "up",
+        "confidence": 0.982,
+        "confidence_interval_24h": [
+          0.05069615268770604,
+          0.052540621741679706
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "BIGTIME",
+      "price": 0.030495,
+      "technical_analysis": {
+        "score": 0.1724,
+        "momentum": 0.0166,
+        "support": 0.3282,
+        "signal": "STRONG_SELL",
+        "rank": 90
+      },
+      "pivot_points": {
+        "PP": 0.03,
+        "R1": 0.03,
+        "R2": 0.03,
+        "R3": 0.03,
+        "S1": 0.03,
+        "S2": 0.03,
+        "S3": 0.03,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": 0.0
+      },
+      "prophet_forecast": {
+        "current_price": 0.030549,
+        "forecast_6h": 0.031840488459705614,
+        "forecast_24h": 0.03432939759010282,
+        "change_pct_6h": 4.23,
+        "change_pct_24h": 12.37,
+        "trend": "up",
+        "confidence": 0.984,
+        "confidence_interval_24h": [
+          0.033770589831610374,
+          0.03486764677989512
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "BIO",
+      "price": 0.083754,
+      "technical_analysis": {
+        "score": 0.1625,
+        "momentum": 0.0025,
+        "support": 0.3224,
+        "signal": "STRONG_SELL",
+        "rank": 92
+      },
+      "pivot_points": {
+        "PP": 0.08,
+        "R1": 0.08,
+        "R2": 0.09,
+        "R3": 0.09,
+        "S1": 0.08,
+        "S2": 0.08,
+        "S3": 0.08,
+        "current_zone": "bullish",
+        "signal": "bullish_zone",
+        "distance_to_support_pct": 11.11,
+        "distance_to_resistance_pct": 11.11
+      },
+      "prophet_forecast": {
+        "current_price": 0.078605,
+        "forecast_6h": 0.08021984612398876,
+        "forecast_24h": 0.08337305249562954,
+        "change_pct_6h": 2.05,
+        "change_pct_24h": 6.07,
+        "trend": "up",
+        "confidence": 0.983,
+        "confidence_interval_24h": [
+          0.08186368892709855,
+          0.08477059662406472
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "TIA",
+      "price": 0.98742,
+      "technical_analysis": {
+        "score": 0.1622,
+        "momentum": 0.0134,
+        "support": 0.3111,
+        "signal": "STRONG_SELL",
+        "rank": 93
+      },
+      "pivot_points": {
+        "PP": 1.04,
+        "R1": 1.09,
+        "R2": 1.13,
+        "R3": 1.18,
+        "S1": 0.99,
+        "S2": 0.94,
+        "S3": 0.9,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -10.1
+      },
+      "prophet_forecast": null,
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "SCR",
+      "price": 0.15738,
+      "technical_analysis": {
+        "score": 0.1601,
+        "momentum": 0.0201,
+        "support": 0.3002,
+        "signal": "STRONG_SELL",
+        "rank": 94
+      },
+      "pivot_points": {
+        "PP": 0.17,
+        "R1": 0.18,
+        "R2": 0.2,
+        "R3": 0.21,
+        "S1": 0.16,
+        "S2": 0.15,
+        "S3": 0.13,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -12.5
+      },
+      "prophet_forecast": {
+        "current_price": 0.15798,
+        "forecast_6h": 0.1487106254287245,
+        "forecast_24h": 0.14444108597605432,
+        "change_pct_6h": -5.87,
+        "change_pct_24h": -8.57,
+        "trend": "down",
+        "confidence": 0.972,
+        "confidence_interval_24h": [
+          0.14054143160573182,
+          0.14859326742783105
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "INIT",
+      "price": 0.131925,
+      "technical_analysis": {
+        "score": 0.1568,
+        "momentum": 0.0165,
+        "support": 0.2972,
+        "signal": "STRONG_SELL",
+        "rank": 95
+      },
+      "pivot_points": {
+        "PP": 0.13,
+        "R1": 0.14,
+        "R2": 0.14,
+        "R3": 0.14,
+        "S1": 0.13,
+        "S2": 0.13,
+        "S3": 0.12,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -7.69
+      },
+      "prophet_forecast": {
+        "current_price": 0.1323,
+        "forecast_6h": 0.1320286000329203,
+        "forecast_24h": 0.13404878928123307,
+        "change_pct_6h": -0.21,
+        "change_pct_24h": 1.32,
+        "trend": "up",
+        "confidence": 0.977,
+        "confidence_interval_24h": [
+          0.1309698657205878,
+          0.13724350610177957
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "KAS",
+      "price": 0.051237,
+      "technical_analysis": {
+        "score": 0.1556,
+        "momentum": 0.0012,
+        "support": 0.31,
+        "signal": "STRONG_SELL",
+        "rank": 96
+      },
+      "pivot_points": {
+        "PP": 0.05,
+        "R1": 0.05,
+        "R2": 0.06,
+        "R3": 0.06,
+        "S1": 0.05,
+        "S2": 0.05,
+        "S3": 0.05,
+        "current_zone": "bearish",
+        "signal": "short_opportunity",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": 0.0
+      },
+      "prophet_forecast": {
+        "current_price": 0.051237,
+        "forecast_6h": 0.05260978982985452,
+        "forecast_24h": 0.05383262005555528,
+        "change_pct_6h": 2.68,
+        "change_pct_24h": 5.07,
+        "trend": "up",
+        "confidence": 0.973,
+        "confidence_interval_24h": [
+          0.05241433663023255,
+          0.0553167850012975
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "TON",
+      "price": 2.0783,
+      "technical_analysis": {
+        "score": 0.137,
+        "momentum": 0.0028,
+        "support": 0.2712,
+        "signal": "STRONG_SELL",
+        "rank": 97
+      },
+      "pivot_points": {
+        "PP": 2.13,
+        "R1": 2.17,
+        "R2": 2.19,
+        "R3": 2.22,
+        "S1": 2.11,
+        "S2": 2.07,
+        "S3": 2.05,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": -1.44,
+        "distance_to_resistance_pct": -4.33
+      },
+      "prophet_forecast": {
+        "current_price": 2.0808,
+        "forecast_6h": 2.1232257663535203,
+        "forecast_24h": 2.2449156791999196,
+        "change_pct_6h": 2.04,
+        "change_pct_24h": 7.89,
+        "trend": "up",
+        "confidence": 0.986,
+        "confidence_interval_24h": [
+          2.2129526313857673,
+          2.2769329543664365
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "REZ",
+      "price": 0.007809,
+      "technical_analysis": {
+        "score": 0.1249,
+        "momentum": 0.1252,
+        "support": 0.1246,
+        "signal": "STRONG_SELL",
+        "rank": 98
+      },
+      "pivot_points": {
+        "PP": 0.01,
+        "R1": 0.01,
+        "R2": 0.01,
+        "R3": 0.01,
+        "S1": 0.01,
+        "S2": 0.01,
+        "S3": 0.01,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": 0.0
+      },
+      "prophet_forecast": {
+        "current_price": 0.007842,
+        "forecast_6h": 0.007955922270033665,
+        "forecast_24h": 0.008043480480595881,
+        "change_pct_6h": 1.45,
+        "change_pct_24h": 2.57,
+        "trend": "up",
+        "confidence": 0.978,
+        "confidence_interval_24h": [
+          0.007868103727925855,
+          0.008218593475027899
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "ETHFI",
+      "price": 0.95952,
+      "technical_analysis": {
+        "score": 0.1225,
+        "momentum": 0.0373,
+        "support": 0.2076,
+        "signal": "STRONG_SELL",
+        "rank": 99
+      },
+      "pivot_points": {
+        "PP": 1.01,
+        "R1": 1.06,
+        "R2": 1.11,
+        "R3": 1.16,
+        "S1": 0.97,
+        "S2": 0.92,
+        "S3": 0.87,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": -1.04,
+        "distance_to_resistance_pct": -10.42
+      },
+      "prophet_forecast": {
+        "current_price": 0.96095,
+        "forecast_6h": 0.9861978498633227,
+        "forecast_24h": 1.0029242568538852,
+        "change_pct_6h": 2.63,
+        "change_pct_24h": 4.37,
+        "trend": "up",
+        "confidence": 0.98,
+        "confidence_interval_24h": [
+          0.9837235863800815,
+          1.0240160161982272
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "BLUR",
+      "price": 0.047166,
+      "technical_analysis": {
+        "score": 0.1154,
+        "momentum": 0.016,
+        "support": 0.2147,
+        "signal": "STRONG_SELL",
+        "rank": 100
+      },
+      "pivot_points": {
+        "PP": 0.05,
+        "R1": 0.05,
+        "R2": 0.05,
+        "R3": 0.05,
+        "S1": 0.05,
+        "S2": 0.05,
+        "S3": 0.04,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": 0.0
+      },
+      "prophet_forecast": {
+        "current_price": 0.047115,
+        "forecast_6h": 0.048433914300175934,
+        "forecast_24h": 0.05133146482075897,
+        "change_pct_6h": 2.8,
+        "change_pct_24h": 8.95,
+        "trend": "up",
+        "confidence": 0.984,
+        "confidence_interval_24h": [
+          0.05051455321660747,
+          0.05211997706735763
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "YGG",
+      "price": 0.11734,
+      "technical_analysis": {
+        "score": 0.1122,
+        "momentum": 0.0314,
+        "support": 0.193,
+        "signal": "STRONG_SELL",
+        "rank": 101
+      },
+      "pivot_points": {
+        "PP": 0.12,
+        "R1": 0.12,
+        "R2": 0.13,
+        "R3": 0.13,
+        "S1": 0.12,
+        "S2": 0.11,
+        "S3": 0.11,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": 0.0
+      },
+      "prophet_forecast": {
+        "current_price": 0.11788,
+        "forecast_6h": 0.11853152149481361,
+        "forecast_24h": 0.12051751414953564,
+        "change_pct_6h": 0.55,
+        "change_pct_24h": 2.24,
+        "trend": "up",
+        "confidence": 0.977,
+        "confidence_interval_24h": [
+          0.117862236237898,
+          0.12346237047018872
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "ACE",
+      "price": 0.287,
+      "technical_analysis": {
+        "score": 0.1073,
+        "momentum": 0.0244,
+        "support": 0.1903,
+        "signal": "STRONG_SELL",
+        "rank": 102
+      },
+      "pivot_points": {
+        "PP": 0.3,
+        "R1": 0.31,
+        "R2": 0.33,
+        "R3": 0.35,
+        "S1": 0.27,
+        "S2": 0.26,
+        "S3": 0.24,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 6.9,
+        "distance_to_resistance_pct": -6.9
+      },
+      "prophet_forecast": {
+        "current_price": 0.2854,
+        "forecast_6h": 0.2885311383963988,
+        "forecast_24h": 0.2897793528856692,
+        "change_pct_6h": 1.1,
+        "change_pct_24h": 1.53,
+        "trend": "up",
+        "confidence": 0.978,
+        "confidence_interval_24h": [
+          0.2830684824982225,
+          0.2956020471274846
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "CELO",
+      "price": 0.239675,
+      "technical_analysis": {
+        "score": 0.1046,
+        "momentum": 0.1491,
+        "support": 0.0601,
+        "signal": "STRONG_SELL",
+        "rank": 103
+      },
+      "pivot_points": {
+        "PP": 0.25,
+        "R1": 0.26,
+        "R2": 0.26,
+        "R3": 0.27,
+        "S1": 0.24,
+        "S2": 0.23,
+        "S3": 0.23,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -8.33
+      },
+      "prophet_forecast": {
+        "current_price": 0.2404,
+        "forecast_6h": 0.2438409157601524,
+        "forecast_24h": 0.2411348672032885,
+        "change_pct_6h": 1.43,
+        "change_pct_24h": 0.31,
+        "trend": "neutral",
+        "confidence": 0.98,
+        "confidence_interval_24h": [
+          0.23643289304208975,
+          0.246288334922581
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "IO",
+      "price": 0.31084,
+      "technical_analysis": {
+        "score": 0.0985,
+        "momentum": 0.013,
+        "support": 0.184,
+        "signal": "STRONG_SELL",
+        "rank": 105
+      },
+      "pivot_points": {
+        "PP": 0.33,
+        "R1": 0.34,
+        "R2": 0.35,
+        "R3": 0.36,
+        "S1": 0.32,
+        "S2": 0.3,
+        "S3": 0.29,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": -3.23,
+        "distance_to_resistance_pct": -9.68
+      },
+      "prophet_forecast": {
+        "current_price": 0.31053,
+        "forecast_6h": 0.3196275960725649,
+        "forecast_24h": 0.32385309386460265,
+        "change_pct_6h": 2.93,
+        "change_pct_24h": 4.29,
+        "trend": "up",
+        "confidence": 0.971,
+        "confidence_interval_24h": [
+          0.31476778459991117,
+          0.3338604675801507
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "W",
+      "price": 0.0642,
+      "technical_analysis": {
+        "score": 0.096,
+        "momentum": 0.0533,
+        "support": 0.1388,
+        "signal": "STRONG_SELL",
+        "rank": 108
+      },
+      "pivot_points": {
+        "PP": 0.07,
+        "R1": 0.07,
+        "R2": 0.07,
+        "R3": 0.07,
+        "S1": 0.06,
+        "S2": 0.06,
+        "S3": 0.06,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -16.67
+      },
+      "prophet_forecast": {
+        "current_price": 0.0644,
+        "forecast_6h": 0.06470222537735545,
+        "forecast_24h": 0.06642851102921869,
+        "change_pct_6h": 0.47,
+        "change_pct_24h": 3.15,
+        "trend": "up",
+        "confidence": 0.979,
+        "confidence_interval_24h": [
+          0.06507564539407955,
+          0.0678899126378949
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "MOVE",
+      "price": 0.061584,
+      "technical_analysis": {
+        "score": 0.0761,
+        "momentum": 0.0177,
+        "support": 0.1346,
+        "signal": "STRONG_SELL",
+        "rank": 109
+      },
+      "pivot_points": {
+        "PP": 0.06,
+        "R1": 0.07,
+        "R2": 0.07,
+        "R3": 0.07,
+        "S1": 0.06,
+        "S2": 0.06,
+        "S3": 0.06,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -16.67
+      },
+      "prophet_forecast": {
+        "current_price": 0.061666,
+        "forecast_6h": 0.06246945510413767,
+        "forecast_24h": 0.06274280824987534,
+        "change_pct_6h": 1.3,
+        "change_pct_24h": 1.75,
+        "trend": "up",
+        "confidence": 0.982,
+        "confidence_interval_24h": [
+          0.06163518527818322,
+          0.06388542759802891
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "USTC",
+      "price": 0.007301,
+      "technical_analysis": {
+        "score": 0.0755,
+        "momentum": 0.0375,
+        "support": 0.1134,
+        "signal": "STRONG_SELL",
+        "rank": 110
+      },
+      "pivot_points": {
+        "PP": 0.01,
+        "R1": 0.01,
+        "R2": 0.01,
+        "R3": 0.01,
+        "S1": 0.01,
+        "S2": 0.01,
+        "S3": 0.01,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": 0.0
+      },
+      "prophet_forecast": null,
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "SOL",
+      "price": 163.035,
+      "technical_analysis": {
+        "score": 0.0745,
+        "momentum": 0.0399,
+        "support": 0.1091,
+        "signal": "STRONG_SELL",
+        "rank": 111
+      },
+      "pivot_points": {
+        "PP": 167.04,
+        "R1": 170.64,
+        "R2": 174.07,
+        "R3": 177.67,
+        "S1": 163.61,
+        "S2": 160.01,
+        "S3": 156.58,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": -0.09,
+        "distance_to_resistance_pct": -4.39
+      },
+      "prophet_forecast": {
+        "current_price": 163.24,
+        "forecast_6h": 168.1555091502671,
+        "forecast_24h": 184.23204275340663,
+        "change_pct_6h": 3.01,
+        "change_pct_24h": 12.86,
+        "trend": "up",
+        "confidence": 0.986,
+        "confidence_interval_24h": [
+          181.72461623814493,
+          186.91787242392343
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "WCT",
+      "price": 0.124085,
+      "technical_analysis": {
+        "score": 0.0709,
+        "momentum": 0.0165,
+        "support": 0.1254,
+        "signal": "STRONG_SELL",
+        "rank": 112
+      },
+      "pivot_points": {
+        "PP": 0.13,
+        "R1": 0.13,
+        "R2": 0.13,
+        "R3": 0.14,
+        "S1": 0.12,
+        "S2": 0.12,
+        "S3": 0.12,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -8.33
+      },
+      "prophet_forecast": null,
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "BRETT",
+      "price": 0.022954,
+      "technical_analysis": {
+        "score": 0.0562,
+        "momentum": 0.0127,
+        "support": 0.0997,
+        "signal": "STRONG_SELL",
+        "rank": 113
+      },
+      "pivot_points": {
+        "PP": 0.02,
+        "R1": 0.03,
+        "R2": 0.03,
+        "R3": 0.03,
+        "S1": 0.02,
+        "S2": 0.02,
+        "S3": 0.02,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -50.0
+      },
+      "prophet_forecast": {
+        "current_price": 0.02317,
+        "forecast_6h": 0.02332389292104208,
+        "forecast_24h": 0.023790547083232458,
+        "change_pct_6h": 0.66,
+        "change_pct_24h": 2.68,
+        "trend": "up",
+        "confidence": 0.976,
+        "confidence_interval_24h": [
+          0.02321592865616312,
+          0.024344845896984078
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "BTC",
+      "price": 104338.5,
+      "technical_analysis": {
+        "score": 0.0528,
+        "momentum": 0.1057,
+        "support": 0.0,
+        "signal": "STRONG_SELL",
+        "rank": 114
+      },
+      "pivot_points": {
+        "PP": 105669.67,
+        "R1": 107048.33,
+        "R2": 108081.67,
+        "R3": 109460.33,
+        "S1": 104636.33,
+        "S2": 103257.67,
+        "S3": 102224.33,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": -0.15,
+        "distance_to_resistance_pct": -2.46
+      },
+      "prophet_forecast": {
+        "current_price": 104502.0,
+        "forecast_6h": 107094.98354820785,
+        "forecast_24h": 113977.49187228746,
+        "change_pct_6h": 2.48,
+        "change_pct_24h": 9.07,
+        "trend": "up",
+        "confidence": 0.99,
+        "confidence_interval_24h": [
+          112793.9914836382,
+          115099.2204672133
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "ME",
+      "price": 0.42244,
+      "technical_analysis": {
+        "score": 0.0498,
+        "momentum": 0.0087,
+        "support": 0.0908,
+        "signal": "STRONG_SELL",
+        "rank": 115
+      },
+      "pivot_points": {
+        "PP": 0.43,
+        "R1": 0.44,
+        "R2": 0.45,
+        "R3": 0.46,
+        "S1": 0.42,
+        "S2": 0.41,
+        "S3": 0.4,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -4.76
+      },
+      "prophet_forecast": {
+        "current_price": 0.42063,
+        "forecast_6h": 0.4349902623892639,
+        "forecast_24h": 0.468556447949843,
+        "change_pct_6h": 3.41,
+        "change_pct_24h": 11.39,
+        "trend": "up",
+        "confidence": 0.984,
+        "confidence_interval_24h": [
+          0.4607740463247419,
+          0.4762132883357388
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "COMP",
+      "price": 33.7205,
+      "technical_analysis": {
+        "score": 0.0456,
+        "momentum": 0.0188,
+        "support": 0.0724,
+        "signal": "STRONG_SELL",
+        "rank": 116
+      },
+      "pivot_points": {
+        "PP": 35.06,
+        "R1": 36.31,
+        "R2": 37.23,
+        "R3": 38.49,
+        "S1": 34.14,
+        "S2": 32.88,
+        "S3": 31.96,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": -0.83,
+        "distance_to_resistance_pct": -7.24
+      },
+      "prophet_forecast": {
+        "current_price": 33.738,
+        "forecast_6h": 33.718327802334095,
+        "forecast_24h": 33.83495494301122,
+        "change_pct_6h": -0.06,
+        "change_pct_24h": 0.29,
+        "trend": "neutral",
+        "confidence": 0.984,
+        "confidence_interval_24h": [
+          33.299247343009135,
+          34.357643993139746
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "PYTH",
+      "price": 0.104055,
+      "technical_analysis": {
+        "score": 0.0421,
+        "momentum": 0.0158,
+        "support": 0.0683,
+        "signal": "STRONG_SELL",
+        "rank": 117
+      },
+      "pivot_points": {
+        "PP": 0.11,
+        "R1": 0.11,
+        "R2": 0.12,
+        "R3": 0.12,
+        "S1": 0.11,
+        "S2": 0.1,
+        "S3": 0.1,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": -10.0,
+        "distance_to_resistance_pct": -10.0
+      },
+      "prophet_forecast": {
+        "current_price": 0.10446,
+        "forecast_6h": 0.10631260905387635,
+        "forecast_24h": 0.1073490152076029,
+        "change_pct_6h": 1.77,
+        "change_pct_24h": 2.77,
+        "trend": "up",
+        "confidence": 0.975,
+        "confidence_interval_24h": [
+          0.10468261390749711,
+          0.11007595552197677
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "TST",
+      "price": 0.018224,
+      "technical_analysis": {
+        "score": 0.035,
+        "momentum": 0.0565,
+        "support": 0.0135,
+        "signal": "STRONG_SELL",
+        "rank": 118
+      },
+      "pivot_points": {
+        "PP": 0.02,
+        "R1": 0.02,
+        "R2": 0.02,
+        "R3": 0.02,
+        "S1": 0.02,
+        "S2": 0.02,
+        "S3": 0.02,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": 0.0
+      },
+      "prophet_forecast": null,
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "OP",
+      "price": 0.42513,
+      "technical_analysis": {
+        "score": 0.0299,
+        "momentum": 0.0192,
+        "support": 0.0405,
+        "signal": "STRONG_SELL",
+        "rank": 120
+      },
+      "pivot_points": {
+        "PP": 0.44,
+        "R1": 0.46,
+        "R2": 0.47,
+        "R3": 0.48,
+        "S1": 0.43,
+        "S2": 0.41,
+        "S3": 0.4,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -6.98
+      },
+      "prophet_forecast": {
+        "current_price": 0.42332,
+        "forecast_6h": 0.42863778653429857,
+        "forecast_24h": 0.43998869239551197,
+        "change_pct_6h": 1.26,
+        "change_pct_24h": 3.94,
+        "trend": "up",
+        "confidence": 0.981,
+        "confidence_interval_24h": [
+          0.43134398644619654,
+          0.4480766207232652
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "VINE",
+      "price": 0.046561,
+      "technical_analysis": {
+        "score": 0.0187,
+        "momentum": 0.0284,
+        "support": 0.009,
+        "signal": "STRONG_SELL",
+        "rank": 121
+      },
+      "pivot_points": {
+        "PP": 0.05,
+        "R1": 0.05,
+        "R2": 0.05,
+        "R3": 0.05,
+        "S1": 0.04,
+        "S2": 0.04,
+        "S3": 0.04,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 20.0,
+        "distance_to_resistance_pct": 0.0
+      },
+      "prophet_forecast": null,
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "JUP",
+      "price": 0.35108,
+      "technical_analysis": {
+        "score": 0.0154,
+        "momentum": 0.0026,
+        "support": 0.0282,
+        "signal": "STRONG_SELL",
+        "rank": 122
+      },
+      "pivot_points": {
+        "PP": 0.36,
+        "R1": 0.37,
+        "R2": 0.38,
+        "R3": 0.4,
+        "S1": 0.35,
+        "S2": 0.34,
+        "S3": 0.33,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -5.71
+      },
+      "prophet_forecast": {
+        "current_price": 0.3503,
+        "forecast_6h": 0.35215767137472,
+        "forecast_24h": 0.3560780417196237,
+        "change_pct_6h": 0.53,
+        "change_pct_24h": 1.65,
+        "trend": "up",
+        "confidence": 0.982,
+        "confidence_interval_24h": [
+          0.3498147517679073,
+          0.36282787631736935
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "PROMPT",
+      "price": 0.091445,
+      "technical_analysis": {
+        "score": 0.0152,
+        "momentum": 0.0304,
+        "support": 0.0,
+        "signal": "STRONG_SELL",
+        "rank": 123
+      },
+      "pivot_points": {
+        "PP": 0.08,
+        "R1": 0.09,
+        "R2": 0.1,
+        "R3": 0.1,
+        "S1": 0.08,
+        "S2": 0.07,
+        "S3": 0.06,
+        "current_zone": "bullish",
+        "signal": "short_opportunity",
+        "distance_to_support_pct": 11.11,
+        "distance_to_resistance_pct": 0.0
+      },
+      "prophet_forecast": {
+        "current_price": 0.088748,
+        "forecast_6h": 0.08899556267136362,
+        "forecast_24h": 0.08592595928889621,
+        "change_pct_6h": 0.28,
+        "change_pct_24h": -3.18,
+        "trend": "down",
+        "confidence": 0.942,
+        "confidence_interval_24h": [
+          0.08093618631956856,
+          0.09092145673049867
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "POPCAT",
+      "price": 0.144435,
+      "technical_analysis": {
+        "score": 0.0109,
+        "momentum": 0.0218,
+        "support": 0.0,
+        "signal": "STRONG_SELL",
+        "rank": 124
+      },
+      "pivot_points": {
+        "PP": 0.15,
+        "R1": 0.15,
+        "R2": 0.16,
+        "R3": 0.17,
+        "S1": 0.14,
+        "S2": 0.14,
+        "S3": 0.13,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -7.14
+      },
+      "prophet_forecast": {
+        "current_price": 0.14514,
+        "forecast_6h": 0.15185657849073086,
+        "forecast_24h": 0.16132825501994724,
+        "change_pct_6h": 4.63,
+        "change_pct_24h": 11.15,
+        "trend": "up",
+        "confidence": 0.979,
+        "confidence_interval_24h": [
+          0.15787895896376936,
+          0.16468982485909867
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "CFX",
+      "price": 0.097968,
+      "technical_analysis": {
+        "score": 0.0107,
+        "momentum": 0.0196,
+        "support": 0.0019,
+        "signal": "STRONG_SELL",
+        "rank": 125
+      },
+      "pivot_points": {
+        "PP": 0.1,
+        "R1": 0.11,
+        "R2": 0.11,
+        "R3": 0.11,
+        "S1": 0.1,
+        "S2": 0.09,
+        "S3": 0.09,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -10.0
+      },
+      "prophet_forecast": {
+        "current_price": 0.097555,
+        "forecast_6h": 0.09866676623616377,
+        "forecast_24h": 0.1008356469878314,
+        "change_pct_6h": 1.14,
+        "change_pct_24h": 3.36,
+        "trend": "up",
+        "confidence": 0.977,
+        "confidence_interval_24h": [
+          0.09853717025766154,
+          0.10320716827228575
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "WIF",
+      "price": 0.481075,
+      "technical_analysis": {
+        "score": 0.0095,
+        "momentum": 0.0104,
+        "support": 0.0085,
+        "signal": "STRONG_SELL",
+        "rank": 126
+      },
+      "pivot_points": {
+        "PP": 0.49,
+        "R1": 0.51,
+        "R2": 0.53,
+        "R3": 0.54,
+        "S1": 0.48,
+        "S2": 0.46,
+        "S3": 0.45,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -6.25
+      },
+      "prophet_forecast": null,
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "SAND",
+      "price": 0.2027,
+      "technical_analysis": {
+        "score": 0.0072,
+        "momentum": 0.014,
+        "support": 0.0004,
+        "signal": "STRONG_SELL",
+        "rank": 127
+      },
+      "pivot_points": {
+        "PP": 0.21,
+        "R1": 0.22,
+        "R2": 0.22,
+        "R3": 0.23,
+        "S1": 0.2,
+        "S2": 0.2,
+        "S3": 0.19,
+        "current_zone": "bearish",
+        "signal": "bearish_zone",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -10.0
+      },
+      "prophet_forecast": {
+        "current_price": 0.20269,
+        "forecast_6h": 0.20586024012221005,
+        "forecast_24h": 0.21003905376095264,
+        "change_pct_6h": 1.56,
+        "change_pct_24h": 3.63,
+        "trend": "up",
+        "confidence": 0.982,
+        "confidence_interval_24h": [
+          0.20626662201344867,
+          0.21397790306098857
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "PENDLE",
+      "price": 2.7882,
+      "technical_analysis": {
+        "score": 0.0032,
+        "momentum": 0.0063,
+        "support": 0.0,
+        "signal": "STRONG_SELL",
+        "rank": 129
+      },
+      "pivot_points": {
+        "PP": 2.89,
+        "R1": 3.0,
+        "R2": 3.09,
+        "R3": 3.2,
+        "S1": 2.8,
+        "S2": 2.69,
+        "S3": 2.6,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": -0.36,
+        "distance_to_resistance_pct": -7.53
+      },
+      "prophet_forecast": {
+        "current_price": 2.7922,
+        "forecast_6h": 2.815005099450309,
+        "forecast_24h": 2.854808808991116,
+        "change_pct_6h": 0.82,
+        "change_pct_24h": 2.24,
+        "trend": "up",
+        "confidence": 0.982,
+        "confidence_interval_24h": [
+          2.8050716067562624,
+          2.9054487721184374
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "ONDO",
+      "price": 0.66851,
+      "technical_analysis": {
+        "score": 0.0009,
+        "momentum": 0.0019,
+        "support": 0.0,
+        "signal": "STRONG_SELL",
+        "rank": 130
+      },
+      "pivot_points": {
+        "PP": 0.69,
+        "R1": 0.71,
+        "R2": 0.72,
+        "R3": 0.74,
+        "S1": 0.67,
+        "S2": 0.65,
+        "S3": 0.64,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -5.97
+      },
+      "prophet_forecast": {
+        "current_price": 0.67051,
+        "forecast_6h": 0.6729382041527848,
+        "forecast_24h": 0.6885314398953889,
+        "change_pct_6h": 0.36,
+        "change_pct_24h": 2.69,
+        "trend": "up",
+        "confidence": 0.984,
+        "confidence_interval_24h": [
+          0.6768726363198379,
+          0.6991671568274089
+        ]
+      },
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    }
+  ],
+  "global_indicators": {
+    "sentiment": {
+      "value": 31,
+      "label": "Fear",
+      "signal": "neutral",
+      "last_updated": "2025-11-11T13:59:14.214609"
+    },
+    "whale_alerts": [
+      {
+        "symbol": "usdt",
+        "amount_usd": 10488554.0,
+        "transaction_type": "transfer",
+        "from_address": "unknown",
+        "to_address": "unknown",
+        "timestamp": "2025-11-11T13:58:42",
+        "signal": "neutral"
+      }
+    ],
+    "news": []
+  },
+  "portfolio": {
+    "total_assets": 1178.64655,
+    "available_cash": 0.0,
+    "positions_value": 0.0,
+    "unrealized_pnl": 0.0,
+    "positions": [],
+    "strategy_weights": {
+      "prophet": 0.54,
+      "pivot_points": 0.78,
+      "technical_analysis": 0.7,
+      "whale_alerts": 0.43,
+      "sentiment": 0.28,
+      "news": 0.19
+    }
+  }
+}

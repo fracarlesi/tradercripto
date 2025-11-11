@@ -1,0 +1,222 @@
+{
+  "metadata": {
+    "timestamp": "2025-11-11T12:55:49.845865",
+    "version": "2.0.0",
+    "symbols_analyzed": 5,
+    "cycle_duration_ms": 0
+  },
+  "symbols": [
+    {
+      "symbol": "BTC",
+      "price": 104457.5,
+      "technical_analysis": {
+        "score": 0.5528,
+        "momentum": 0.1057,
+        "support": 1.0,
+        "signal": "HOLD",
+        "rank": 1
+      },
+      "pivot_points": {
+        "PP": 105669.67,
+        "R1": 107048.33,
+        "R2": 108081.67,
+        "R3": 109460.33,
+        "S1": 104636.33,
+        "S2": 103257.67,
+        "S3": 102224.33,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": -0.17,
+        "distance_to_resistance_pct": -2.48
+      },
+      "prophet_forecast": null,
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "ETH",
+      "price": 3555.85,
+      "technical_analysis": {
+        "score": 0.2196,
+        "momentum": 0.0576,
+        "support": 0.3816,
+        "signal": "STRONG_SELL",
+        "rank": 2
+      },
+      "pivot_points": {
+        "PP": 3578.4,
+        "R1": 3648.5,
+        "R2": 3728.9,
+        "R3": 3799.0,
+        "S1": 3498.0,
+        "S2": 3427.9,
+        "S3": 3347.5,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 1.63,
+        "distance_to_resistance_pct": -2.61
+      },
+      "prophet_forecast": null,
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "SOL",
+      "price": 163.345,
+      "technical_analysis": {
+        "score": 0.0705,
+        "momentum": 0.0399,
+        "support": 0.101,
+        "signal": "STRONG_SELL",
+        "rank": 3
+      },
+      "pivot_points": {
+        "PP": 167.04,
+        "R1": 170.64,
+        "R2": 174.07,
+        "R3": 177.67,
+        "S1": 163.61,
+        "S2": 160.01,
+        "S3": 156.58,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": -0.17,
+        "distance_to_resistance_pct": -4.47
+      },
+      "prophet_forecast": null,
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "AVAX",
+      "price": 17.7495,
+      "technical_analysis": {
+        "score": 0.0673,
+        "momentum": 0.0192,
+        "support": 0.1154,
+        "signal": "STRONG_SELL",
+        "rank": 4
+      },
+      "pivot_points": {
+        "PP": 18.05,
+        "R1": 18.47,
+        "R2": 18.77,
+        "R3": 19.18,
+        "S1": 17.75,
+        "S2": 17.34,
+        "S3": 17.04,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -4.06
+      },
+      "prophet_forecast": null,
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    },
+    {
+      "symbol": "ARB",
+      "price": 0.2909,
+      "technical_analysis": {
+        "score": 0.0533,
+        "momentum": 0.0078,
+        "support": 0.0988,
+        "signal": "STRONG_SELL",
+        "rank": 5
+      },
+      "pivot_points": {
+        "PP": 0.3,
+        "R1": 0.31,
+        "R2": 0.32,
+        "R3": 0.34,
+        "S1": 0.29,
+        "S2": 0.28,
+        "S3": 0.27,
+        "current_zone": "bearish",
+        "signal": "long_opportunity",
+        "distance_to_support_pct": 0.0,
+        "distance_to_resistance_pct": -6.9
+      },
+      "prophet_forecast": null,
+      "market_data": {
+        "volume_24h": null,
+        "market_cap": null,
+        "rank_by_market_cap": null
+      }
+    }
+  ],
+  "global_indicators": {
+    "sentiment": {
+      "value": 31,
+      "label": "Fear",
+      "signal": "neutral",
+      "last_updated": "2025-11-11T12:55:48.607039"
+    },
+    "whale_alerts": [
+      {
+        "symbol": "btc",
+        "amount_usd": 48462184.0,
+        "transaction_type": "transfer",
+        "from_address": "Bybit",
+        "to_address": "Bybit",
+        "timestamp": "2025-11-11T12:51:09",
+        "signal": "neutral"
+      },
+      {
+        "symbol": "btc",
+        "amount_usd": 31855896.0,
+        "transaction_type": "transfer",
+        "from_address": "unknown",
+        "to_address": "unknown",
+        "timestamp": "2025-11-11T12:51:09",
+        "signal": "neutral"
+      },
+      {
+        "symbol": "btc",
+        "amount_usd": 13475588.0,
+        "transaction_type": "transfer",
+        "from_address": "unknown",
+        "to_address": "unknown",
+        "timestamp": "2025-11-11T12:51:09",
+        "signal": "neutral"
+      },
+      {
+        "symbol": "btc",
+        "amount_usd": 105846780.0,
+        "transaction_type": "transfer",
+        "from_address": "unknown",
+        "to_address": "unknown",
+        "timestamp": "2025-11-11T12:51:09",
+        "signal": "neutral"
+      }
+    ],
+    "news": []
+  },
+  "portfolio": {
+    "total_assets": 1178.64655,
+    "available_cash": 0.0,
+    "positions_value": 0.0,
+    "unrealized_pnl": 0.0,
+    "positions": [],
+    "strategy_weights": {
+      "prophet": 0.54,
+      "pivot_points": 0.78,
+      "technical_analysis": 0.7,
+      "whale_alerts": 0.43,
+      "sentiment": 0.28,
+      "news": 0.19
+    }
+  }
+}

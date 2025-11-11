@@ -749,23 +749,23 @@ async def check_stop_loss_async(stop_loss_threshold: float = -0.05) -> None:
         logger.error(f"Stop-loss check failed: {e}", exc_info=True)
 
 
-async def check_take_profit_async(take_profit_threshold: float = 0.05) -> None:
+async def check_take_profit_async(take_profit_threshold: float = 0.10) -> None:
     """Check all open positions and close if profit exceeds threshold (async).
 
     This function runs every 30 seconds to lock in profits quickly.
-    Aggressive approach: closes position if unrealized profit > 5%.
+    Balanced approach: closes position if unrealized profit > 10%.
 
     Args:
-        take_profit_threshold: Profit threshold as positive decimal (default: 0.05 = +5%)
+        take_profit_threshold: Profit threshold as positive decimal (default: 0.10 = +10%)
 
     Returns:
         None
 
     Example:
         Position value: $100
-        Unrealized P&L: +$6
-        P&L %: +6%
-        Action: Close position (exceeds +5% threshold)
+        Unrealized P&L: +$11
+        P&L %: +11%
+        Action: Close position (exceeds +10% threshold)
     """
     try:
         # Fetch current positions from Hyperliquid
