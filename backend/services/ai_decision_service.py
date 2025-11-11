@@ -1092,6 +1092,9 @@ CRITICAL INVESTMENT PRINCIPLES:
             f"AI prompt generated: ~{input_tokens} input tokens (full news preserved for quality)"
         )
 
+        # Log complete prompt for TOON format verification (user can inspect what LLM receives)
+        logger.info(f"=== COMPLETE AI PROMPT (TOON FORMAT) ===\n{prompt}\n=== END PROMPT ===")
+
         headers = {"Content-Type": "application/json", "Authorization": f"Bearer {account.api_key}"}
 
         # Use OpenAI-compatible chat completions format
