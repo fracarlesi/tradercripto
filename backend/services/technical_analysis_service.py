@@ -290,6 +290,95 @@ def _empty_technical_factors() -> dict[str, Any]:
     }
 
 
+def get_technical_analysis_structured(symbols: list[str]) -> dict[str, dict]:
+    """
+    Calculate technical analysis and return structured dict for JSON builder.
+
+    This is the NEW API that returns data in the format expected by
+    MarketDataBuilder for the orchestrator system.
+
+    Args:
+        symbols: List of symbols to analyze
+
+    Returns:
+        Dictionary mapping symbol to technical analysis data:
+        {
+            "BTC": {
+                "score": 0.75,
+                "momentum": 0.72,
+                "support": 0.78,
+                "signal": "BUY",
+                "rank": 1
+            },
+            "ETH": {
+                "score": 0.68,
+                "momentum": 0.65,
+                "support": 0.71,
+                "signal": "BUY",
+                "rank": 2
+            },
+            ...
+        }
+
+    Note:
+        - Only symbols with valid data (70+ days history) are included
+        - Symbols are ranked by combined score (best = rank 1)
+        - Signal is determined by score: >0.7=STRONG_BUY, >0.6=BUY, etc.
+
+    Example:
+        >>> technical = get_technical_analysis_structured(["BTC", "ETH", "SOL"])
+        >>> btc_score = technical["BTC"]["score"]
+        >>> btc_signal = technical["BTC"]["signal"]
+    """
+    logger.info(f"[STRUCTURED API] Calculating technical analysis for {len(symbols)} symbols")
+
+    # Use existing analysis function
+    raw_result = calculate_technical_factors(symbols)
+
+    # Convert to structured format
+    structured = {}
+
+    for idx, rec in enumerate(raw_result.get("recommendations", []), start=1):
+        symbol = rec["symbol"]
+        score = rec["score"]
+
+        # Determine signal based on score
+        if score >= 0.7:
+            signal = "STRONG_BUY"
+        elif score >= 0.6:
+            signal = "BUY"
+        elif score >= 0.4:
+            signal = "HOLD"
+        elif score >= 0.3:
+            signal = "SELL"
+        else:
+            signal = "STRONG_SELL"
+
+        structured[symbol] = {
+            "score": round(score, 4),
+            "momentum": round(rec["momentum"], 4),
+            "support": round(rec["support"], 4),
+            "signal": signal,
+            "rank": idx
+        }
+
+    logger.info(
+        f"[STRUCTURED API] Completed: {len(structured)} symbols with technical data"
+    )
+
+    # Log top 3 for debugging
+    if structured:
+        top_3 = sorted(structured.items(), key=lambda x: x[1]["rank"])[:3]
+        logger.info("[STRUCTURED API] Top 3 signals:")
+        for symbol, data in top_3:
+            logger.info(
+                f"  {data['rank']}. {symbol}: {data['signal']} "
+                f"(score={data['score']:.3f})"
+            )
+
+    return structured
+
+
 def format_technical_analysis_for_ai(technical_factors: dict[str, Any]) -> str:
     """
     Format technical analysis results for AI prompt.

@@ -54,7 +54,7 @@ class NewsFeedCache:
             f"NewsFeedCache initialized with TTL={ttl_seconds}s ({ttl_seconds / 60:.1f} minutes)"
         )
 
-    def get_news(self, fetch_func: Callable[..., str], max_chars: int = 4000) -> str:
+    def get_news(self, fetch_func: Callable[[], str]) -> str:
         """
         Get news from cache or fetch fresh data if cache is expired.
 
@@ -63,8 +63,9 @@ class NewsFeedCache:
         calls fetch_func to get fresh data (cache miss).
 
         Args:
-            fetch_func: Function to call when cache miss occurs
-            max_chars: Maximum characters to pass to fetch_func (default: 4000)
+            fetch_func: Function to call when cache miss occurs (no arguments)
+                       Note: Configure max_chars in the lambda when calling,
+                       e.g., lambda: fetch_latest_news(max_chars=5000)
 
         Returns:
             News content as string (cached or fresh)
@@ -94,9 +95,8 @@ class NewsFeedCache:
 
             # Fetch fresh news
             try:
-                fresh_news = (
-                    fetch_func(max_chars=max_chars) if callable(fetch_func) else fetch_func()
-                )
+                # fetch_func is already configured with max_chars (via lambda in news_feed.py)
+                fresh_news = fetch_func() if callable(fetch_func) else fetch_func
 
                 # Update cache
                 self._cached_news = fresh_news

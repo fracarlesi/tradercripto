@@ -296,11 +296,11 @@ async def get_asset_curve_by_timeframe(timeframe: str = "1d", db: Session = Depe
     """Get asset curve data for all accounts within a specified timeframe (20 data points)
 
     Args:
-        timeframe: Time period, options: 5m, 1h, 1d
+        timeframe: Time period, options: 5m, 1h, 1d, all
     """
     try:
         # Validate timeframe
-        valid_timeframes = ["5m", "1h", "1d"]
+        valid_timeframes = ["5m", "1h", "1d", "all"]
         if timeframe not in valid_timeframes:
             raise HTTPException(
                 status_code=400,
@@ -308,7 +308,7 @@ async def get_asset_curve_by_timeframe(timeframe: str = "1d", db: Session = Depe
             )
 
         # Map timeframe to period for kline data
-        timeframe_map = {"5m": "5m", "1h": "1h", "1d": "1d"}
+        timeframe_map = {"5m": "5m", "1h": "1h", "1d": "1d", "all": "1d"}
         period = timeframe_map[timeframe]
 
         # Get all active accounts

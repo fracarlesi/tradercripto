@@ -599,9 +599,15 @@ grep "portfolio_snapshot_capture\|hyperliquid_sync\|price_cache_cleanup" logs.js
 - `portfolio_snapshot_capture`: Every 5 minutes
 - `auto_trading`: Every 3 minutes (180 seconds)
 
-## 📂 QUICK REFERENCE - Critical File Locations
+## 📂 QUICK REFERENCE - Critical Files & Documentation
 
-**When debugging, start with these files (ranked by importance):**
+**When debugging, start with these resources:**
+
+### 📚 Documentation (START HERE)
+- **[docs/README.md](docs/README.md)** - Complete documentation index
+- **[docs/architecture/SYSTEM_ORCHESTRATION.md](docs/architecture/SYSTEM_ORCHESTRATION.md)** - How the system works operationally
+- **[docs/operations/SCHEDULED_JOBS.md](docs/operations/SCHEDULED_JOBS.md)** - All background jobs, intervals, dependencies
+- **[docs/operations/MONITORING.md](docs/operations/MONITORING.md)** - Debug workflows, troubleshooting
 
 ### 🔴 Core Trading Logic (MOST CRITICAL)
 - `backend/services/trading/hyperliquid_trading_service.py:20-90` - Hyperliquid SDK wrapper (async)

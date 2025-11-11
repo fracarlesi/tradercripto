@@ -1,6 +1,5 @@
 """Application settings using Pydantic Settings for environment validation."""
 
-from decimal import Decimal
 from typing import Literal
 
 from pydantic import Field, field_validator
@@ -31,12 +30,6 @@ class Settings(BaseSettings):
     hyperliquid_wallet_address: str = Field(
         ...,
         description="Hyperliquid wallet address",
-    )
-
-    # Trading Limits
-    max_capital_usd: Decimal = Field(
-        default=Decimal("52.0"),
-        description="Maximum capital in USD for trading operations",
     )
 
     # DeepSeek AI Configuration

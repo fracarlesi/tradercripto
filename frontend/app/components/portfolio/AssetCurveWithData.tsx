@@ -42,14 +42,43 @@ interface AssetCurveProps {
   wsRef?: React.MutableRefObject<WebSocket | null>
 }
 
-type Timeframe = '5m' | '1h' | '1d'
+type Timeframe = '5m' | '1h' | '1d' | 'all'
 
 export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps) {
   const [timeframe, setTimeframe] = useState<Timeframe>('1h')
-  const [data, setData] = useState<AssetCurveData[]>(initialData || [])
+  const [allData, setAllData] = useState<AssetCurveData[]>(initialData || []) // All data from backend
+  const [data, setData] = useState<AssetCurveData[]>(initialData || []) // Filtered data for display
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [isInitialized, setIsInitialized] = useState(false)
+
+  // Filter data based on timeframe (client-side filtering)
+  const filterDataByTimeframe = (dataToFilter: AssetCurveData[], tf: Timeframe): AssetCurveData[] => {
+    if (!dataToFilter || dataToFilter.length === 0) return []
+
+    // Return all data without filtering for 'all' timeframe
+    if (tf === 'all') {
+      return dataToFilter
+    }
+
+    const now = Date.now()
+    let cutoffTime: number
+
+    if (tf === '5m') {
+      cutoffTime = now - (5 * 60 * 1000) // 5 minutes ago
+    } else if (tf === '1h') {
+      cutoffTime = now - (60 * 60 * 1000) // 1 hour ago
+    } else if (tf === '1d') {
+      cutoffTime = now - (24 * 60 * 60 * 1000) // 1 day ago
+    } else {
+      return dataToFilter
+    }
+
+    return dataToFilter.filter(item => {
+      const itemTime = item.timestamp ? item.timestamp * 1000 : new Date(item.datetime_str || item.date || 0).getTime()
+      return itemTime >= cutoffTime
+    })
+  }
 
   // Listen for WebSocket asset curve updates
   useEffect(() => {
@@ -58,15 +87,26 @@ export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps
     const handleMessage = (event: MessageEvent) => {
       try {
         const msg = JSON.parse(event.data)
-        if (msg.type === 'asset_curve_data' && msg.timeframe === timeframe) {
-          setData(msg.data || [])
+        if (msg.type === 'asset_curve_data') {
+          // Save all data from backend
+          setAllData(msg.data || [])
+          // Filter for current timeframe
+          setData(filterDataByTimeframe(msg.data || [], timeframe))
           setLoading(false)
           setError(null)
           setIsInitialized(true)
-        } else if (msg.type === 'asset_curve_update' && msg.timeframe === timeframe) {
-          // Real-time update for current timeframe
-          setData(msg.data || [])
+        } else if (msg.type === 'asset_curve_update') {
+          // Real-time update
+          setAllData(msg.data || [])
+          setData(filterDataByTimeframe(msg.data || [], timeframe))
           setIsInitialized(true)
+        } else if (msg.type === 'snapshot' && msg.all_asset_curves) {
+          // Initial snapshot data
+          if (!isInitialized) {
+            setAllData(msg.all_asset_curves || [])
+            setData(filterDataByTimeframe(msg.all_asset_curves || [], timeframe))
+            setIsInitialized(true)
+          }
         }
       } catch (err) {
         console.error('Failed to parse WebSocket message:', err)
@@ -74,11 +114,11 @@ export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps
     }
 
     wsRef.current.addEventListener('message', handleMessage)
-    
+
     return () => {
       wsRef.current?.removeEventListener('message', handleMessage)
     }
-  }, [wsRef, timeframe])
+  }, [wsRef, timeframe, isInitialized])
 
   // Request data when timeframe changes
   useEffect(() => {
@@ -104,6 +144,13 @@ export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps
     }
   }, []) // Empty dependency array - only run on mount
 
+  // Re-filter data when timeframe changes
+  useEffect(() => {
+    if (allData && allData.length > 0) {
+      setData(filterDataByTimeframe(allData, timeframe))
+    }
+  }, [timeframe, allData])
+
   const handleTimeframeChange = (value: string) => {
     setTimeframe(value as Timeframe)
   }
@@ -117,6 +164,7 @@ export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps
                 <TabsTrigger value="5m">5 Minutes</TabsTrigger>
                 <TabsTrigger value="1h">1 Hour</TabsTrigger>
                 <TabsTrigger value="1d">1 Day</TabsTrigger>
+                <TabsTrigger value="all">All Time</TabsTrigger>
               </TabsList>
             </Tabs>
           </div>
@@ -168,6 +216,11 @@ export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps
         month: 'short',
         day: 'numeric',
         hour: '2-digit'
+      })
+    } else if (timeframe === '1d' || timeframe === 'all') {
+      return d.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric'
       })
     } else {
       return d.toLocaleDateString('en-US', {
@@ -252,6 +305,7 @@ export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps
               <TabsTrigger value="5m">5 Minutes</TabsTrigger>
               <TabsTrigger value="1h">1 Hour</TabsTrigger>
               <TabsTrigger value="1d">1 Day</TabsTrigger>
+              <TabsTrigger value="all">All Time</TabsTrigger>
             </TabsList>
           </Tabs>
         </div>

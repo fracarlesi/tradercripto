@@ -84,6 +84,7 @@ class HyperliquidSyncService:
             "network",
             "rate limit",
             "too many requests",
+            "429",  # HTTP 429 Too Many Requests (rate limiting)
             "503",
             "502",
             "504",

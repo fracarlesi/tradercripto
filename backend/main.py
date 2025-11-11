@@ -142,13 +142,24 @@ async def lifespan(app: FastAPI):
         )
 
         # Add stop-loss check job (every 60 seconds) - Optimized to reduce API calls
-        from services.auto_trader import check_stop_loss_async  # , check_take_profit_async
+        from services.auto_trader import check_stop_loss_async, place_ai_driven_crypto_order  # , check_take_profit_async
 
         scheduler_service.add_sync_job(
             job_func=check_stop_loss_async,
             interval_seconds=60,
             job_id="stop_loss_check"
         )
+
+        # Add AI trading job (every 10 minutes) - Migrated from custom scheduler to APScheduler
+        # APScheduler runs each job in a separate thread, so long-running technical analysis
+        # (analyzing 220+ symbols) won't block other jobs from executing
+        # 10-minute interval prevents Hyperliquid API rate limiting (1200 weight/min limit)
+        scheduler_service.add_sync_job(
+            job_func=lambda: place_ai_driven_crypto_order(max_ratio=0.2),
+            interval_seconds=600,  # 10 minutes - Avoid rate limiting with 220 symbols
+            job_id="ai_crypto_trade"
+        )
+        logger.info("AI trading job scheduled (APScheduler, non-blocking, 10-minute interval)")
 
         # Take-profit disabled - let AI decide when to sell in profit
         # This allows AI to ride trends beyond +5% if momentum continues

@@ -1,0 +1,481 @@
+REPORT DETTAGLIATO DISPONIBILITÀ DATI STORICI
+================================================================================
+
+Data analisi: 2269396.551682125
+Totale simboli: 469
+
+SIMBOLI CON DATI SUFFICIENTI (≥70 candele):
+  ✅ @1: 71 candele
+  ✅ @10: 70 candele
+  ✅ @100: 71 candele
+  ✅ @101: 71 candele
+  ✅ @103: 71 candele
+  ✅ @104: 70 candele
+  ✅ @105: 71 candele
+  ✅ @107: 71 candele
+  ✅ @108: 70 candele
+  ✅ @11: 71 candele
+  ✅ @110: 70 candele
+  ✅ @111: 71 candele
+  ✅ @112: 71 candele
+  ✅ @115: 71 candele
+  ✅ @116: 70 candele
+  ✅ @117: 71 candele
+  ✅ @118: 70 candele
+  ✅ @119: 71 candele
+  ✅ @12: 71 candele
+  ✅ @120: 71 candele
+  ✅ @122: 71 candele
+  ✅ @123: 71 candele
+  ✅ @124: 71 candele
+  ✅ @125: 71 candele
+  ✅ @126: 70 candele
+  ✅ @127: 71 candele
+  ✅ @128: 70 candele
+  ✅ @129: 70 candele
+  ✅ @13: 71 candele
+  ✅ @131: 70 candele
+  ✅ @132: 71 candele
+  ✅ @134: 70 candele
+  ✅ @137: 70 candele
+  ✅ @138: 71 candele
+  ✅ @14: 71 candele
+  ✅ @142: 71 candele
+  ✅ @147: 71 candele
+  ✅ @150: 71 candele
+  ✅ @151: 71 candele
+  ✅ @152: 71 candele
+  ✅ @153: 71 candele
+  ✅ @156: 71 candele
+  ✅ @159: 71 candele
+  ✅ @16: 71 candele
+  ✅ @160: 71 candele
+  ✅ @162: 71 candele
+  ✅ @163: 70 candele
+  ✅ @164: 71 candele
+  ✅ @165: 71 candele
+  ✅ @166: 71 candele
+  ✅ @17: 71 candele
+  ✅ @170: 71 candele
+  ✅ @173: 70 candele
+  ✅ @174: 71 candele
+  ✅ @177: 70 candele
+  ✅ @178: 71 candele
+  ✅ @179: 71 candele
+  ✅ @18: 71 candele
+  ✅ @180: 71 candele
+  ✅ @182: 71 candele
+  ✅ @183: 71 candele
+  ✅ @184: 71 candele
+  ✅ @185: 71 candele
+  ✅ @188: 71 candele
+  ✅ @190: 71 candele
+  ✅ @191: 70 candele
+  ✅ @192: 71 candele
+  ✅ @193: 71 candele
+  ✅ @194: 71 candele
+  ✅ @195: 71 candele
+  ✅ @196: 71 candele
+  ✅ @198: 71 candele
+  ✅ @2: 70 candele
+  ✅ @20: 71 candele
+  ✅ @201: 71 candele
+  ✅ @205: 71 candele
+  ✅ @207: 71 candele
+  ✅ @209: 71 candele
+  ✅ @213: 71 candele
+  ✅ @214: 71 candele
+  ✅ @215: 71 candele
+  ✅ @217: 71 candele
+  ✅ @219: 71 candele
+  ✅ @23: 71 candele
+  ✅ @25: 71 candele
+  ✅ @26: 70 candele
+  ✅ @27: 71 candele
+  ✅ @28: 70 candele
+  ✅ @30: 71 candele
+  ✅ @32: 71 candele
+  ✅ @35: 71 candele
+  ✅ @37: 70 candele
+  ✅ @38: 71 candele
+  ✅ @39: 71 candele
+  ✅ @4: 71 candele
+  ✅ @40: 71 candele
+  ✅ @44: 70 candele
+  ✅ @51: 71 candele
+  ✅ @52: 70 candele
+  ✅ @55: 71 candele
+  ✅ @57: 71 candele
+  ✅ @58: 71 candele
+  ✅ @59: 71 candele
+  ✅ @6: 70 candele
+  ✅ @60: 71 candele
+  ✅ @62: 71 candele
+  ✅ @63: 71 candele
+  ✅ @64: 70 candele
+  ✅ @67: 71 candele
+  ✅ @70: 71 candele
+  ✅ @72: 71 candele
+  ✅ @73: 71 candele
+  ✅ @74: 71 candele
+  ✅ @79: 71 candele
+  ✅ @8: 71 candele
+  ✅ @80: 71 candele
+  ✅ @85: 71 candele
+  ✅ @86: 71 candele
+  ✅ @87: 71 candele
+  ✅ @88: 71 candele
+  ✅ @89: 70 candele
+  ✅ @91: 70 candele
+  ✅ @94: 71 candele
+  ✅ @96: 70 candele
+  ✅ @97: 71 candele
+  ✅ AAVE: 71 candele
+  ✅ ACE: 71 candele
+  ✅ ADA: 71 candele
+  ✅ AIXBT: 71 candele
+  ✅ ALGO: 71 candele
+  ✅ ALT: 71 candele
+  ✅ ANIME: 71 candele
+  ✅ APE: 71 candele
+  ✅ APT: 71 candele
+  ✅ AR: 71 candele
+  ✅ ARB: 71 candele
+  ✅ ARK: 71 candele
+  ✅ ATOM: 71 candele
+  ✅ AVAX: 71 candele
+  ✅ BABY: 71 candele
+  ✅ BANANA: 71 candele
+  ✅ BCH: 71 candele
+  ✅ BERA: 71 candele
+  ✅ BIGTIME: 71 candele
+  ✅ BIO: 71 candele
+  ✅ BLAST: 71 candele
+  ✅ BLUR: 71 candele
+  ✅ BNB: 71 candele
+  ✅ BOME: 71 candele
+  ✅ BRETT: 71 candele
+  ✅ BSV: 71 candele
+  ✅ BTC: 71 candele
+  ✅ CAKE: 71 candele
+  ✅ CELO: 71 candele
+  ✅ CFX: 71 candele
+  ✅ CHILLGUY: 71 candele
+  ✅ COMP: 71 candele
+  ✅ CRV: 71 candele
+  ✅ DOGE: 71 candele
+  ✅ DOOD: 71 candele
+  ✅ DOT: 71 candele
+  ✅ DYDX: 71 candele
+  ✅ DYM: 71 candele
+  ✅ EIGEN: 71 candele
+  ✅ ENA: 71 candele
+  ✅ ENS: 71 candele
+  ✅ ETC: 71 candele
+  ✅ ETH: 71 candele
+  ✅ ETHFI: 71 candele
+  ✅ FARTCOIN: 71 candele
+  ✅ FET: 71 candele
+  ✅ FIL: 71 candele
+  ✅ FTT: 71 candele
+  ✅ FXS: 71 candele
+  ✅ GALA: 71 candele
+  ✅ GAS: 71 candele
+  ✅ GMT: 71 candele
+  ✅ GMX: 71 candele
+  ✅ GOAT: 71 candele
+  ✅ GRASS: 71 candele
+  ✅ GRIFFAIN: 71 candele
+  ✅ HBAR: 71 candele
+  ✅ HEMI: 71 candele
+  ✅ HMSTR: 71 candele
+  ✅ HYPE: 71 candele
+  ✅ HYPER: 71 candele
+  ✅ ICP: 71 candele
+  ✅ IMX: 71 candele
+  ✅ INIT: 71 candele
+  ✅ INJ: 71 candele
+  ✅ IO: 71 candele
+  ✅ IOTA: 71 candele
+  ✅ IP: 71 candele
+  ✅ JTO: 71 candele
+  ✅ JUP: 71 candele
+  ✅ KAITO: 71 candele
+  ✅ KAS: 71 candele
+  ✅ LAYER: 71 candele
+  ✅ LDO: 71 candele
+  ✅ LINEA: 70 candele
+  ✅ LINK: 71 candele
+  ✅ LTC: 71 candele
+  ✅ MANTA: 71 candele
+  ✅ MAV: 71 candele
+  ✅ MAVIA: 71 candele
+  ✅ ME: 71 candele
+  ✅ MELANIA: 71 candele
+  ✅ MEME: 71 candele
+  ✅ MERL: 71 candele
+  ✅ MEW: 71 candele
+  ✅ MINA: 71 candele
+  ✅ MNT: 71 candele
+  ✅ MOODENG: 71 candele
+  ✅ MORPHO: 71 candele
+  ✅ MOVE: 71 candele
+  ✅ NEAR: 71 candele
+  ✅ NEO: 71 candele
+  ✅ NIL: 71 candele
+  ✅ NOT: 71 candele
+  ✅ NXPC: 71 candele
+  ✅ OM: 71 candele
+  ✅ ONDO: 71 candele
+  ✅ OP: 71 candele
+  ✅ ORDI: 71 candele
+  ✅ PAXG: 71 candele
+  ✅ PENDLE: 71 candele
+  ✅ PENGU: 71 candele
+  ✅ PEOPLE: 71 candele
+  ✅ PNUT: 71 candele
+  ✅ POL: 71 candele
+  ✅ POLYX: 71 candele
+  ✅ POPCAT: 71 candele
+  ✅ PROMPT: 71 candele
+  ✅ PROVE: 71 candele
+  ✅ PUMP: 71 candele
+  ✅ PURR: 71 candele
+  ✅ PURR/USDC: 71 candele
+  ✅ PYTH: 71 candele
+  ✅ RENDER: 71 candele
+  ✅ RESOLV: 71 candele
+  ✅ REZ: 71 candele
+  ✅ RSR: 71 candele
+  ✅ RUNE: 71 candele
+  ✅ S: 71 candele
+  ✅ SAGA: 71 candele
+  ✅ SAND: 71 candele
+  ✅ SCR: 71 candele
+  ✅ SEI: 71 candele
+  ✅ SNX: 71 candele
+  ✅ SOL: 71 candele
+  ✅ SOPH: 71 candele
+  ✅ SPX: 71 candele
+  ✅ STRK: 71 candele
+  ✅ STX: 71 candele
+  ✅ SUI: 71 candele
+  ✅ SUPER: 71 candele
+  ✅ SUSHI: 71 candele
+  ✅ SYRUP: 71 candele
+  ✅ TAO: 71 candele
+  ✅ TIA: 71 candele
+  ✅ TNSR: 71 candele
+  ✅ TON: 71 candele
+  ✅ TRB: 71 candele
+  ✅ TRUMP: 71 candele
+  ✅ TRX: 71 candele
+  ✅ TST: 71 candele
+  ✅ TURBO: 71 candele
+  ✅ UMA: 71 candele
+  ✅ UNI: 71 candele
+  ✅ USTC: 71 candele
+  ✅ USUAL: 71 candele
+  ✅ VINE: 71 candele
+  ✅ VIRTUAL: 71 candele
+  ✅ VVV: 71 candele
+  ✅ W: 71 candele
+  ✅ WCT: 71 candele
+  ✅ WIF: 71 candele
+  ✅ WLD: 71 candele
+  ✅ WLFI: 71 candele
+  ✅ XAI: 71 candele
+  ✅ XLM: 71 candele
+  ✅ XPL: 71 candele
+  ✅ XRP: 71 candele
+  ✅ YGG: 71 candele
+  ✅ YZY: 71 candele
+  ✅ ZEC: 71 candele
+  ✅ ZEN: 71 candele
+  ✅ ZEREBRO: 71 candele
+  ✅ ZETA: 71 candele
+  ✅ ZK: 71 candele
+  ✅ ZORA: 71 candele
+  ✅ ZRO: 71 candele
+
+SIMBOLI CON DATI INSUFFICIENTI (1-69 candele):
+  ⚠️  @114: 69 candele (mancano 1)
+  ⚠️  @143: 69 candele (mancano 1)
+  ⚠️  @155: 69 candele (mancano 1)
+  ⚠️  @157: 69 candele (mancano 1)
+  ⚠️  @199: 69 candele (mancano 1)
+  ⚠️  @29: 69 candele (mancano 1)
+  ⚠️  @3: 69 candele (mancano 1)
+  ⚠️  @36: 69 candele (mancano 1)
+  ⚠️  @75: 69 candele (mancano 1)
+  ⚠️  @78: 69 candele (mancano 1)
+  ⚠️  @106: 68 candele (mancano 2)
+  ⚠️  @135: 68 candele (mancano 2)
+  ⚠️  @5: 68 candele (mancano 2)
+  ⚠️  @53: 68 candele (mancano 2)
+  ⚠️  @56: 68 candele (mancano 2)
+  ⚠️  @77: 68 candele (mancano 2)
+  ⚠️  AI16Z: 68 candele (mancano 2)
+  ⚠️  @140: 67 candele (mancano 3)
+  ⚠️  @19: 67 candele (mancano 3)
+  ⚠️  @31: 67 candele (mancano 3)
+  ⚠️  @82: 67 candele (mancano 3)
+  ⚠️  @121: 66 candele (mancano 4)
+  ⚠️  @141: 66 candele (mancano 4)
+  ⚠️  @15: 66 candele (mancano 4)
+  ⚠️  @175: 66 candele (mancano 4)
+  ⚠️  @204: 66 candele (mancano 4)
+  ⚠️  @22: 66 candele (mancano 4)
+  ⚠️  @41: 66 candele (mancano 4)
+  ⚠️  @42: 66 candele (mancano 4)
+  ⚠️  @45: 66 candele (mancano 4)
+  ⚠️  @46: 66 candele (mancano 4)
+  ⚠️  @50: 66 candele (mancano 4)
+  ⚠️  @54: 66 candele (mancano 4)
+  ⚠️  @61: 66 candele (mancano 4)
+  ⚠️  @66: 66 candele (mancano 4)
+  ⚠️  @69: 66 candele (mancano 4)
+  ⚠️  @7: 66 candele (mancano 4)
+  ⚠️  @84: 66 candele (mancano 4)
+  ⚠️  @9: 66 candele (mancano 4)
+  ⚠️  @90: 66 candele (mancano 4)
+  ⚠️  @92: 66 candele (mancano 4)
+  ⚠️  @95: 66 candele (mancano 4)
+  ⚠️  @99: 66 candele (mancano 4)
+  ⚠️  @136: 65 candele (mancano 5)
+  ⚠️  @148: 65 candele (mancano 5)
+  ⚠️  @176: 65 candele (mancano 5)
+  ⚠️  @34: 65 candele (mancano 5)
+  ⚠️  @65: 65 candele (mancano 5)
+  ⚠️  @130: 64 candele (mancano 6)
+  ⚠️  @133: 64 candele (mancano 6)
+  ⚠️  @172: 64 candele (mancano 6)
+  ⚠️  @187: 64 candele (mancano 6)
+  ⚠️  @21: 64 candele (mancano 6)
+  ⚠️  @102: 63 candele (mancano 7)
+  ⚠️  @145: 63 candele (mancano 7)
+  ⚠️  @161: 62 candele (mancano 8)
+  ⚠️  @83: 62 candele (mancano 8)
+  ⚠️  AVNT: 62 candele (mancano 8)
+  ⚠️  SKY: 62 candele (mancano 8)
+  ⚠️  @49: 60 candele (mancano 10)
+  ⚠️  @47: 59 candele (mancano 11)
+  ⚠️  @113: 58 candele (mancano 12)
+  ⚠️  @139: 58 candele (mancano 12)
+  ⚠️  @208: 58 candele (mancano 12)
+  ⚠️  @223: 58 candele (mancano 12)
+  ⚠️  @43: 58 candele (mancano 12)
+  ⚠️  @48: 58 candele (mancano 12)
+  ⚠️  @76: 58 candele (mancano 12)
+  ⚠️  @93: 58 candele (mancano 12)
+  ⚠️  @202: 56 candele (mancano 14)
+  ⚠️  @225: 56 candele (mancano 14)
+  ⚠️  LAUNCHCOIN: 56 candele (mancano 14)
+  ⚠️  @226: 55 candele (mancano 15)
+  ⚠️  0G: 54 candele (mancano 16)
+  ⚠️  @24: 54 candele (mancano 16)
+  ⚠️  STBL: 54 candele (mancano 16)
+  ⚠️  @146: 53 candele (mancano 17)
+  ⚠️  @212: 53 candele (mancano 17)
+  ⚠️  ASTER: 52 candele (mancano 18)
+  ⚠️  @227: 51 candele (mancano 19)
+  ⚠️  @81: 49 candele (mancano 21)
+  ⚠️  @109: 47 candele (mancano 23)
+  ⚠️  @230: 47 candele (mancano 23)
+  ⚠️  @210: 46 candele (mancano 24)
+  ⚠️  @33: 46 candele (mancano 24)
+  ⚠️  @158: 45 candele (mancano 25)
+  ⚠️  @231: 45 candele (mancano 25)
+  ⚠️  @232: 44 candele (mancano 26)
+  ⚠️  APEX: 44 candele (mancano 26)
+  ⚠️  @233: 43 candele (mancano 27)
+  ⚠️  2Z: 39 candele (mancano 31)
+  ⚠️  @228: 39 candele (mancano 31)
+  ⚠️  @234: 39 candele (mancano 31)
+  ⚠️  @235: 39 candele (mancano 31)
+  ⚠️  MON: 33 candele (mancano 37)
+  ⚠️  MET: 31 candele (mancano 39)
+  ⚠️  @236: 29 candele (mancano 41)
+  ⚠️  NEIROETH: 26 candele (mancano 44)
+  ⚠️  OMNI: 26 candele (mancano 44)
+  ⚠️  @216: 25 candele (mancano 45)
+  ⚠️  @240: 25 candele (mancano 45)
+  ⚠️  @238: 24 candele (mancano 46)
+  ⚠️  @241: 21 candele (mancano 49)
+  ⚠️  @242: 21 candele (mancano 49)
+  ⚠️  MEGA: 19 candele (mancano 51)
+  ⚠️  @237: 14 candele (mancano 56)
+  ⚠️  @247: 14 candele (mancano 56)
+  ⚠️  @244: 13 candele (mancano 57)
+  ⚠️  CC: 10 candele (mancano 60)
+  ⚠️  @246: 9 candele (mancano 61)
+  ⚠️  @248: 7 candele (mancano 63)
+  ⚠️  MKR: 6 candele (mancano 64)
+  ⚠️  @218: 4 candele (mancano 66)
+  ⚠️  @245: 2 candele (mancano 68)
+  ⚠️  @203: 1 candele (mancano 69)
+
+SIMBOLI SENZA DATI (0 candele):
+  ❌ @144: 0 candele
+  ❌ @149: 0 candele
+  ❌ @154: 0 candele
+  ❌ @167: 0 candele
+  ❌ @168: 0 candele
+  ❌ @169: 0 candele
+  ❌ @171: 0 candele
+  ❌ @181: 0 candele
+  ❌ @186: 0 candele
+  ❌ @189: 0 candele
+  ❌ @197: 0 candele
+  ❌ @200: 0 candele
+  ❌ @206: 0 candele
+  ❌ @211: 0 candele
+  ❌ @220: 0 candele
+  ❌ @221: 0 candele
+  ❌ @222: 0 candele
+  ❌ @224: 0 candele
+  ❌ @229: 0 candele
+  ❌ @239: 0 candele
+  ❌ @243: 0 candele
+  ❌ @68: 0 candele
+  ❌ @71: 0 candele
+  ❌ @98: 0 candele
+  ❌ AI: 0 candele
+  ❌ BADGER: 0 candele
+  ❌ BLZ: 0 candele
+  ❌ BNT: 0 candele
+  ❌ CANTO: 0 candele
+  ❌ CATI: 0 candele
+  ❌ CYBER: 0 candele
+  ❌ FRIEND: 0 candele
+  ❌ FTM: 0 candele
+  ❌ HPOS: 0 candele
+  ❌ ILV: 0 candele
+  ❌ JELLY: 0 candele
+  ❌ LISTA: 0 candele
+  ❌ LOOM: 0 candele
+  ❌ MATIC: 0 candele
+  ❌ MYRO: 0 candele
+  ❌ NFTI: 0 candele
+  ❌ NTRN: 0 candele
+  ❌ OGN: 0 candele
+  ❌ ORBS: 0 candele
+  ❌ OX: 0 candele
+  ❌ PANDORA: 0 candele
+  ❌ PIXEL: 0 candele
+  ❌ RDNT: 0 candele
+  ❌ REQ: 0 candele
+  ❌ RLB: 0 candele
+  ❌ RNDR: 0 candele
+  ❌ SHIA: 0 candele
+  ❌ STG: 0 candele
+  ❌ STRAX: 0 candele
+  ❌ UNIBOT: 0 candele
+  ❌ kBONK: 0 candele
+  ❌ kDOGS: 0 candele
+  ❌ kFLOKI: 0 candele
+  ❌ kLUNC: 0 candele
+  ❌ kNEIRO: 0 candele
+  ❌ kPEPE: 0 candele
+  ❌ kSHIB: 0 candele
+

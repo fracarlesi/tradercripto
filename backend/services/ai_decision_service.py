@@ -19,6 +19,11 @@ from services.market_data.news_feed import fetch_latest_news
 
 logger = logging.getLogger(__name__)
 
+# Import Prophet forecaster
+from services.market_data.prophet_forecaster import get_prophet_forecaster
+from hyperliquid.info import Info
+import pandas as pd
+
 #  mode API keys that should be skipped
 DEMO_API_KEYS = {"default-key-please-update-in-settings", "default", "", None}
 
@@ -108,6 +113,313 @@ def _format_technical_analysis(technical_factors: dict) -> str:
     lines.append("IMPORTANT: Prioritize symbols with high combined scores (>0.6) for BUY decisions.")
 
     return "\n".join(lines)
+
+
+async def _format_pivot_points(portfolio: dict, prices: dict[str, float]) -> str:
+    """
+    Format pivot points analysis for AI prompt (RIZZO VIDEO INTEGRATION).
+
+    Calculates pivot points for:
+    1. All active positions (to decide hold/sell)
+    2. Top 3 symbols by price (to identify opportunities)
+
+    Args:
+        portfolio: Portfolio data with positions
+        prices: Current market prices
+
+    Returns:
+        Formatted string with pivot points analysis
+    """
+    try:
+        from services.market_data.pivot_calculator import get_pivot_calculator
+
+        calculator = get_pivot_calculator()
+
+        lines = ["Pivot Points Analysis (Support & Resistance Levels - RIZZO VIDEO):"]
+        lines.append("")
+        lines.append("These are recurring pattern levels where price tends to BOUNCE:")
+        lines.append("- Near S1/S2 (support) → Price likely BOUNCES UP (LONG opportunity)")
+        lines.append("- Near R1/R2 (resistance) → Price likely BOUNCES DOWN (SHORT opportunity)")
+        lines.append("- Above PP = Bullish zone | Below PP = Bearish zone")
+        lines.append("")
+
+        # 1. Pivot points for active positions
+        positions = portfolio.get("positions", [])
+        if positions:
+            lines.append("📊 ACTIVE POSITIONS - Pivot Analysis:")
+            lines.append("")
+
+            for pos in positions:
+                symbol = pos.get("symbol")
+                current_price = prices.get(symbol, 0)
+
+                if current_price <= 0:
+                    continue
+
+                # Calculate pivots
+                pivots = await calculator.calculate_pivot_points(symbol, current_price)
+
+                if "error" in pivots or not pivots.get("pivot_point"):
+                    lines.append(f"  • {symbol}: Pivot data unavailable")
+                    continue
+
+                # Format pivot info
+                pp = pivots["PP"]
+                r1 = pivots["R1"]
+                s1 = pivots["S1"]
+                signal = pivots["signal"]
+                interpretation = pivots["interpretation"]
+
+                signal_emoji = {
+                    "long_opportunity": "🟢",
+                    "short_opportunity": "🔴",
+                    "bullish_zone": "🔵",
+                    "bearish_zone": "🟠",
+                }.get(signal, "⚪")
+
+                lines.append(f"  • {symbol} {signal_emoji}: ${current_price:,.2f}")
+                lines.append(f"    - PP: ${pp:,.2f} | R1: ${r1:,.2f} | S1: ${s1:,.2f}")
+                lines.append(f"    - {interpretation[:100]}...")  # Truncate
+                lines.append("")
+
+        # 2. Pivot points for top symbols (potential opportunities)
+        lines.append("🔍 TOP SYMBOLS - Pivot Analysis (for new positions):")
+        lines.append("")
+
+        # Sort by price (descending) and take top 3
+        sorted_symbols = sorted(prices.items(), key=lambda x: x[1], reverse=True)[:3]
+
+        for symbol, price in sorted_symbols:
+            # Skip if already have position
+            if any(pos.get("symbol") == symbol for pos in positions):
+                continue
+
+            pivots = await calculator.calculate_pivot_points(symbol, price)
+
+            if "error" in pivots or not pivots.get("pivot_point"):
+                continue
+
+            pp = pivots["PP"]
+            r1 = pivots["R1"]
+            s1 = pivots["S1"]
+            signal = pivots["signal"]
+            interpretation = pivots["interpretation"]
+
+            signal_emoji = {
+                "long_opportunity": "🟢",
+                "short_opportunity": "🔴",
+                "bullish_zone": "🔵",
+                "bearish_zone": "🟠",
+            }.get(signal, "⚪")
+
+            lines.append(f"  • {symbol} {signal_emoji}: ${price:,.2f}")
+            lines.append(f"    - PP: ${pp:,.2f} | R1: ${r1:,.2f} | S1: ${s1:,.2f}")
+            lines.append(f"    - {interpretation[:100]}...")
+            lines.append("")
+
+        lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        lines.append("")
+        lines.append("PIVOT POINT TRADING RULES:")
+        lines.append("  1. If price NEAR S1 (< 2% distance) → Consider LONG (bounce up likely)")
+        lines.append("  2. If price NEAR R1 (< 2% distance) → Consider SHORT (bounce down likely)")
+        lines.append("  3. If price BREAKS R1 upward → Strong BULLISH (target R2)")
+        lines.append("  4. If price BREAKS S1 downward → Strong BEARISH (target S2)")
+        lines.append("  5. Above PP = Bullish bias | Below PP = Bearish bias")
+        lines.append("")
+
+        return "\n".join(lines)
+
+    except Exception as e:
+        logger.error("Failed to format pivot points", exc_info=True)
+        return "Pivot Points Analysis: Unavailable (error)"
+
+
+def _format_sentiment() -> str:
+    """
+    Format Fear & Greed sentiment index for AI prompt (RIZZO VIDEO INTEGRATION).
+
+    Returns:
+        Formatted string with sentiment analysis
+    """
+    try:
+        from services.market_data.sentiment_tracker import get_sentiment_tracker
+
+        tracker = get_sentiment_tracker()
+        return tracker.get_sentiment_for_ai()
+
+    except Exception as e:
+        logger.error("Failed to format sentiment index", exc_info=True)
+        return "Sentiment Index: Unavailable (error)"
+
+
+def _get_strategy_weights(account: Account) -> dict:
+    """
+    Get strategy weights from account or return defaults (RIZZO VIDEO).
+
+    Weights determine how much importance AI gives to each indicator.
+    Higher weight = more important in decision-making.
+
+    Args:
+        account: Account model with optional strategy_weights JSON field
+
+    Returns:
+        Dict with weights for each indicator (0.0-1.0)
+    """
+    # Default weights (as recommended in video + Prophet)
+    default_weights = {
+        "pivot_points": 0.8,  # Highest priority (pattern recognition)
+        "prophet": 0.5,  # PRIMARY BIAS (price forecasting - RIZZO PRIORITY 6)
+        "rsi_macd": 0.5,  # Medium-high (technical analysis)
+        "whale_alerts": 0.4,  # Medium (short-term signal)
+        "sentiment": 0.3,  # Low (contrarian indicator, noisy)
+        "news": 0.2,  # Lowest (mostly noise in crypto)
+    }
+
+    # Use account weights if configured, otherwise use defaults
+    if account.strategy_weights:
+        # Merge account weights with defaults (account overrides)
+        weights = {**default_weights, **account.strategy_weights}
+    else:
+        weights = default_weights
+
+    return weights
+
+
+def _format_whale_alerts() -> str:
+    """
+    Format whale alerts for AI prompt (RIZZO VIDEO INTEGRATION).
+
+    Returns:
+        Formatted string with whale transaction alerts
+    """
+    try:
+        from services.market_data.whale_tracker import get_whale_tracker
+
+        tracker = get_whale_tracker()
+
+        # Fetch recent alerts (will use cache if called recently)
+        tracker.get_recent_alerts()
+
+        # Return formatted summary
+        return tracker.get_whale_summary_for_ai()
+
+    except Exception as e:
+        logger.error("Failed to format whale alerts", exc_info=True)
+        return "Whale Alerts: Unavailable (error)"
+
+
+async def _format_prophet_forecast(portfolio: dict, prices: dict[str, float]) -> str:
+    """
+    Format Prophet price forecasting for AI prompt (RIZZO VIDEO - PRIORITY 6).
+
+    Uses Meta/Facebook Prophet to generate 6h and 24h price forecasts with confidence
+    intervals. This provides "bias primario" (primary bias) for AI trading decisions.
+
+    Args:
+        portfolio: Portfolio data with positions
+        prices: Current market prices
+
+    Returns:
+        Formatted string with Prophet forecasts for BTC/ETH
+    """
+    try:
+        forecaster = get_prophet_forecaster(
+            training_days=90,  # 90 days historical data
+            forecast_hours=24,  # 24h forecast horizon
+            cache_ttl_hours=24,  # Daily retraining
+        )
+
+        info = Info("https://api.hyperliquid.xyz")
+
+        lines = ["Prophet Price Forecasting (24h Ahead - RIZZO VIDEO):"]
+        lines.append("")
+        lines.append("**BIAS PRIMARIO (PRIMARY BIAS)** - Use these forecasts as MAIN directional guide:")
+        lines.append("- Forecast 24h > Current Price → PRIMARY LONG BIAS (expect upward movement)")
+        lines.append("- Forecast 24h < Current Price → PRIMARY SHORT BIAS (expect downward movement)")
+        lines.append("- Confidence > 90% → HIGH CONVICTION forecast (trust strongly)")
+        lines.append("- Confidence < 70% → LOW CONVICTION forecast (use with caution)")
+        lines.append("")
+
+        # Forecast for BTC and ETH (most liquid pairs)
+        symbols = ["BTC", "ETH"]
+
+        for symbol in symbols:
+            try:
+                # Fetch 90 days of 1h candles
+                from datetime import datetime, timedelta
+
+                now_ms = int(datetime.utcnow().timestamp() * 1000)
+                start_ms = now_ms - (90 * 24 * 3600 * 1000)
+
+                candles = info.candles_snapshot(
+                    name=symbol, interval="1h", startTime=start_ms, endTime=now_ms
+                )
+
+                if not candles or len(candles) < 14:
+                    lines.append(f"  • {symbol}: Insufficient data for forecast")
+                    continue
+
+                # Prepare Prophet dataframe
+                df = pd.DataFrame(candles)
+                df["ds"] = pd.to_datetime(df["t"], unit="ms", utc=True)
+                df["y"] = df["c"].astype(float)  # Close price
+                df = df[["ds", "y"]].copy()
+
+                # Generate forecast
+                forecast = forecaster.forecast_price(symbol, df)
+
+                # Check for error
+                if "error" in forecast:
+                    lines.append(f"  • {symbol}: Forecast unavailable ({forecast['error']})")
+                    continue
+
+                # Format forecast
+                current = forecast["current_price"]
+                forecast_24h = forecast["forecast_24h"]
+                trend = forecast["trend"]
+                confidence = forecast["confidence"]
+                ci_24h = forecast["confidence_interval_24h"]
+
+                # Calculate expected change
+                change = forecast_24h - current
+                change_pct = (change / current) * 100
+
+                # Signal
+                signal_emoji = {
+                    "up": "🟢 BULLISH",
+                    "down": "🔴 BEARISH",
+                    "neutral": "🟡 NEUTRAL",
+                }.get(trend, "⚪ UNKNOWN")
+
+                lines.append(f"  • {symbol} {signal_emoji}:")
+                lines.append(f"    - Current Price: ${current:,.2f}")
+                lines.append(f"    - 24h Forecast: ${forecast_24h:,.2f} ({change:+.2f} / {change_pct:+.2f}%)")
+                lines.append(
+                    f"    - Confidence Interval: ${ci_24h[0]:,.2f} - ${ci_24h[1]:,.2f}"
+                )
+                lines.append(f"    - Confidence: {confidence:.1%}")
+                lines.append("")
+
+            except Exception as e:
+                logger.error(f"Failed to forecast {symbol}", exc_info=True)
+                lines.append(f"  • {symbol}: Forecast error")
+                lines.append("")
+
+        lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        lines.append("")
+        lines.append("PROPHET TRADING RULES (RIZZO VIDEO):")
+        lines.append("  1. Prophet forecast = **PRIMARY BIAS** (highest weight indicator)")
+        lines.append("  2. If Prophet says BULLISH + Confidence > 90% → STRONG LONG bias")
+        lines.append("  3. If Prophet says BEARISH + Confidence > 90% → STRONG SHORT bias")
+        lines.append("  4. If Confidence < 70% → Use with caution, prioritize other indicators")
+        lines.append("  5. Prophet + Pivot Points alignment = HIGHEST CONVICTION trade")
+        lines.append("")
+
+        return "\n".join(lines)
+
+    except Exception as e:
+        logger.error("Failed to format Prophet forecast", exc_info=True)
+        return "Prophet Price Forecasting: Unavailable (error)"
 
 
 def optimize_ai_prompt(
@@ -458,10 +770,10 @@ def get_decision_cache(window_seconds: int = 600) -> AIDecisionCache:
     return _global_decision_cache
 
 
-def call_ai_for_decision(
+async def call_ai_for_decision(
     account: Account, portfolio: dict, prices: dict[str, float]
 ) -> dict | None:
-    """Call AI model API to get trading decision"""
+    """Call AI model API to get trading decision (async for pivot points calculation)"""
     # Check if this is a default API key
     if _is_default_api_key(account.api_key):
         logger.info(f"Skipping AI trading for account {account.name} - using default API key")
@@ -478,39 +790,256 @@ def call_ai_for_decision(
         # Format technical analysis for AI (CRITICAL: quantitative signals)
         technical_section = _format_technical_analysis(portfolio.get("technical_factors", {}))
 
+        # RIZZO VIDEO INTEGRATION: Calculate pivot points for all active positions + top symbols
+        pivot_section = await _format_pivot_points(portfolio, prices)
+
+        # RIZZO VIDEO INTEGRATION: Get Fear & Greed sentiment index
+        sentiment_section = _format_sentiment()
+
+        # RIZZO VIDEO INTEGRATION: Get whale alerts (large transactions)
+        whale_section = _format_whale_alerts()
+
+        # RIZZO VIDEO INTEGRATION (PRIORITY 6): Get Prophet price forecasts (PRIMARY BIAS)
+        prophet_section = await _format_prophet_forecast(portfolio, prices)
+
+        # Calculate profit % for each position to help AI make informed decisions
+        positions_with_profit = []
+        for pos in portfolio.get("positions", []):
+            symbol = pos.get("symbol")
+            entry_price = pos.get("avg_cost", 0)
+            current_price = prices.get(symbol, entry_price)
+
+            if entry_price > 0:
+                profit_pct = ((current_price - entry_price) / entry_price) * 100
+            else:
+                profit_pct = 0
+
+            pos_with_profit = pos.copy()
+            pos_with_profit["current_price"] = current_price
+            pos_with_profit["profit_pct"] = round(profit_pct, 2)
+            positions_with_profit.append(pos_with_profit)
+
+        # Get strategy weights from account (or use defaults)
+        weights = _get_strategy_weights(account)
+
         # Full prompt without optimization - preserves all information for quality (T093-T094 removed)
         prompt = f"""You are a cryptocurrency trading AI. Based on the following portfolio and market data, decide on a trading action.
 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎯 STRATEGY WEIGHTS - PRIORITIZE INDICATORS (RIZZO VIDEO)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+**CRITICAL**: When analyzing market data, give MORE importance to higher-weighted indicators.
+When indicators CONFLICT, FAVOR the higher-weighted signals.
+
+**Your Strategy Configuration**:
+- 🔴 Pivot Points (weight: {weights['pivot_points']:.2f}) ← {"HIGHEST PRIORITY" if weights['pivot_points'] >= 0.7 else "HIGH PRIORITY" if weights['pivot_points'] >= 0.5 else "MEDIUM PRIORITY"}
+- 🟣 Prophet Forecast (weight: {weights['prophet']:.2f}) ← PRIMARY BIAS (price forecasting - RIZZO PRIORITY 6)
+- 🟡 RSI/MACD Technical (weight: {weights['rsi_macd']:.2f}) ← {"HIGH PRIORITY" if weights['rsi_macd'] >= 0.5 else "MEDIUM PRIORITY"}
+- 🟢 Whale Alerts (weight: {weights['whale_alerts']:.2f}) ← {"HIGH PRIORITY" if weights['whale_alerts'] >= 0.5 else "MEDIUM PRIORITY" if weights['whale_alerts'] >= 0.3 else "LOW PRIORITY"}
+- 🔵 Sentiment Index (weight: {weights['sentiment']:.2f}) ← {"MEDIUM PRIORITY" if weights['sentiment'] >= 0.3 else "LOW PRIORITY"}
+- ⚪ News (weight: {weights['news']:.2f}) ← {"LOW PRIORITY" if weights['news'] <= 0.3 else "MEDIUM PRIORITY"}
+
+**Decision-Making Rules**:
+1. When Prophet (weight {weights['prophet']:.2f}) says BULLISH + Pivot Points (weight {weights['pivot_points']:.2f}) confirm:
+   → HIGHEST CONVICTION LONG (both primary indicators align!)
+
+2. When Prophet (weight {weights['prophet']:.2f}) conflicts with Sentiment (weight {weights['sentiment']:.2f}):
+   → FOLLOW Prophet (higher weight + PRIMARY BIAS)
+
+3. When RSI/MACD (weight {weights['rsi_macd']:.2f}) conflicts with Whale Alerts (weight {weights['whale_alerts']:.2f}):
+   → Compare weights: Higher weight indicator takes priority
+
+4. When ALL indicators align (same direction) → MAXIMUM CONVICTION trade (rare!)
+
+5. When indicators conflict with similar weights → REDUCE position size or HOLD
+
+**Example Decision Process**:
+- Prophet: BULLISH +1.3% (0.5 weight) + Pivot: LONG (0.8 weight) + RSI: LONG (0.5 weight) + Sentiment: FEAR (0.3 weight)
+- Total LONG score: 0.5 + 0.8 + 0.5 = 1.8
+- Total SHORT score: 0.3
+- Decision: VERY STRONG LONG (prophet + pivot + technical confirm, sentiment is contrarian)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 Portfolio Data:
-- Cash Available: ${portfolio["cash"]:.2f}
-- Frozen Cash: ${portfolio["frozen_cash"]:.2f}
-- Total Assets: ${portfolio["total_assets"]:.2f}
-- Current Positions: {json.dumps(portfolio["positions"], indent=2)}
+- Total Assets: ${portfolio.get("total_assets", 0):.2f}
+- Current Positions (with profit/loss %): {json.dumps(positions_with_profit, indent=2)}
 
 Current Market Prices (showing {len(prices)} available cryptocurrencies):
 {json.dumps(prices, indent=2)}
 
 {technical_section}
 
+{pivot_section}
+
+{prophet_section}
+
+{sentiment_section}
+
+{whale_section}
+
 Latest Crypto News (CoinJournal):
 {news_section}
 
 Available symbols for trading: {available_symbols}
 
-Analyze ALL available cryptocurrencies, identify the BEST opportunity based on TECHNICAL ANALYSIS, news, and market data.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🧠 INTELLIGENT PROFIT/LOSS MANAGEMENT (HIGHEST PRIORITY - EVALUATE FIRST!)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+CRITICAL: You have FULL FLEXIBILITY and JUDGMENT when making profit/loss decisions.
+The thresholds below are EVALUATION TRIGGERS, not automatic commands.
+
+1. 📈 TAKE PROFIT EVALUATION (profit_pct > +5%):
+   When a position crosses +5% profit, EVALUATE whether to sell using ALL available data:
+
+   🟢 CONSIDER HOLDING if:
+      • Technical score STILL > 0.8 (strong momentum continuing)
+      • News sentiment POSITIVE (upcoming catalysts, partnerships, adoption)
+      • Price trend STRONG upward (potential for more gains)
+      • Recent volume INCREASING (market interest growing)
+
+   🔴 CONSIDER SELLING if:
+      • Technical score DROPPED significantly (momentum weakening)
+      • News sentiment NEGATIVE (regulatory concerns, hacks, FUD)
+      • Better opportunities available (sell winner to buy higher-potential asset)
+      • Position reached extreme profit (>15-20%) without fundamental support
+
+   💡 SMART EXAMPLES:
+      • MERL at +12% profit, score 0.987, positive news → HOLD (still strong)
+      • MERL at +12% profit, score 0.42, negative news → SELL (momentum lost)
+      • MERL at +8% profit, but NEW coin has score 0.95 vs MERL's 0.65 → SELL MERL, BUY NEW
+
+2. 📉 STOP LOSS EVALUATION (profit_pct < -5%):
+   When a position crosses -5% loss, EVALUATE severity and context:
+
+   🔴 MUST SELL IMMEDIATELY if:
+      • Loss approaching -8% or worse (protecting capital is critical)
+      • Technical score < 0.3 (strong downward momentum)
+      • Negative news (project issues, security breach, regulatory action)
+      • No signs of recovery (continued downtrend)
+
+   🟡 MAY HOLD if loss JUST crossed -5% AND:
+      • Technical score RECOVERING (>0.6 after recent dip)
+      • Strong fundamentals remain (temporary market dip, not project issue)
+      • Positive news catalyst coming (major update, listing, partnership)
+
+   ⚠️ DEFAULT BIAS: When in doubt at -5% → SELL (better safe than sorry)
+
+3. 🔄 PORTFOLIO OPTIMIZATION STRATEGY:
+   You should ACTIVELY manage the portfolio by REBALANCING positions:
+
+   📊 CONSIDER SELLING even if NO profit/loss trigger when:
+      • A BETTER opportunity appears (higher technical score + positive news)
+      • Position is stagnant (0-2% profit, low score, better alternatives exist)
+      • Need cash to buy high-conviction opportunity (sell weakest position)
+
+   💡 REBALANCING EXAMPLE:
+      Current: DOOD (+2%, score 0.55), MERL (+3%, score 0.60)
+      Opportunity: ONDO (score 0.92, breaking out, positive news)
+      Decision: SELL DOOD (weakest), BUY ONDO (strongest opportunity)
+
+4. 🎯 DECISION-MAKING FACTORS (ALL MATTER EQUALLY):
+   When evaluating any sell decision, WEIGH ALL these factors:
+   ✓ Current profit/loss % (trigger point)
+   ✓ Technical score (momentum + support strength)
+   ✓ News sentiment (positive/negative catalysts)
+   ✓ Price trend direction (up/down/sideways)
+   ✓ Alternative opportunities (compare with other available coins)
+   ✓ Commission costs (0.10% roundtrip - factor in but don't let it paralyze you)
+
+5. 💰 POSITION SIZE & CONSTRAINTS:
+   - Positions are ~$10 each (Hyperliquid minimum order size)
+   - You can ONLY sell 100% (no partial sells - $5 would be rejected)
+   - Max 4-5 positions with current balance (~$47)
+
+   ⚠️ IMPORTANT - AUTOMATIC $10 FLOOR ENFORCEMENT:
+   The system automatically enforces the $10 minimum order size. If your percentage allocation
+   (e.g., 25% of $37.95 = $9.49) calculates to less than $10, the validation layer will
+   automatically bump it to exactly $10 (as long as you have ≥$10 cash available).
+
+   **DON'T pre-reject trades due to minimum order size concerns!**
+   • If you want to buy at 25% but it's below $10 → Still choose BUY, system will bump to $10
+   • Example: Cash=$37.95, want 25% allocation → System auto-adjusts to $10 order
+   • Only avoid trade if cash < $10 (truly cannot meet minimum)
+
+   Let the validation handle the floor adjustment automatically - focus on signal quality!
+
+6. 🎲 CAPITAL ALLOCATION STRATEGY (CRITICAL - TOP PRIORITY!):
+   **RULE #1: CHECK SCORE FIRST - If score < 0.85, ALWAYS use 25% MAX (target_portion: 0.25)**
+
+   ⚡ EXCEPTION: 100% allocation (target_portion: 1.0) ONLY when ALL 3 conditions TRUE:
+      1. Technical score >= 0.85 (EXCEPTIONAL, not just "good"!)
+      2. AND Momentum >= 0.90 (extremely strong trending)
+      3. AND Positive fundamental news (catalyst present)
+
+      **ALL 3 MUST BE TRUE!** If score < 0.85 → use 25% even if momentum is 0.95!
+
+   📊 NORMAL RULE (99% of cases): Diversify with 25% allocations:
+      • Score 0.60-0.84 → **ALWAYS use target_portion: 0.25** (even with high momentum!)
+      • **CRITICAL: Keep buying NEW 25% positions for EACH signal >= 0.60**
+      • Build portfolio of 4-5 positions at 25% each for proper diversification
+      • Example: Have MERL at 25% + see ZEC score 0.70 → BUY ZEC at 25% (don't wait!)
+      • Continue adding 25% positions until: (a) you have 4-5 positions, OR (b) no signals >= 0.60
+      • **DON'T wait for "exceptional" signals to diversify - normal signals >= 0.60 justify new 25% positions**
+      • Risk management: spread capital across multiple assets to reduce volatility
+
+   ❌ Score < 0.60 → HOLD or SELL (no new positions, weak signal)
+
+   💡 ALLOCATION EXAMPLES (PAY ATTENTION - These show the EXACT logic):
+      • Score 0.92, Momentum 0.95, News: BTC ETF approval → 100% OK! (score >= 0.85 ✓)
+      • Score 0.85, Momentum 0.95, News: positive → 100% OK! (exactly 0.85 counts ✓)
+      • Score 0.84, Momentum 0.95, News: positive → MAX 25%! (score < 0.85 ✗)
+      • Score 0.73, Momentum 0.93, News: positive → MAX 25%! (score < 0.85 ✗)
+      • Score 0.75, Momentum 0.88, News: neutral → MAX 25% (score < 0.85 ✗)
+      • Score 0.65, Momentum 0.75, News: positive → 25% (build 4 positions)
+      • Score 0.50, Momentum 0.60, News: negative → HOLD (don't buy)
+
+   🎯 CRITICAL DECISION TREE:
+      1. Is score >= 0.85?
+         → NO: Use 25% allocation (target_portion: 0.25) - STOP HERE!
+         → YES: Check momentum and news...
+      2. Is momentum >= 0.90 AND news positive?
+         → YES: Use 100% allocation (target_portion: 1.0)
+         → NO: Use 25% allocation (target_portion: 0.25)
+
+   🎯 PHILOSOPHY:
+      • Exceptional opportunities (score >= 0.85 + all conditions) deserve 100% commitment
+      • Good opportunities (0.60-0.84) ALWAYS deserve diversification (25% max)
+      • Mediocre opportunities (< 0.60) deserve patience (HOLD)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Analyze ALL available cryptocurrencies, identify the BEST opportunity based on PROFIT/LOSS TRIGGERS FIRST, then TECHNICAL ANALYSIS, news, and market data.
 Then respond with ONLY a JSON object in this exact format:
 {{
   "operation": "buy" or "sell" or "short" or "hold",
   "symbol": one of the available symbols above,
-  "target_portion_of_balance": 0.2,
+  "target_portion_of_balance": 1.0,
   "leverage": 1,
-  "reason": "Brief explanation citing technical score and other factors"
+  "reason": "Brief explanation citing profit/loss % OR technical score and other factors"
 }}
 
-DECISION-MAKING PRIORITY (CRITICAL):
-1. TECHNICAL ANALYSIS (Primary): Use Momentum + Support scores above - these are QUANTITATIVE signals
-2. News Sentiment (Secondary): Consider only as confirmation or warning flag
-3. Price Trends (Tertiary): Look at current prices for context only
+DECISION-MAKING APPROACH (HOLISTIC & INTELLIGENT):
+Your job is to make the SMARTEST decision possible considering ALL factors together:
+
+🎯 PRIMARY FOCUS: Maximize portfolio value through intelligent trading
+   • Check existing positions first - are any at profit/loss triggers?
+   • Evaluate if current positions should be held or sold
+   • Consider new opportunities only after optimizing current holdings
+
+📊 WEIGH ALL FACTORS TOGETHER (not sequentially):
+   1. Position profit/loss % (triggers at ±5%)
+   2. Technical scores (momentum + support strength)
+   3. News sentiment (catalysts, risks, market narrative)
+   4. Price trends (direction, volume, market conditions)
+   5. Comparative opportunities (which asset has BEST risk/reward NOW?)
+
+💡 BE PROACTIVE ABOUT REBALANCING:
+   • Don't wait for triggers - sell weak positions for strong opportunities
+   • Think like a portfolio manager: "Is this the best use of capital RIGHT NOW?"
+   • Consider opportunity cost: holding mediocre position vs buying strong one
 
 Rules - OPERATIONS:
 - operation must be "buy", "sell", "short", or "hold"
@@ -564,7 +1093,7 @@ CRITICAL INVESTMENT PRINCIPLES:
             "model": account.model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.7,
-            "max_tokens": 1000,
+            # No max_tokens limit - let DeepSeek Reasoner use as many tokens as needed
         }
 
         # Construct API endpoint URL
@@ -581,7 +1110,7 @@ CRITICAL INVESTMENT PRINCIPLES:
                     api_endpoint,
                     headers=headers,
                     json=payload,
-                    timeout=30,
+                    timeout=300,  # 5 minutes for DeepSeek R1 long reasoning chains
                     verify=False,  # Disable SSL verification for custom AI endpoints
                 )
 

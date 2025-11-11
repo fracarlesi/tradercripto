@@ -9,6 +9,7 @@ This system provides **automated cryptocurrency trading** on Hyperliquid DEX wit
 **Key Features:**
 - **Real Trading on Hyperliquid DEX** - All orders executed on live exchange
 - **AI-Driven Decisions** - DeepSeek API analyzes market data and news
+- **Self-Learning System** - AI learns from past decisions via counterfactual analysis
 - **Async Architecture** - SQLAlchemy 2.0 async ORM with connection pooling
 - **Real-Time Sync** - Periodic synchronization with Hyperliquid (60s interval)
 - **Cost Optimization** - Multi-layer caching (news: 1h, decisions: 10m, prices: 30s)
@@ -81,7 +82,7 @@ pnpm run dev  # Terminal 2
 ```
 
 **Access:**
-- Frontend: http://localhost:5173
+- Frontend: http://localhost:5621
 - Backend API: http://localhost:5611/api
 - API Docs: http://localhost:5611/docs
 
@@ -186,6 +187,22 @@ AI Analysis → Decision → Hyperliquid Order → Immediate Sync → DB Update
 4. **Immediate sync** after order execution
 5. **Periodic sync** every 60 seconds for consistency
 6. Database reflects current Hyperliquid state
+
+### Self-Learning System (Counterfactual Analysis)
+The system learns from every decision to improve trading strategy over time:
+
+1. **Decision Capture** - Every AI decision (LONG/SHORT/HOLD) saved with complete context
+2. **Counterfactual Calculation** - After 24h, calculates P&L for all 3 possible actions
+3. **Pattern Analysis** - DeepSeek analyzes 50+ decisions to identify systematic errors
+4. **Weight Optimization** - Suggests optimal indicator weights based on actual performance
+
+**Example Insights**:
+- "Ignored Prophet 12 times when RSI >70 → lost $145"
+- "HOLD when Sentiment >80 + Whale sell → avoided -$230"
+
+**Health Check**: Use `./check_learning_system.sh` to verify the system is working.
+
+See [CLAUDE.md](CLAUDE.md#-counterfactual-learning-system) for complete documentation.
 
 ### Async Architecture
 All operations use async/await for non-blocking I/O:

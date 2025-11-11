@@ -1,0 +1,80 @@
+# =============================================================================
+# Simplified Docker Compose for VPS Deployment (Hetzner/DigitalOcean)
+# =============================================================================
+# This file uses SQLite (no PostgreSQL needed) and removes optional monitoring
+# Perfect for personal crypto trading bot running 24/7
+#
+# Usage:
+#   docker-compose -f docker-compose.simple.yml up -d
+#
+# =============================================================================
+
+version: '3.8'
+
+services:
+  # =============================================================================
+  # Trading Application (Backend + Frontend)
+  # =============================================================================
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: trader_bitcoin:${IMAGE_TAG:-latest}
+    container_name: trader_app
+    restart: unless-stopped
+
+    # JSON log driver for easy debugging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+    environment:
+      # Database: Use SQLite (file-based, no PostgreSQL needed)
+      - DATABASE_URL=sqlite+aiosqlite:///./data/data.db
+
+      # Application settings
+      - DEBUG=false
+      - SQL_DEBUG=false
+
+      # Trading configuration (from .env file)
+      - HYPERLIQUID_PRIVATE_KEY=${HYPERLIQUID_PRIVATE_KEY}
+      - HYPERLIQUID_WALLET_ADDRESS=${HYPERLIQUID_WALLET_ADDRESS}
+
+      # AI configuration (from .env file)
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}
+
+      # Sync configuration (optimized for 24/7 trading)
+      - SYNC_INTERVAL_SECONDS=60
+      - AI_DECISION_INTERVAL=180
+
+      # Connection pool (reduced for SQLite)
+      - DB_POOL_SIZE=5
+      - DB_MAX_OVERFLOW=2
+
+    ports:
+      - "5611:5611"
+
+    volumes:
+      # Persistent data volume for SQLite database
+      - app_data:/app/data
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5611/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+    mem_limit: 512m
+    memswap_limit: 512m
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  app_data:
+    driver: local
+    name: trader_app_data

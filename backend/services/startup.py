@@ -17,9 +17,10 @@ def initialize_services() -> None:
         start_scheduler()
         logger.info("Scheduler service started")
 
-        # Start automatic cryptocurrency trading task (3-minute interval for DeepSeek Chat)
-        schedule_auto_trading(interval_seconds=180)
-        logger.info("Automatic cryptocurrency trading task started (3-minute interval)")
+        # AI trading now handled by APScheduler in main.py (non-blocking)
+        # This prevents the custom scheduler thread from blocking during long technical analysis
+        # schedule_auto_trading(interval_seconds=180)
+        # logger.info("Automatic cryptocurrency trading task started (3-minute interval)")
 
         # Add price cache cleanup task (every 2 minutes)
         from services.market_data.price_cache import clear_expired_prices

@@ -3,22 +3,23 @@
 # =============================================================================
 FROM node:20-alpine AS frontend-build
 
-WORKDIR /app/frontend
+WORKDIR /app
 
-# Install pnpm globally
-RUN npm install -g pnpm
+# Install pnpm globally (match local version for lockfile compatibility)
+RUN npm install -g pnpm@8.15.5
 
-# Copy package files first for better layer caching
-COPY frontend/package.json frontend/pnpm-lock.yaml ./
+# Copy workspace files first for pnpm workspace detection
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY frontend/package.json ./frontend/
 
-# Install dependencies with frozen lockfile
+# Install dependencies with frozen lockfile (workspace aware)
 RUN pnpm install --frozen-lockfile
 
 # Copy frontend source code
-COPY frontend/ ./
+COPY frontend/ ./frontend/
 
 # Build frontend
-RUN pnpm run build
+RUN cd frontend && pnpm run build
 
 # =============================================================================
 # Stage 2: Python Dependencies (T075)
@@ -60,7 +61,7 @@ COPY --from=python-deps --chown=appuser:appuser /app/.venv /app/.venv
 # Copy backend application code
 COPY --chown=appuser:appuser backend/ ./
 
-# Copy frontend build from frontend-build stage
+# Copy frontend build from frontend-build stage (workspace aware path)
 COPY --from=frontend-build --chown=appuser:appuser /app/frontend/dist ./static
 
 # Create data directory for SQLite (with proper permissions)

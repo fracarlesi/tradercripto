@@ -10,6 +10,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    JSON,
     Numeric,
     String,
     UniqueConstraint,
@@ -110,6 +111,12 @@ class Account(Base):
     model: Mapped[str | None] = mapped_column(String(100), nullable=True)
     base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     api_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    # Trading Strategy Configuration (RIZZO VIDEO - Feature Weights)
+    strategy_weights: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    max_position_ratio: Mapped[float] = mapped_column(
+        Numeric(5, 4), default=0.05, nullable=False
+    )  # Default 5% (video recommends 5% vs our previous 20%)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -387,4 +394,93 @@ class PortfolioSnapshot(Base):
         Index("idx_snapshots_account_time", "account_id", "snapshot_time"),
         # Prevent duplicate snapshots for same account at same time
         UniqueConstraint("account_id", "snapshot_time", name="uq_snapshot_account_time"),
+    )
+
+
+class DecisionSnapshot(Base):
+    """
+    Decision Snapshot for Counterfactual Analysis.
+
+    Records EVERY trading decision (LONG, SHORT, HOLD) with full indicator context
+    to enable learning from both executed trades AND missed opportunities.
+
+    Workflow:
+    1. auto_trader evaluates decision → save snapshot with reasoning
+    2. 24h later → batch job calculates counterfactual P&L for all 3 actions
+    3. Weekly analysis → DeepSeek analyzes patterns and suggests weight updates
+
+    Example use cases:
+    - "I made HOLD but should have made LONG (+$42 missed)"
+    - "I made HOLD instead of LONG and avoided -$30 loss (good decision)"
+    - "When Prophet >+2% + RSI >70, I ignored it 8 times and missed $150"
+    """
+
+    __tablename__ = "decision_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+
+    # Decision context
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    account_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("accounts.id"), nullable=False, index=True
+    )
+    symbol: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+
+    # Snapshot of all indicators at decision time (JSON)
+    indicators_snapshot: Mapped[str] = mapped_column(String, nullable=False)
+    deepseek_reasoning: Mapped[str] = mapped_column(String, nullable=False)
+
+    # Actual decision taken
+    actual_decision: Mapped[str] = mapped_column(
+        String(10), nullable=False
+    )  # LONG, SHORT, HOLD
+    actual_size_pct: Mapped[float | None] = mapped_column(Numeric(10, 6), nullable=True)
+
+    # Prices for counterfactual calculation
+    entry_price: Mapped[float] = mapped_column(Numeric(20, 8), nullable=False)
+    exit_price_24h: Mapped[float | None] = mapped_column(Numeric(20, 8), nullable=True)
+
+    # P&L calculations (filled by batch job after 24h)
+    actual_pnl: Mapped[float | None] = mapped_column(Numeric(20, 8), nullable=True)
+    counterfactual_long_pnl: Mapped[float | None] = mapped_column(
+        Numeric(20, 8), nullable=True
+    )
+    counterfactual_short_pnl: Mapped[float | None] = mapped_column(
+        Numeric(20, 8), nullable=True
+    )
+    counterfactual_hold_pnl: Mapped[float | None] = mapped_column(
+        Numeric(20, 8), nullable=True
+    )
+
+    # Analysis results
+    optimal_decision: Mapped[str | None] = mapped_column(
+        String(10), nullable=True
+    )  # Decision with highest P&L
+    regret: Mapped[float | None] = mapped_column(
+        Numeric(20, 8), nullable=True
+    )  # optimal_pnl - actual_pnl
+
+    # Metadata
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    counterfactuals_calculated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # Relationship
+    account: Mapped["Account"] = relationship("Account", lazy="selectin")
+
+    __table_args__ = (
+        Index("idx_decision_snapshots_timestamp", "timestamp"),
+        Index("idx_decision_snapshots_account", "account_id"),
+        Index("idx_decision_snapshots_symbol", "symbol"),
+        Index("idx_decision_snapshots_regret", "regret"),
+        Index(
+            "idx_decision_snapshots_pending",
+            "exit_price_24h",
+            postgresql_where="exit_price_24h IS NULL",
+        ),
     )

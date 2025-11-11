@@ -34,38 +34,87 @@ class HyperliquidClient:
     def get_kline_data(
         self, symbol: str, period: str = "1d", count: int = 100
     ) -> list[dict[str, Any]]:
-        """Get kline/candlestick data for a symbol"""
+        """Get kline/candlestick data for a symbol using Hyperliquid native SDK
+
+        Uses info.candles_snapshot() instead of CCXT (which has infinite recursion bug).
+        This is more reliable and efficient as it's the official Hyperliquid SDK.
+
+        Args:
+            symbol: Trading pair symbol (e.g., "BTC", "ETH")
+            period: Timeframe - "1m", "5m", "15m", "1h", "1d" (default: "1d")
+            count: Number of candles to fetch (default: 100, max: 5000)
+
+        Returns:
+            List of candlestick data with OHLCV and calculated metrics
+        """
         try:
-            if not self.exchange:
-                self._initialize_exchange()
+            # Use Hyperliquid native SDK (Info class)
+            info = Info(skip_ws=True)  # skip_ws=True avoids websocket overhead
 
-            formatted_symbol = self._format_symbol(symbol)
+            # Extract coin name (remove /USDC or :USDC suffix if present)
+            coin = symbol.split("/")[0].split(":")[0].upper()
 
-            # Map period to CCXT timeframe
-            timeframe_map = {
+            # Map our period format to Hyperliquid interval format
+            interval_map = {
                 "1m": "1m",
                 "5m": "5m",
                 "15m": "15m",
-                "30m": "30m",
+                "30m": "30m",  # Not sure if Hyperliquid supports this
                 "1h": "1h",
+                "4h": "4h",  # Hyperliquid also supports 4h
                 "1d": "1d",
             }
-            timeframe = timeframe_map.get(period, "1d")
+            interval = interval_map.get(period, "1d")
 
-            # Fetch OHLCV data
-            ohlcv = self.exchange.fetch_ohlcv(formatted_symbol, timeframe, limit=count)
+            # Calculate time range (count candles back from now)
+            # Hyperliquid API expects startTime and endTime in milliseconds
+            import time
 
-            # Convert to our format
+            end_time_ms = int(time.time() * 1000)  # Current time in ms
+
+            # Calculate start time based on interval and count
+            interval_minutes = {
+                "1m": 1,
+                "5m": 5,
+                "15m": 15,
+                "30m": 30,
+                "1h": 60,
+                "4h": 240,
+                "1d": 1440,
+            }
+            minutes_back = interval_minutes.get(interval, 1440) * count
+            start_time_ms = end_time_ms - (minutes_back * 60 * 1000)
+
+            # Fetch candles from Hyperliquid API
+            # Note: parameter is 'name' not 'coin'
+            candles = info.candles_snapshot(
+                name=coin, interval=interval, startTime=start_time_ms, endTime=end_time_ms
+            )
+
+            # Convert Hyperliquid format to our standard format
             klines = []
-            for candle in ohlcv:
-                timestamp_ms = candle[0]
-                open_price = candle[1]
-                high_price = candle[2]
-                low_price = candle[3]
-                close_price = candle[4]
-                volume = candle[5]
+            for candle in candles:
+                # Hyperliquid candle format:
+                # {
+                #   "t": <timestamp_open_ms>,
+                #   "T": <timestamp_close_ms>,
+                #   "s": <coin>,
+                #   "i": <interval>,
+                #   "o": <open_price_str>,
+                #   "c": <close_price_str>,
+                #   "h": <high_price_str>,
+                #   "l": <low_price_str>,
+                #   "v": <volume_str>,
+                #   "n": <num_trades>
+                # }
+                timestamp_ms = candle.get("t", 0)
+                open_price = float(candle.get("o", 0))
+                high_price = float(candle.get("h", 0))
+                low_price = float(candle.get("l", 0))
+                close_price = float(candle.get("c", 0))
+                volume = float(candle.get("v", 0))
 
-                # Calculate change
+                # Calculate change and percent
                 change = close_price - open_price if open_price else 0
                 percent = (change / open_price * 100) if open_price else 0
 
@@ -75,22 +124,26 @@ class HyperliquidClient:
                         "datetime_str": datetime.fromtimestamp(
                             timestamp_ms / 1000, tz=UTC
                         ).isoformat(),
-                        "open": float(open_price) if open_price else None,
-                        "high": float(high_price) if high_price else None,
-                        "low": float(low_price) if low_price else None,
-                        "close": float(close_price) if close_price else None,
-                        "volume": float(volume) if volume else None,
-                        "amount": float(volume * close_price) if volume and close_price else None,
-                        "change": float(change),
-                        "percent": float(percent),
+                        "open": open_price,
+                        "high": high_price,
+                        "low": low_price,
+                        "close": close_price,
+                        "volume": volume,
+                        "amount": volume * close_price,  # Total value traded
+                        "change": change,
+                        "percent": percent,
                     }
                 )
 
-            logger.info(f"Got {len(klines)} klines for {formatted_symbol}")
+            logger.info(
+                f"✅ Got {len(klines)} klines for {coin} using Hyperliquid SDK (period={period})"
+            )
             return klines
 
         except Exception as e:
-            logger.error(f"Error fetching klines for {symbol}: {e}", exc_info=True)
+            logger.error(
+                f"Error fetching klines for {symbol} from Hyperliquid SDK: {e}", exc_info=True
+            )
             return []
 
     def get_market_status(self, symbol: str) -> dict[str, Any]:

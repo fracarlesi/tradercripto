@@ -205,6 +205,7 @@ async def _send_snapshot_async_impl(db: AsyncSession, account_id: int):
         cash_available = 0
         total_margin_used = 0
         positions_value = 0
+        hl_positions = []  # FIX: Initialize empty positions list to prevent UnboundLocalError
 
     # Get orders (limit to recent 20)
     result = await db.execute(
@@ -527,12 +528,12 @@ async def websocket_endpoint_async(websocket: WebSocket):
                     elif kind == "get_asset_curve":
                         # Get asset curve data with specific timeframe
                         timeframe = msg.get("timeframe", "1h")
-                        if timeframe not in ["5m", "1h", "1d"]:
+                        if timeframe not in ["5m", "1h", "1d", "all"]:
                             await websocket.send_text(
                                 json.dumps(
                                     {
                                         "type": "error",
-                                        "message": "Invalid timeframe. Must be 5m, 1h, or 1d",
+                                        "message": "Invalid timeframe. Must be 5m, 1h, 1d, or all",
                                     }
                                 )
                             )

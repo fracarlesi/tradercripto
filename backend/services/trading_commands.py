@@ -2,6 +2,7 @@
 Trading Commands Service - Handles order execution and trading logic
 """
 
+import asyncio
 import logging
 import random
 from decimal import Decimal
@@ -170,8 +171,8 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                     logger.debug(f"Account {account.name} has non-positive total assets, skipping")
                     continue
 
-                # Call AI for trading decision
-                decision = call_ai_for_decision(account, portfolio, prices)
+                # Call AI for trading decision (async for pivot points)
+                decision = asyncio.run(call_ai_for_decision(account, portfolio, prices))
                 if not decision or not isinstance(decision, dict):
                     logger.warning(f"Failed to get AI decision for {account.name}, skipping")
                     continue

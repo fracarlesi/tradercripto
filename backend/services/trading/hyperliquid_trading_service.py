@@ -4,6 +4,7 @@ This service wraps the synchronous Hyperliquid Python SDK with async methods
 to prevent blocking FastAPI's event loop.
 """
 
+import time
 from typing import Any
 
 from config.logging import get_logger
@@ -13,6 +14,7 @@ from eth_account import Account as EthAccount
 from hyperliquid.exchange import Exchange
 from hyperliquid.info import Info
 from hyperliquid.utils import constants
+from hyperliquid.utils.error import ClientError
 
 logger = get_logger(__name__)
 
@@ -25,37 +27,78 @@ class HyperliquidTradingService:
     """
 
     def __init__(self) -> None:
-        """Initialize Hyperliquid SDK clients (synchronous initialization)."""
+        """Initialize Hyperliquid SDK clients with retry logic for rate limiting."""
         self._exchange: Exchange | None = None
         self._info: Info | None = None
         self._wallet_address: str = settings.hyperliquid_wallet_address
         self._initialized = False
 
-        try:
-            # Initialize Exchange client
-            eth_account = EthAccount.from_key(settings.hyperliquid_private_key)
-            self._exchange = Exchange(
-                wallet=eth_account,
-                base_url=constants.MAINNET_API_URL,
-                account_address=self._wallet_address,
-            )
+        # Retry configuration for handling rate limits during startup
+        max_retries = 5
+        retry_delays = [1, 2, 4, 8, 16]  # Exponential backoff in seconds
 
-            # Initialize Info client
-            self._info = Info(constants.MAINNET_API_URL)
+        for attempt in range(max_retries):
+            try:
+                logger.info(
+                    f"Initializing Hyperliquid SDK (attempt {attempt + 1}/{max_retries})...",
+                    extra={"context": {"wallet": self._wallet_address, "attempt": attempt + 1}},
+                )
 
-            self._initialized = True
-            logger.info(
-                "Hyperliquid SDK initialized",
-                extra={"context": {"wallet": self._wallet_address}},
-            )
+                # Initialize Exchange client (may hit rate limit during startup)
+                eth_account = EthAccount.from_key(settings.hyperliquid_private_key)
+                self._exchange = Exchange(
+                    wallet=eth_account,
+                    base_url=constants.MAINNET_API_URL,
+                    account_address=self._wallet_address,
+                )
 
-        except Exception as e:
-            logger.error(
-                "Failed to initialize Hyperliquid SDK",
-                extra={"context": {"error": str(e)}},
-                exc_info=True,
-            )
-            raise
+                # Initialize Info client
+                self._info = Info(constants.MAINNET_API_URL)
+
+                self._initialized = True
+                logger.info(
+                    f"✅ Hyperliquid SDK initialized successfully (attempt {attempt + 1})",
+                    extra={"context": {"wallet": self._wallet_address}},
+                )
+                break  # Success - exit retry loop
+
+            except ClientError as e:
+                # Check if it's a rate limit error (429)
+                error_msg = str(e)
+                is_rate_limited = "429" in error_msg or "rate limit" in error_msg.lower()
+
+                if is_rate_limited and attempt < max_retries - 1:
+                    wait_time = retry_delays[attempt]
+                    logger.warning(
+                        f"⚠️ Rate limited during Hyperliquid SDK initialization, "
+                        f"retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})",
+                        extra={
+                            "context": {
+                                "error": error_msg,
+                                "wait_time": wait_time,
+                                "attempt": attempt + 1,
+                            }
+                        },
+                    )
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    # Either not rate limited, or final attempt failed
+                    logger.error(
+                        f"❌ Failed to initialize Hyperliquid SDK after {attempt + 1} attempts",
+                        extra={"context": {"error": str(e), "attempt": attempt + 1}},
+                        exc_info=True,
+                    )
+                    raise
+
+            except Exception as e:
+                # Non-rate-limit error - fail immediately
+                logger.error(
+                    "Failed to initialize Hyperliquid SDK (non-rate-limit error)",
+                    extra={"context": {"error": str(e)}},
+                    exc_info=True,
+                )
+                raise
 
     @property
     def info(self) -> Info:
