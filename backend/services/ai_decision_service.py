@@ -24,6 +24,9 @@ from services.market_data.prophet_forecaster import get_prophet_forecaster
 from hyperliquid.info import Info
 import pandas as pd
 
+# Import TOON encoder for efficient LLM communication (30-60% token savings)
+from services.toon_encoder import encode as toon_encode, estimate_token_savings
+
 #  mode API keys that should be skipped
 DEMO_API_KEYS = {"default-key-please-update-in-settings", "default", "", None}
 
@@ -68,48 +71,34 @@ def _is_default_api_key(api_key: str) -> bool:
 
 
 def _format_technical_analysis(technical_factors: dict) -> str:
-    """Format technical analysis for AI prompt"""
+    """
+    Format technical analysis for AI prompt using TOON format.
+
+    TOON reduces token count by 30-60% compared to JSON for tabular data.
+    Now passes ALL analyzed symbols (not just top 5) for better AI decisions.
+    """
     if not technical_factors or not technical_factors.get("recommendations"):
         return "Technical Analysis: Not available (insufficient historical data)"
 
     recommendations = technical_factors.get("recommendations", [])
 
-    lines = ["Technical Analysis (Quantitative Signals - Use these to guide decisions):"]
-    lines.append("")
-
-    # Show top 5 recommendations with scores
-    for i, rec in enumerate(recommendations[:5], 1):
-        symbol = rec["symbol"]
-        score = rec["score"]
-        momentum = rec["momentum"]
-        support = rec["support"]
-
-        # Signal interpretation
-        if score >= 0.7:
-            signal = "🟢 STRONG BUY"
-        elif score >= 0.6:
-            signal = "🟢 BUY"
-        elif score >= 0.4:
-            signal = "🟡 HOLD"
-        elif score >= 0.3:
-            signal = "🔴 SELL"
-        else:
-            signal = "🔴 STRONG SELL"
-
-        lines.append(
-            f"  {i}. {symbol}: {signal} | Score: {score:.3f} "
-            f"(Momentum: {momentum:.3f}, Support: {support:.3f})"
-        )
-
+    lines = ["Technical Analysis (Quantitative Signals - ALL analyzed symbols in TOON format):"]
     lines.append("")
     lines.append("Signal Interpretation:")
-    lines.append("  • Momentum Score: Measures upward price trend strength (higher = stronger uptrend)")
-    lines.append("  • Support Score: Measures support level strength (higher = stronger buying pressure)")
-    lines.append("  • Combined Score > 0.7: Strong technical buy signal - high confidence")
-    lines.append("  • Combined Score 0.6-0.7: Moderate buy signal")
-    lines.append("  • Combined Score 0.4-0.6: Neutral - hold or wait for better signal")
-    lines.append("  • Combined Score < 0.4: Weak signal - consider selling or avoid buying")
+    lines.append("  • Score > 0.7: Strong technical buy signal - high confidence")
+    lines.append("  • Score 0.6-0.7: Moderate buy signal")
+    lines.append("  • Score 0.4-0.6: Neutral - hold or wait for better signal")
+    lines.append("  • Score < 0.4: Weak signal - consider selling or avoid buying")
+    lines.append("  • Momentum: Measures upward price trend strength (higher = stronger uptrend)")
+    lines.append("  • Support: Measures support level strength (higher = stronger buying pressure)")
     lines.append("")
+
+    # Convert recommendations to TOON format (ALL symbols, not just top 5)
+    toon_data = toon_encode(recommendations, root_name="technical_recommendations")
+    lines.append(toon_data)
+
+    lines.append("")
+    lines.append(f"Total symbols analyzed: {len(recommendations)}")
     lines.append("IMPORTANT: Prioritize symbols with high combined scores (>0.6) for BUY decisions.")
 
     return "\n".join(lines)
@@ -819,6 +808,22 @@ async def call_ai_for_decision(
             pos_with_profit["profit_pct"] = round(profit_pct, 2)
             positions_with_profit.append(pos_with_profit)
 
+        # Convert prices dict to TOON format for efficient LLM communication
+        prices_list = [{"symbol": s, "price": p} for s, p in prices.items()]
+        prices_toon = toon_encode(prices_list, root_name="market_prices")
+
+        # Convert positions to TOON format
+        positions_toon = toon_encode(positions_with_profit, root_name="positions") if positions_with_profit else "positions[0]:\n(No active positions)"
+
+        # Log token savings (for monitoring efficiency)
+        prices_json = json.dumps(prices, indent=2)
+        savings = estimate_token_savings(prices_json, prices_toon)
+        logger.info(
+            f"TOON encoding savings: {savings['savings_pct']}% "
+            f"({savings['savings_tokens']} tokens saved, "
+            f"{savings['toon_tokens_estimate']} vs {savings['json_tokens_estimate']})"
+        )
+
         # Get strategy weights from account (or use defaults)
         weights = _get_strategy_weights(account)
 
@@ -864,10 +869,11 @@ When indicators CONFLICT, FAVOR the higher-weighted signals.
 
 Portfolio Data:
 - Total Assets: ${portfolio.get("total_assets", 0):.2f}
-- Current Positions (with profit/loss %): {json.dumps(positions_with_profit, indent=2)}
+- Current Positions (with profit/loss % in TOON format):
+{positions_toon}
 
-Current Market Prices (showing {len(prices)} available cryptocurrencies):
-{json.dumps(prices, indent=2)}
+Current Market Prices ({len(prices)} available cryptocurrencies in TOON format):
+{prices_toon}
 
 {technical_section}
 
