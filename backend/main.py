@@ -142,7 +142,7 @@ async def lifespan(app: FastAPI):
         )
 
         # Add stop-loss check job (every 60 seconds) - Optimized to reduce API calls
-        from services.auto_trader import check_stop_loss_async, place_ai_driven_crypto_order  # , check_take_profit_async
+        from services.auto_trader import check_stop_loss_async, check_take_profit_async, place_ai_driven_crypto_order
 
         scheduler_service.add_sync_job(
             job_func=check_stop_loss_async,
@@ -161,13 +161,13 @@ async def lifespan(app: FastAPI):
         )
         logger.info("AI trading job scheduled (APScheduler, non-blocking, 10-minute interval)")
 
-        # Take-profit disabled - let AI decide when to sell in profit
-        # This allows AI to ride trends beyond +5% if momentum continues
-        # scheduler_service.add_sync_job(
-        #     job_func=check_take_profit_async,
-        #     interval_seconds=30,
-        #     job_id="take_profit_check"
-        # )
+        # Add take-profit check job (every 60 seconds) - Automatically locks in +5% profits
+        scheduler_service.add_sync_job(
+            job_func=check_take_profit_async,
+            interval_seconds=60,
+            job_id="take_profit_check"
+        )
+        logger.info("Take-profit job scheduled (every 60 seconds, +5% threshold)")
 
     except Exception as e:
         print(f"Warning: Failed to start scheduler: {e}")

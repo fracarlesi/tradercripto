@@ -676,14 +676,14 @@ def _execute_order_async(decision: dict[str, Any], order_size: float, leverage: 
         return {"status": "error", "message": str(e)}
 
 
-async def check_stop_loss_async(stop_loss_threshold: float = -0.10) -> None:
+async def check_stop_loss_async(stop_loss_threshold: float = -0.05) -> None:
     """Check all open positions and close if loss exceeds threshold (async).
 
     This function runs every 30 seconds to protect against large losses.
-    Conservative approach: closes position if unrealized loss > 10%.
+    Aggressive approach: closes position if unrealized loss > 5%.
 
     Args:
-        stop_loss_threshold: Loss threshold as negative decimal (default: -0.10 = -10%)
+        stop_loss_threshold: Loss threshold as negative decimal (default: -0.05 = -5%)
 
     Returns:
         None
