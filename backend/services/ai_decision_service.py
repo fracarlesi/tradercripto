@@ -104,17 +104,18 @@ def _format_technical_analysis(technical_factors: dict) -> str:
     return "\n".join(lines)
 
 
-async def _format_pivot_points(portfolio: dict, prices: dict[str, float]) -> str:
+async def _format_pivot_points(portfolio: dict, prices: dict[str, float], high_score_symbols: list[str] = None) -> str:
     """
     Format pivot points analysis for AI prompt (RIZZO VIDEO INTEGRATION).
 
     Calculates pivot points for:
     1. All active positions (to decide hold/sell)
-    2. Top 3 symbols by price (to identify opportunities)
+    2. High-score symbols (score > 0.7) - OPTION B
 
     Args:
         portfolio: Portfolio data with positions
         prices: Current market prices
+        high_score_symbols: Optional list of high-score symbols (default: top 3 by price)
 
     Returns:
         Formatted string with pivot points analysis
@@ -171,16 +172,25 @@ async def _format_pivot_points(portfolio: dict, prices: dict[str, float]) -> str
                 lines.append(f"    - {interpretation[:100]}...")  # Truncate
                 lines.append("")
 
-        # 2. Pivot points for top symbols (potential opportunities)
-        lines.append("🔍 TOP SYMBOLS - Pivot Analysis (for new positions):")
+        # 2. Pivot points for high-score symbols (OPTION B: score > 0.7)
+        lines.append("🔍 HIGH-SCORE SYMBOLS - Pivot Analysis (score > 0.7):")
         lines.append("")
 
-        # Sort by price (descending) and take top 3
-        sorted_symbols = sorted(prices.items(), key=lambda x: x[1], reverse=True)[:3]
+        # Use high-score symbols if provided, otherwise fallback to top 3 by price
+        if high_score_symbols:
+            target_symbols = high_score_symbols[:10]  # Limit to top 10 for performance
+        else:
+            # Fallback: top 3 by price (backwards compatibility)
+            sorted_symbols = sorted(prices.items(), key=lambda x: x[1], reverse=True)[:3]
+            target_symbols = [sym for sym, _ in sorted_symbols]
 
-        for symbol, price in sorted_symbols:
+        for symbol in target_symbols:
             # Skip if already have position
             if any(pos.get("symbol") == symbol for pos in positions):
+                continue
+
+            price = prices.get(symbol, 0)
+            if price <= 0:
                 continue
 
             pivots = await calculator.calculate_pivot_points(symbol, price)
@@ -297,7 +307,7 @@ def _format_whale_alerts() -> str:
         return "Whale Alerts: Unavailable (error)"
 
 
-async def _format_prophet_forecast(portfolio: dict, prices: dict[str, float]) -> str:
+async def _format_prophet_forecast(portfolio: dict, prices: dict[str, float], target_symbols: list[str] = None) -> str:
     """
     Format Prophet price forecasting for AI prompt (RIZZO VIDEO - PRIORITY 6).
 
@@ -307,9 +317,10 @@ async def _format_prophet_forecast(portfolio: dict, prices: dict[str, float]) ->
     Args:
         portfolio: Portfolio data with positions
         prices: Current market prices
+        target_symbols: Optional list of symbols to forecast (default: BTC, ETH)
 
     Returns:
-        Formatted string with Prophet forecasts for BTC/ETH
+        Formatted string with Prophet forecasts for specified symbols
     """
     try:
         forecaster = get_prophet_forecaster(
@@ -329,8 +340,9 @@ async def _format_prophet_forecast(portfolio: dict, prices: dict[str, float]) ->
         lines.append("- Confidence < 70% → LOW CONVICTION forecast (use with caution)")
         lines.append("")
 
-        # Forecast for BTC and ETH (most liquid pairs)
-        symbols = ["BTC", "ETH"]
+        # Forecast for specified symbols (default: BTC/ETH for backwards compatibility)
+        # OPTION B: Filter to symbols with score > 0.7 (passed from caller)
+        symbols = target_symbols if target_symbols else ["BTC", "ETH"]
 
         for symbol in symbols:
             try:
@@ -779,8 +791,21 @@ async def call_ai_for_decision(
         # Format technical analysis for AI (CRITICAL: quantitative signals)
         technical_section = _format_technical_analysis(portfolio.get("technical_factors", {}))
 
-        # RIZZO VIDEO INTEGRATION: Calculate pivot points for all active positions + top symbols
-        pivot_section = await _format_pivot_points(portfolio, prices)
+        # OPTION B: Extract high-score symbols (score > 0.7) for Prophet + Pivot analysis
+        technical_factors = portfolio.get("technical_factors", {})
+        recommendations = technical_factors.get("recommendations", [])
+
+        # Filter symbols with score > 0.7 and sort by score (descending)
+        high_score_symbols = [
+            rec["symbol"]
+            for rec in sorted(recommendations, key=lambda x: x.get("score", 0), reverse=True)
+            if rec.get("score", 0) > 0.7
+        ]
+
+        logger.info(f"Filtered {len(high_score_symbols)} high-score symbols (score > 0.7) for Prophet+Pivot analysis: {high_score_symbols[:5]}...")
+
+        # RIZZO VIDEO INTEGRATION: Calculate pivot points for high-score symbols (OPTION B)
+        pivot_section = await _format_pivot_points(portfolio, prices, high_score_symbols)
 
         # RIZZO VIDEO INTEGRATION: Get Fear & Greed sentiment index
         sentiment_section = _format_sentiment()
@@ -788,8 +813,8 @@ async def call_ai_for_decision(
         # RIZZO VIDEO INTEGRATION: Get whale alerts (large transactions)
         whale_section = _format_whale_alerts()
 
-        # RIZZO VIDEO INTEGRATION (PRIORITY 6): Get Prophet price forecasts (PRIMARY BIAS)
-        prophet_section = await _format_prophet_forecast(portfolio, prices)
+        # RIZZO VIDEO INTEGRATION (PRIORITY 6): Get Prophet forecasts for high-score symbols (OPTION B)
+        prophet_section = await _format_prophet_forecast(portfolio, prices, high_score_symbols)
 
         # Calculate profit % for each position to help AI make informed decisions
         positions_with_profit = []
