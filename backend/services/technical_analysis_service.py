@@ -39,7 +39,7 @@ RETRY_DELAY = 1.0  # Initial delay between retries (seconds)
 RETRY_BACKOFF = 1.5  # Exponential backoff multiplier
 
 # Rate limiting: Add small delay between requests to avoid API throttling
-REQUEST_DELAY = 0.25  # 250ms delay between requests (increased for 2 workers to prevent rate limiting)
+REQUEST_DELAY = 0.35  # 350ms delay between requests (optimized for 2 workers to prevent 429 errors)
 
 
 def fetch_historical_data(symbols: list[str], period: str = "1d", count: int = 70) -> dict[str, pd.DataFrame]:
@@ -109,19 +109,22 @@ def fetch_historical_data(symbols: list[str], period: str = "1d", count: int = 7
 
                 logger.info(f"✅ Fetched {len(df)} candles for {symbol}")
 
-                # Add delay between requests to avoid rate limiting (only with sequential MAX_WORKERS=1)
-                if MAX_WORKERS == 1:
-                    time.sleep(REQUEST_DELAY)
+                # Add delay between requests to avoid rate limiting
+                # Applied with all worker configurations to prevent 429 errors
+                time.sleep(REQUEST_DELAY)
 
                 return symbol, df
 
             except Exception as e:
                 last_exception = e
 
-                # Check if this is a retryable error
-                is_retryable = any(
-                    err_type in str(type(e).__name__).lower()
-                    for err_type in ['timeout', 'connection', 'http', 'network']
+                # Check if this is a retryable error (including 429 rate limiting)
+                error_str = str(e).lower()
+                error_type = str(type(e).__name__).lower()
+
+                is_retryable = (
+                    any(err_type in error_type for err_type in ['timeout', 'connection', 'http', 'network'])
+                    or '429' in error_str  # Retry on rate limiting errors
                 )
 
                 if is_retryable and attempt < MAX_RETRIES:
