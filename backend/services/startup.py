@@ -78,6 +78,38 @@ def initialize_services() -> None:
         )
         logger.info("Counterfactual calculation task started (1-hour interval)")
 
+        # Add self-analysis task (every 3 hours)
+        def self_analysis_wrapper():
+            """
+            Wrapper for DeepSeek self-analysis job.
+            Analyzes 50+ decisions with counterfactuals to suggest optimal weights.
+            """
+            try:
+                # Run analysis for account_id=1 (default account)
+                result = asyncio.run(run_self_analysis(account_id=1, limit=100))
+
+                if "error" in result:
+                    logger.warning(f"Self-analysis skipped: {result['error']}")
+                else:
+                    total_regret = result.get("total_regret_usd", 0)
+                    accuracy = result.get("accuracy_rate", 0) * 100
+                    suggested_weights = result.get("suggested_weights", {})
+
+                    logger.info(
+                        f"✅ Self-analysis complete for account 1: "
+                        f"Regret=${total_regret:.2f}, Accuracy={accuracy:.1f}%"
+                    )
+                    logger.info(f"💡 Suggested weights: {suggested_weights}")
+            except Exception as e:
+                logger.error(f"Self-analysis failed: {e}", exc_info=True)
+
+        task_scheduler.add_interval_task(
+            task_func=self_analysis_wrapper,
+            interval_seconds=10800,  # Every 3 hours
+            task_id="self_analysis",
+        )
+        logger.info("DeepSeek self-analysis task started (3-hour interval)")
+
         logger.info("All services initialized successfully")
 
     except Exception as e:
