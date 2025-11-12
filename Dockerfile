@@ -22,23 +22,7 @@ COPY frontend/ ./frontend/
 RUN cd frontend && pnpm run build
 
 # =============================================================================
-# Stage 2: Python Dependencies (T075)
-# =============================================================================
-FROM python:3.13-slim AS python-deps
-
-WORKDIR /app
-
-# Install uv for dependency management
-RUN pip install --no-cache-dir uv
-
-# Copy dependency files first for better layer caching
-COPY backend/pyproject.toml backend/uv.lock* ./
-
-# Install Python dependencies
-RUN uv sync --frozen --no-dev
-
-# =============================================================================
-# Stage 3: Runtime (T076)
+# Stage 2: Runtime (T076)
 # =============================================================================
 FROM python:3.13-slim AS runtime
 
@@ -48,28 +32,40 @@ RUN groupadd -g 1000 appuser && \
 
 WORKDIR /app
 
-# Install runtime dependencies
+# Install runtime dependencies, build dependencies, and uv
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         curl \
-        ca-certificates && \
+        ca-certificates \
+        gcc \
+        g++ \
+        make \
+        pkg-config \
+        libffi-dev \
+        libsecp256k1-dev && \
+    pip install --no-cache-dir uv && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy virtual environment from python-deps stage
-COPY --from=python-deps --chown=appuser:appuser /app/.venv /app/.venv
+# Copy dependency files first for better layer caching
+COPY backend/pyproject.toml backend/uv.lock* ./
+
+# Install Python dependencies system-wide (no venv needed in Docker)
+RUN uv pip install --system -r pyproject.toml && \
+    apt-get purge -y gcc g++ make pkg-config libffi-dev libsecp256k1-dev && \
+    apt-get autoremove -y && \
+    rm -rf /var/lib/apt/lists/*
 
 # Copy backend application code
-COPY --chown=appuser:appuser backend/ ./
+COPY backend/ ./
 
 # Copy frontend build from frontend-build stage (workspace aware path)
-COPY --from=frontend-build --chown=appuser:appuser /app/frontend/dist ./static
+COPY --from=frontend-build /app/frontend/dist ./static
 
-# Create data directory for SQLite (with proper permissions)
-RUN mkdir -p /app/data && chown -R appuser:appuser /app/data
+# Create data directory and fix all permissions for appuser
+RUN mkdir -p /app/data && \
+    chown -R appuser:appuser /app
 
 # Set environment variables
-ENV VIRTUAL_ENV=/app/.venv
-ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 
@@ -83,5 +79,5 @@ EXPOSE 5611
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:5611/api/health').read()"
 
-# Start the application
+# Start the application using system uvicorn
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5611"]

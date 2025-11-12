@@ -17,6 +17,7 @@ from services.ai_decision_service import (
 )
 from services.asset_calculator import calc_positions_value
 from services.learning import save_decision_snapshot
+from services.new_token_detector import detect_new_tokens, format_new_tokens_for_ai
 from services.technical_analysis_service import calculate_technical_factors
 from services.trading.hyperliquid_trading_service import hyperliquid_trading_service
 
@@ -98,8 +99,16 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
             f"Technical analysis: {len(technical_factors.get('recommendations', []))} symbols analyzed"
         )
 
-        # Add technical factors to portfolio data for AI
+        # 3.6. Detect new tokens (3-7 days old) that would be filtered out by technical analysis
+        logger.info("Scanning for new tokens (3-7 days old)...")
+        new_tokens_data = detect_new_tokens(available_symbols, min_days=3, max_days=7)
+        logger.info(
+            f"New token detection: {len(new_tokens_data.get('new_tokens', []))} ultra-new tokens found"
+        )
+
+        # Add technical factors and new tokens to portfolio data for AI
         portfolio["technical_factors"] = technical_factors
+        portfolio["new_tokens"] = new_tokens_data
 
         # 4. Get AI decision (with caching)
         logger.info("Calling AI for trading decision...")
