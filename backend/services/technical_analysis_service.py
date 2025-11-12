@@ -39,7 +39,7 @@ RETRY_DELAY = 1.0  # Initial delay between retries (seconds)
 RETRY_BACKOFF = 1.5  # Exponential backoff multiplier
 
 # Rate limiting: Add small delay between requests to avoid API throttling
-REQUEST_DELAY = 0.35  # 350ms delay between requests (optimized for 2 workers to prevent 429 errors)
+REQUEST_DELAY = 0.50  # 500ms delay between requests (increased to eliminate all 429 errors)
 
 
 def fetch_historical_data(symbols: list[str], period: str = "1d", count: int = 70) -> dict[str, pd.DataFrame]:
