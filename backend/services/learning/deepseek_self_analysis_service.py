@@ -179,7 +179,50 @@ def _build_self_analysis_prompt(snapshots: List[Dict[str, Any]]) -> str:
     sorted_by_regret = sorted(snapshots, key=lambda x: x.get("regret", 0) or 0, reverse=True)
     top_mistakes = sorted_by_regret[:10]  # Top 10 mistakes
     random_sample = snapshots[10:30]  # 20 random decisions
-    sample_snapshots = top_mistakes + random_sample
+    sample_snapshots_full = top_mistakes + random_sample
+
+    # Create SLIM version of snapshots (only essential data to reduce token usage)
+    # Full snapshots can be 50k+ tokens → slim version ~5k tokens
+    sample_snapshots = []
+    for s in sample_snapshots_full:
+        # Extract only key indicator values from indicators_snapshot
+        indicators = s.get("indicators_snapshot", {})
+        tech_factors = indicators.get("technical_factors", {})
+
+        # Get symbol data if available
+        symbol = s.get("symbol", "UNKNOWN")
+        symbol_data = None
+        if tech_factors.get("recommendations"):
+            symbol_data = next(
+                (r for r in tech_factors["recommendations"] if r["symbol"] == symbol),
+                None
+            )
+
+        slim_snapshot = {
+            "symbol": symbol,
+            "timestamp": s.get("timestamp"),
+            "actual_decision": s.get("actual_decision"),
+            "optimal_decision": s.get("optimal_decision"),
+            "regret_usd": s.get("regret", 0),
+            "entry_price": s.get("entry_price"),
+            "exit_price_24h": s.get("exit_price_24h"),
+            "actual_pnl_usd": s.get("actual_pnl", 0),
+            # Include ONLY key indicator values (not full data)
+            "indicators": {
+                "score": symbol_data.get("score") if symbol_data else None,
+                "momentum": symbol_data.get("momentum") if symbol_data else None,
+                "support": symbol_data.get("support") if symbol_data else None,
+                "prophet_trend": symbol_data.get("prophet_forecast", {}).get("trend") if symbol_data else None,
+                "prophet_change_24h": symbol_data.get("prophet_forecast", {}).get("change_pct_24h") if symbol_data else None,
+                "pivot_zone": symbol_data.get("pivot_points", {}).get("current_zone") if symbol_data else None,
+                "rsi": symbol_data.get("rsi") if symbol_data else None,
+            },
+            # Short reasoning summary (first 200 chars to save tokens)
+            "reasoning_summary": (s.get("deepseek_reasoning", "")[:200] + "..."
+                                if len(s.get("deepseek_reasoning", "")) > 200
+                                else s.get("deepseek_reasoning", "")),
+        }
+        sample_snapshots.append(slim_snapshot)
 
     prompt = f"""Analyze your past {total_snapshots} trading decisions and identify patterns to improve performance.
 
@@ -190,7 +233,7 @@ def _build_self_analysis_prompt(snapshots: List[Dict[str, Any]]) -> str:
 - Accuracy Rate: {accuracy_rate:.1%} (% times you chose the optimal decision)
 - Decision Breakdown: {decision_counts['LONG']} LONG, {decision_counts['SHORT']} SHORT, {decision_counts['HOLD']} HOLD
 
-**Your Decision Snapshots** (sample of {len(sample_snapshots)}):
+**Your Decision Snapshots** (sample of {len(sample_snapshots)}, condensed for analysis):
 
 {json.dumps(sample_snapshots, indent=2)}
 
