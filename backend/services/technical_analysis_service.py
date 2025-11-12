@@ -24,13 +24,14 @@ from services.market_data.hyperliquid_market_data import get_kline_data_from_hyp
 logger = logging.getLogger(__name__)
 
 # Number of parallel workers for fetching kline data
-# CRITICAL: Set to 1 to avoid Hyperliquid API rate limiting (429 errors)
+# CRITICAL: Balanced configuration to optimize speed while avoiding rate limiting
 # Testing showed:
 #   - 10 workers → massive 429 errors
-#   - 3 workers → still getting 429 errors (~156 requests per batch)
-#   - 1 worker (sequential) → ZERO 429 errors (100% reliable)
-# Trade-off: Sequential is slower (~2-3 min for 469 symbols) but 100% reliable
-MAX_WORKERS = 1
+#   - 3 workers (no delay) → still getting 429 errors (~156 requests per batch)
+#   - 1 worker (sequential) → ZERO 429 errors but slow (~7 min for 222 symbols)
+#   - 2 workers (250ms delay) → OPTIMIZED for speed (~3.5 min) with low 429 risk
+# Trade-off: 2 workers = 2x faster than sequential, minimal rate limit risk
+MAX_WORKERS = 2
 
 # Retry configuration for transient API failures
 MAX_RETRIES = 2  # Retry failed fetches up to 2 times
@@ -38,7 +39,7 @@ RETRY_DELAY = 1.0  # Initial delay between retries (seconds)
 RETRY_BACKOFF = 1.5  # Exponential backoff multiplier
 
 # Rate limiting: Add small delay between requests to avoid API throttling
-REQUEST_DELAY = 0.15  # 150ms delay between sequential requests (prevents rate limiting)
+REQUEST_DELAY = 0.25  # 250ms delay between requests (increased for 2 workers to prevent rate limiting)
 
 
 def fetch_historical_data(symbols: list[str], period: str = "1d", count: int = 70) -> dict[str, pd.DataFrame]:
