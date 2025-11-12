@@ -108,6 +108,12 @@ class Settings(BaseSettings):
         description="Webhook URL for alerts (Slack, Discord, or generic)",
     )
 
+    # Learning System Configuration
+    AUTO_APPLY_WEIGHTS: bool = Field(
+        default=True,
+        description="Enable automatic application of learned indicator weights once per day",
+    )
+
     @field_validator("database_url")
     @classmethod
     def validate_database_url(cls, v: str) -> str:

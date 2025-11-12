@@ -128,13 +128,59 @@ async def run_self_analysis(
                 f"Accuracy={analysis.get('accuracy_rate', 0):.1%}"
             )
 
-            # AUTO-APPLICATION: Apply suggested weights if valid
+            # AUTO-APPLICATION: Apply suggested weights once per day
             if analysis.get("suggested_weights"):
-                await _apply_suggested_weights(
-                    account=account,
-                    suggested_weights=analysis["suggested_weights"],
-                    db=db
+                from services.learning.indicator_weights_service import (
+                    should_auto_apply_today,
+                    apply_indicator_weights,
                 )
+
+                # Check if we should auto-apply today
+                should_apply = await should_auto_apply_today(account_id)
+
+                if should_apply:
+                    # Validate weights before applying
+                    if _validate_weights(analysis["suggested_weights"]):
+                        try:
+                            # Blend weights: 70% old + 30% new (gradual adjustment)
+                            blended_weights = _blend_weights(
+                                current_weights=account.indicator_weights,
+                                suggested_weights=analysis["suggested_weights"],
+                            )
+
+                            # Apply using the service (tracks history)
+                            await apply_indicator_weights(
+                                account_id=account_id,
+                                suggested_weights=blended_weights,
+                                source="auto_daily",
+                                session=db,
+                            )
+
+                            logger.info(
+                                f"✅ Auto-applied blended weights to account {account_id}",
+                                extra={
+                                    "context": {
+                                        "account_id": account_id,
+                                        "old_weights": account.indicator_weights,
+                                        "suggested_weights": analysis["suggested_weights"],
+                                        "blended_weights": blended_weights,
+                                    }
+                                },
+                            )
+                        except Exception as e:
+                            logger.error(
+                                f"Failed to auto-apply weights to account {account_id}",
+                                extra={"context": {"error": str(e)}},
+                                exc_info=True,
+                            )
+                    else:
+                        logger.warning(
+                            f"Skipping auto-apply - suggested weights failed validation"
+                        )
+                else:
+                    logger.debug(
+                        f"Skipping auto-apply for account {account_id} (already applied today or disabled)"
+                    )
 
             return analysis
 
@@ -358,36 +404,33 @@ def _validate_weights(weights: Dict[str, float]) -> bool:
     return True
 
 
-async def _apply_suggested_weights(
-    account,  # Account model from DB
+def _blend_weights(
+    current_weights: Optional[Dict[str, float]],
     suggested_weights: Dict[str, float],
-    db  # AsyncSession
-) -> None:
+    blend_old: float = 0.7,
+    blend_new: float = 0.3,
+) -> Dict[str, float]:
     """
-    Apply suggested weights to account with gradual adjustment (70/30 blend).
+    Blend current weights with suggested weights for gradual adjustment.
 
-    This implements a conservative weight update strategy:
-    - 70% old weights (current strategy)
-    - 30% new weights (learned from analysis)
-
-    This prevents sudden strategy shifts while still allowing the AI to improve.
+    This prevents sudden strategy shifts while allowing AI to improve over time.
 
     Args:
-        account: Account database model
-        suggested_weights: New weights suggested by DeepSeek analysis
-        db: Database session
+        current_weights: Current indicator weights (None = use defaults)
+        suggested_weights: New weights from DeepSeek analysis
+        blend_old: Weight for current values (default: 0.7)
+        blend_new: Weight for suggested values (default: 0.3)
 
-    Raises:
-        ValueError: If weights are invalid
+    Returns:
+        Blended weights dictionary
+
+    Example:
+        >>> current = {"prophet": 0.5, "pivot_points": 0.8}
+        >>> suggested = {"prophet": 0.9, "pivot_points": 0.6}
+        >>> _blend_weights(current, suggested)
+        {"prophet": 0.62, "pivot_points": 0.74}  # 70% old + 30% new
     """
-    logger.info(f"Applying suggested weights for account_id={account.id}")
-
-    # Validate suggested weights
-    if not _validate_weights(suggested_weights):
-        logger.warning("Suggested weights failed validation - skipping auto-application")
-        return
-
-    # Get current weights (or use defaults if not set)
+    # Default weights if current_weights is None
     default_weights = {
         "pivot_points": 0.8,
         "prophet": 0.5,
@@ -397,53 +440,23 @@ async def _apply_suggested_weights(
         "news": 0.2,
     }
 
-    current_weights = account.strategy_weights or default_weights
+    current_weights = current_weights or default_weights
 
-    # Log current weights
-    logger.info(f"Current weights: {current_weights}")
-    logger.info(f"Suggested weights: {suggested_weights}")
-
-    # Blend weights: 70% old + 30% new (gradual adjustment)
-    BLEND_OLD = 0.7
-    BLEND_NEW = 0.3
-
-    new_weights = {}
-    for indicator in suggested_weights.keys():
+    blended_weights = {}
+    for indicator, suggested_value in suggested_weights.items():
         current_value = current_weights.get(indicator, 0.5)  # Fallback to 0.5 if missing
-        suggested_value = suggested_weights[indicator]
 
-        # Gradual blend
-        blended_value = BLEND_OLD * current_value + BLEND_NEW * suggested_value
+        # Gradual blend: blend_old% old + blend_new% new
+        blended_value = blend_old * current_value + blend_new * suggested_value
 
         # Round to 2 decimal places
-        new_weights[indicator] = round(blended_value, 2)
-
-    logger.info(f"Blended weights (70% old + 30% new): {new_weights}")
-
-    # Calculate weight changes
-    changes = {}
-    for indicator, new_value in new_weights.items():
-        old_value = current_weights.get(indicator, 0.5)
-        change = new_value - old_value
-        changes[indicator] = change
-
-    # Log detailed changes
-    logger.info("📊 Weight changes:")
-    for indicator, change in changes.items():
-        old_val = current_weights.get(indicator, 0.5)
-        new_val = new_weights[indicator]
-        direction = "↑" if change > 0 else "↓" if change < 0 else "→"
-        logger.info(f"   {indicator}: {old_val:.2f} {direction} {new_val:.2f} ({change:+.2f})")
-
-    # Save to database
-    account.strategy_weights = new_weights
-    await db.commit()
-    await db.refresh(account)
+        blended_weights[indicator] = round(blended_value, 2)
 
     logger.info(
-        f"✅ Strategy weights updated for account_id={account.id}. "
-        f"AI will use these weights in the next trading cycle (every 3 minutes)."
+        f"Blended weights ({blend_old*100:.0f}% old + {blend_new*100:.0f}% new): {blended_weights}"
     )
+
+    return blended_weights
 
 
 # Expose for API endpoint

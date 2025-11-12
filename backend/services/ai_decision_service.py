@@ -253,13 +253,18 @@ def _format_sentiment() -> str:
 
 def _get_strategy_weights(account: Account) -> dict:
     """
-    Get strategy weights from account or return defaults (RIZZO VIDEO).
+    Get strategy weights from account or return defaults.
 
     Weights determine how much importance AI gives to each indicator.
     Higher weight = more important in decision-making.
 
+    **LEARNING INTEGRATION**:
+    - Reads from `account.indicator_weights` (learned weights from DeepSeek self-analysis)
+    - Falls back to `account.strategy_weights` (manual overrides, legacy)
+    - Falls back to default weights if neither is set
+
     Args:
-        account: Account model with optional strategy_weights JSON field
+        account: Account model with optional indicator_weights/strategy_weights JSON field
 
     Returns:
         Dict with weights for each indicator (0.0-1.0)
@@ -274,12 +279,23 @@ def _get_strategy_weights(account: Account) -> dict:
         "news": 0.2,  # Lowest (mostly noise in crypto)
     }
 
-    # Use account weights if configured, otherwise use defaults
-    if account.strategy_weights:
-        # Merge account weights with defaults (account overrides)
+    # Priority: indicator_weights (learned) > strategy_weights (manual) > defaults
+    if account.indicator_weights:
+        # Use learned weights from DeepSeek self-analysis (auto-applied daily)
+        weights = {**default_weights, **account.indicator_weights}
+        logger.debug(
+            f"Using learned indicator_weights for account {account.id}: {account.indicator_weights}"
+        )
+    elif account.strategy_weights:
+        # Fallback to manual strategy_weights (legacy, or manual override)
         weights = {**default_weights, **account.strategy_weights}
+        logger.debug(
+            f"Using manual strategy_weights for account {account.id}: {account.strategy_weights}"
+        )
     else:
+        # Fallback to defaults
         weights = default_weights
+        logger.debug(f"Using default weights for account {account.id}")
 
     return weights
 

@@ -118,6 +118,11 @@ class Account(Base):
         Numeric(5, 4), default=0.05, nullable=False
     )  # Default 5% (video recommends 5% vs our previous 20%)
 
+    # Indicator Weights for Auto-Learning System
+    # Format: {"prophet": 0.5, "pivot": 0.5, "rsi_macd": 0.5, "sentiment": 0.5, "whale": 0.5}
+    # Updated automatically by self-analysis when AUTO_APPLY_WEIGHTS=true
+    indicator_weights: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -483,4 +488,42 @@ class DecisionSnapshot(Base):
             "exit_price_24h",
             postgresql_where="exit_price_24h IS NULL",
         ),
+    )
+
+
+class IndicatorWeightsHistory(Base):
+    """Indicator weights history for auto-learning system.
+
+    Tracks changes in indicator weights over time, enabling:
+    - Gradual auto-adjustment based on self-analysis
+    - Rollback capability
+    - Performance tracking
+    """
+
+    __tablename__ = "indicator_weights_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    account_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False
+    )
+
+    # Weight snapshots (JSON format for flexibility)
+    old_weights: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    new_weights: Mapped[dict] = mapped_column(JSON, nullable=False)
+
+    # Metadata
+    source: Mapped[str] = mapped_column(
+        String(50), nullable=False
+    )  # 'auto_daily', 'manual', 'test_script', etc.
+
+    applied_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    # Relationship
+    account: Mapped["Account"] = relationship("Account", lazy="selectin")
+
+    __table_args__ = (
+        Index("idx_weights_history_account_applied", "account_id", "applied_at"),
+        Index("idx_weights_history_source", "source"),
     )
