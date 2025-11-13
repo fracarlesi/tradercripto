@@ -141,7 +141,19 @@ async def lifespan(app: FastAPI):
             job_func=reset_ai_usage_daily, hour=0, minute=0, job_id="ai_usage_daily_reset"
         )
 
+        # Add strategy-based exit checker (every 180 seconds = 3 minutes)
+        # This checks positions for dynamic exit criteria based on trading strategy type
+        from services.trading.strategy_exit_checker import check_strategy_exits_sync
+
+        scheduler_service.add_sync_job(
+            job_func=check_strategy_exits_sync,
+            interval_seconds=180,  # 3 minutes
+            job_id="strategy_exit_check"
+        )
+        logger.info("Strategy exit checker scheduled (every 3 minutes, dynamic rules)")
+
         # Add stop-loss check job (every 60 seconds) - Optimized to reduce API calls
+        # NOTE: This is now a BACKUP safety check, primary exits handled by strategy_exit_check
         from services.auto_trader import check_stop_loss_async, check_take_profit_async, place_ai_driven_crypto_order
 
         scheduler_service.add_sync_job(
