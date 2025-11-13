@@ -20,9 +20,6 @@ from services.market_data.news_feed import fetch_latest_news
 logger = logging.getLogger(__name__)
 
 # Import Prophet forecaster
-from services.market_data.prophet_forecaster import get_prophet_forecaster
-from hyperliquid.info import Info
-import pandas as pd
 
 # Import TOON encoder for efficient LLM communication (30-60% token savings)
 from services.toon_encoder import encode as toon_encode, estimate_token_savings
@@ -321,122 +318,6 @@ def _format_whale_alerts() -> str:
     except Exception as e:
         logger.error("Failed to format whale alerts", exc_info=True)
         return "Whale Alerts: Unavailable (error)"
-
-
-async def _format_prophet_forecast(portfolio: dict, prices: dict[str, float], target_symbols: list[str] = None) -> str:
-    """
-    Format Prophet price forecasting for AI prompt (RIZZO VIDEO - PRIORITY 6).
-
-    Uses Meta/Facebook Prophet to generate 6h and 24h price forecasts with confidence
-    intervals. This provides "bias primario" (primary bias) for AI trading decisions.
-
-    Args:
-        portfolio: Portfolio data with positions
-        prices: Current market prices
-        target_symbols: Optional list of symbols to forecast (default: BTC, ETH)
-
-    Returns:
-        Formatted string with Prophet forecasts for specified symbols
-    """
-    try:
-        forecaster = get_prophet_forecaster(
-            training_days=90,  # 90 days historical data
-            forecast_hours=24,  # 24h forecast horizon
-            cache_ttl_hours=24,  # Daily retraining
-        )
-
-        info = Info("https://api.hyperliquid.xyz")
-
-        lines = ["Prophet Price Forecasting (24h Ahead - RIZZO VIDEO):"]
-        lines.append("")
-        lines.append("**BIAS PRIMARIO (PRIMARY BIAS)** - Use these forecasts as MAIN directional guide:")
-        lines.append("- Forecast 24h > Current Price → PRIMARY LONG BIAS (expect upward movement)")
-        lines.append("- Forecast 24h < Current Price → PRIMARY SHORT BIAS (expect downward movement)")
-        lines.append("- Confidence > 90% → HIGH CONVICTION forecast (trust strongly)")
-        lines.append("- Confidence < 70% → LOW CONVICTION forecast (use with caution)")
-        lines.append("")
-
-        # Forecast for specified symbols (default: BTC/ETH for backwards compatibility)
-        # OPTION B: Filter to symbols with score > 0.7 (passed from caller)
-        symbols = target_symbols if target_symbols else ["BTC", "ETH"]
-
-        for symbol in symbols:
-            try:
-                # Fetch 90 days of 1h candles
-                from datetime import datetime, timedelta
-
-                now_ms = int(datetime.utcnow().timestamp() * 1000)
-                start_ms = now_ms - (90 * 24 * 3600 * 1000)
-
-                candles = info.candles_snapshot(
-                    name=symbol, interval="1h", startTime=start_ms, endTime=now_ms
-                )
-
-                if not candles or len(candles) < 14:
-                    lines.append(f"  • {symbol}: Insufficient data for forecast")
-                    continue
-
-                # Prepare Prophet dataframe
-                df = pd.DataFrame(candles)
-                df["ds"] = pd.to_datetime(df["t"], unit="ms", utc=True)
-                df["y"] = df["c"].astype(float)  # Close price
-                df = df[["ds", "y"]].copy()
-
-                # Generate forecast
-                forecast = forecaster.forecast_price(symbol, df)
-
-                # Check for error
-                if "error" in forecast:
-                    lines.append(f"  • {symbol}: Forecast unavailable ({forecast['error']})")
-                    continue
-
-                # Format forecast
-                current = forecast["current_price"]
-                forecast_24h = forecast["forecast_24h"]
-                trend = forecast["trend"]
-                confidence = forecast["confidence"]
-                ci_24h = forecast["confidence_interval_24h"]
-
-                # Calculate expected change
-                change = forecast_24h - current
-                change_pct = (change / current) * 100
-
-                # Signal
-                signal_emoji = {
-                    "up": "🟢 BULLISH",
-                    "down": "🔴 BEARISH",
-                    "neutral": "🟡 NEUTRAL",
-                }.get(trend, "⚪ UNKNOWN")
-
-                lines.append(f"  • {symbol} {signal_emoji}:")
-                lines.append(f"    - Current Price: ${current:,.2f}")
-                lines.append(f"    - 24h Forecast: ${forecast_24h:,.2f} ({change:+.2f} / {change_pct:+.2f}%)")
-                lines.append(
-                    f"    - Confidence Interval: ${ci_24h[0]:,.2f} - ${ci_24h[1]:,.2f}"
-                )
-                lines.append(f"    - Confidence: {confidence:.1%}")
-                lines.append("")
-
-            except Exception as e:
-                logger.error(f"Failed to forecast {symbol}", exc_info=True)
-                lines.append(f"  • {symbol}: Forecast error")
-                lines.append("")
-
-        lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        lines.append("")
-        lines.append("PROPHET TRADING RULES (RIZZO VIDEO):")
-        lines.append("  1. Prophet forecast = **PRIMARY BIAS** (highest weight indicator)")
-        lines.append("  2. If Prophet says BULLISH + Confidence > 90% → STRONG LONG bias")
-        lines.append("  3. If Prophet says BEARISH + Confidence > 90% → STRONG SHORT bias")
-        lines.append("  4. If Confidence < 70% → Use with caution, prioritize other indicators")
-        lines.append("  5. Prophet + Pivot Points alignment = HIGHEST CONVICTION trade")
-        lines.append("")
-
-        return "\n".join(lines)
-
-    except Exception as e:
-        logger.error("Failed to format Prophet forecast", exc_info=True)
-        return "Prophet Price Forecasting: Unavailable (error)"
 
 
 def optimize_ai_prompt(
@@ -830,8 +711,6 @@ async def call_ai_for_decision(
         whale_section = _format_whale_alerts()
 
         # RIZZO VIDEO INTEGRATION (PRIORITY 6): Get Prophet forecasts for high-score symbols (OPTION B)
-        prophet_section = await _format_prophet_forecast(portfolio, prices, high_score_symbols)
-
         # Calculate profit % for each position to help AI make informed decisions
         positions_with_profit = []
         for pos in portfolio.get("positions", []):
@@ -919,9 +798,6 @@ Current Market Prices ({len(prices)} available cryptocurrencies in TOON format):
 {technical_section}
 
 {pivot_section}
-
-{prophet_section}
-
 {sentiment_section}
 
 {whale_section}
