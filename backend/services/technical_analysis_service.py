@@ -208,8 +208,8 @@ def calculate_technical_factors(symbols: list[str]) -> dict[str, Any]:
     logger.info(f"Calculating technical factors for {len(symbols)} symbols")
 
     try:
-        # Fetch historical data (70 days to satisfy support requirement of window_size+1)
-        history = fetch_historical_data(symbols, period="1d", count=70)
+        # Fetch historical data (24 hours for hourly momentum trading)
+        history = fetch_historical_data(symbols, period="1h", count=24)
 
         if not history:
             logger.error("No historical data available for analysis")

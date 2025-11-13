@@ -165,10 +165,10 @@ async def lifespan(app: FastAPI):
         # Add AI trading job (every 10 minutes) - Migrated from custom scheduler to APScheduler
         # APScheduler runs each job in a separate thread, so long-running technical analysis
         # (analyzing 220+ symbols) won't block other jobs from executing
-        # 10-minute interval prevents Hyperliquid API rate limiting (1200 weight/min limit)
+        # 3-minute interval for fast momentum capture Hyperliquid API rate limiting (1200 weight/min limit)
         scheduler_service.add_sync_job(
             job_func=lambda: place_ai_driven_crypto_order(max_ratio=0.2),
-            interval_seconds=600,  # 10 minutes - Avoid rate limiting with 220 symbols
+            interval_seconds=180,  # 3 minutes - Fast momentum trading - Avoid rate limiting with 220 symbols
             job_id="ai_crypto_trade"
         )
         logger.info("AI trading job scheduled (APScheduler, non-blocking, 10-minute interval)")

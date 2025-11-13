@@ -318,8 +318,7 @@ async def _fetch_prophet_forecasts(
     cache_manager,
 ) -> Dict[str, dict]:
     """Fetch Prophet forecasts for all symbols (batch mode, LITE)."""
-    from services.market_data.prophet_forecaster import calculate_prophet_forecasts_batch
-
+    
     try:
         logger.info(f"Starting Prophet forecasts for {len(symbols)} symbols (mode={mode})...")
 

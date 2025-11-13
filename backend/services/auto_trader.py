@@ -89,26 +89,30 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
             f"${portfolio['total_assets']:.2f} total"
         )
 
-        # 3.5. Calculate technical factors (CRITICAL: momentum + support analysis)
-        logger.info("Calculating technical analysis factors...")
-        # Filter out index symbols (@ prefix) - only keep tradable spot assets (222 symbols)
-        available_symbols = [s for s in prices.keys() if not s.startswith('@')]
-        logger.info(f"Analyzing {len(available_symbols)} tradable symbols (excluded {len([s for s in prices.keys() if s.startswith('@')])} index '@' symbols)")
-        technical_factors = calculate_technical_factors(available_symbols)
+        # 3.5. Pre-filter top 20 coins by hourly momentum (NEW: Fast momentum trading)
+        logger.info("=" * 60)
+        logger.info("STEP 1: Pre-filtering top 20 coins by hourly momentum")
+        logger.info("=" * 60)
+
+        from services.market_data.hourly_momentum import get_top_momentum_symbols
+
+        # Get top 20 coins with highest hourly momentum
+        top_momentum_symbols = asyncio.run(get_top_momentum_symbols(limit=20))
+        logger.info(f"✅ Pre-filtered to {len(top_momentum_symbols)} coins with best hourly momentum")
+
+        # 3.6. Calculate technical factors ONLY for top momentum coins (not all 220+)
+        logger.info("=" * 60)
+        logger.info("STEP 2: Technical analysis on top momentum coins")
+        logger.info("=" * 60)
+
+        technical_factors = calculate_technical_factors(top_momentum_symbols)
         logger.info(
             f"Technical analysis: {len(technical_factors.get('recommendations', []))} symbols analyzed"
         )
 
-        # 3.6. Detect new tokens (3-7 days old) that would be filtered out by technical analysis
-        logger.info("Scanning for new tokens (3-7 days old)...")
-        new_tokens_data = detect_new_tokens(available_symbols, min_days=3, max_days=7)
-        logger.info(
-            f"New token detection: {len(new_tokens_data.get('new_tokens', []))} ultra-new tokens found"
-        )
-
-        # Add technical factors and new tokens to portfolio data for AI
+        # Add technical factors to portfolio data for AI
+        # (New tokens are now captured by hourly momentum - no separate detection needed)
         portfolio["technical_factors"] = technical_factors
-        portfolio["new_tokens"] = new_tokens_data
 
         # 4. Get AI decision (with caching)
         logger.info("Calling AI for trading decision...")
