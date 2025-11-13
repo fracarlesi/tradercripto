@@ -16,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.connection import async_session_factory
-from database.models import Account, DecisionSnapshot
+from database.models import Account, DecisionSnapshot, MissedOpportunitiesReport
 from services.trading.hyperliquid_trading_service import hyperliquid_trading_service
 
 logger = logging.getLogger(__name__)
@@ -71,17 +71,40 @@ async def analyze_missed_opportunities(
                 missed_opportunities.append(analysis)
         
         # 4. Generate summary report
-        report = _generate_report(missed_opportunities, lookback_hours)
-        
-        logger.info(f"\n{'='*80}\n{report}\n{'='*80}")
-        
+        report_text, patterns, recommendations = _generate_report(missed_opportunities, lookback_hours)
+
+        logger.info(f"\n{'='*80}\n{report_text}\n{'='*80}")
+
+        # 5. Save report to database
+        async with async_session_factory() as db:
+            report_entry = MissedOpportunitiesReport(
+                analyzed_at=datetime.now(UTC),
+                lookback_hours=lookback_hours,
+                min_move_pct=min_move_pct,
+                total_movers=len(top_movers),
+                analyzed_movers=len(missed_opportunities),
+                gainers_missed=len([m for m in missed_opportunities if m['direction'] == 'UP']),
+                losers_missed=len([m for m in missed_opportunities if m['direction'] == 'DOWN']),
+                missed_opportunities=missed_opportunities,
+                patterns_identified=patterns,
+                recommendations=recommendations,
+                report_text=report_text,
+                status="completed",
+            )
+            db.add(report_entry)
+            await db.commit()
+            logger.info(f"✅ Report saved to database (ID: {report_entry.id})")
+
         return {
             "status": "completed",
+            "report_id": report_entry.id,
             "lookback_hours": lookback_hours,
             "total_movers": len(top_movers),
             "analyzed_movers": len(missed_opportunities),
             "missed_opportunities": missed_opportunities,
-            "report": report,
+            "patterns": patterns,
+            "recommendations": recommendations,
+            "report": report_text,
         }
         
     except Exception as e:
@@ -207,9 +230,14 @@ async def _analyze_single_mover(
     }
 
 
-def _generate_report(missed_opportunities: List[Dict], lookback_hours: int) -> str:
-    """Generate human-readable report of missed opportunities."""
-    
+def _generate_report(missed_opportunities: List[Dict], lookback_hours: int) -> tuple[str, Dict, List[str]]:
+    """
+    Generate human-readable report of missed opportunities.
+
+    Returns:
+        Tuple of (report_text, patterns_dict, recommendations_list)
+    """
+
     report = f"""
 🔍 MISSED OPPORTUNITIES ANALYSIS - Last {lookback_hours} hour(s)
 {'='*80}
@@ -220,10 +248,10 @@ def _generate_report(missed_opportunities: List[Dict], lookback_hours: int) -> s
    Losers missed: {len([m for m in missed_opportunities if m['direction'] == 'DOWN'])}
 
 """
-    
+
     if not missed_opportunities:
         report += "✅ No significant missed opportunities detected!\n"
-        return report
+        return report, {}, []
     
     report += "📈 TOP MISSED OPPORTUNITIES:\n\n"
     
@@ -280,17 +308,43 @@ def _generate_report(missed_opportunities: List[Dict], lookback_hours: int) -> s
         report += "     → Consider increasing top_opportunities limit in technical analysis\n\n"
     
     report += "💡 RECOMMENDATIONS:\n\n"
-    
+
+    recommendations = []
     if prophet_blocks:
         report += "   1. Reduce prophet weight (currently blocking momentum trades)\n"
-    
+        recommendations.append("Reduce prophet weight (currently blocking momentum trades)")
+
     if low_score_movers:
         report += "   2. Review technical_score calculation (missing momentum signals)\n"
-    
+        recommendations.append("Review technical_score calculation (missing momentum signals)")
+
     if not_analyzed:
         report += "   3. Increase top_opportunities limit to analyze more symbols\n"
-    
-    return report
+        recommendations.append("Increase top_opportunities limit to analyze more symbols")
+
+    # Build patterns dict
+    patterns = {
+        "prophet_blocks": {
+            "count": len(prophet_blocks),
+            "examples": [
+                {"symbol": o["symbol"], "move": o["price_move"], "tech_score": o.get("technical_score", 0)}
+                for o in prophet_blocks[:3]
+            ],
+        } if prophet_blocks else None,
+        "low_score_movers": {
+            "count": len(low_score_movers),
+            "examples": [
+                {"symbol": o["symbol"], "move": o["price_move"], "tech_score": o.get("technical_score", 0)}
+                for o in low_score_movers[:3]
+            ],
+        } if low_score_movers else None,
+        "not_analyzed": {
+            "count": len(not_analyzed),
+            "symbols": [o["symbol"] for o in not_analyzed[:5]],
+        } if not_analyzed else None,
+    }
+
+    return report, patterns, recommendations
 
 
 # Wrapper for scheduler

@@ -527,3 +527,43 @@ class IndicatorWeightsHistory(Base):
         Index("idx_weights_history_account_applied", "account_id", "applied_at"),
         Index("idx_weights_history_source", "source"),
     )
+
+
+class MissedOpportunitiesReport(Base):
+    """
+    Missed opportunities analysis reports.
+
+    Stores hourly analysis of market movers that AI didn't trade,
+    helping identify patterns and optimize strategy.
+    """
+
+    __tablename__ = "missed_opportunities_reports"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    analyzed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
+    lookback_hours: Mapped[int] = mapped_column(Integer, nullable=False)
+    min_move_pct: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False)
+
+    # Summary stats
+    total_movers: Mapped[int] = mapped_column(Integer, nullable=False)
+    analyzed_movers: Mapped[int] = mapped_column(Integer, nullable=False)
+    gainers_missed: Mapped[int] = mapped_column(Integer, nullable=False)
+    losers_missed: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    # Detailed analysis (JSON)
+    missed_opportunities: Mapped[dict] = mapped_column(JSON, nullable=False)
+    patterns_identified: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    recommendations: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    # Full report text
+    report_text: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # Status
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="completed", index=True)
+
+    __table_args__ = (
+        Index("idx_reports_analyzed_at", "analyzed_at"),
+        Index("idx_reports_status", "status"),
+    )
