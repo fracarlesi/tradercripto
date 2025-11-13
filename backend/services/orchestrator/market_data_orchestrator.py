@@ -111,17 +111,10 @@ async def build_market_data_snapshot(
             _fetch_pivot_points(available_symbols, prices, cache_manager)
         )
 
-        prophet_task = asyncio.create_task(
-            _fetch_prophet_forecasts(available_symbols, prophet_mode, cache_manager)
-            if enable_prophet
-            else _return_empty_dict()
-        )
-
-        # Wait for all analyses to complete
-        technical_results, pivot_results, prophet_results = await asyncio.gather(
+        # Wait for all analyses to complete (Prophet removed - using hourly momentum instead)
+        technical_results, pivot_results = await asyncio.gather(
             technical_task,
             pivot_task,
-            prophet_task,
             return_exceptions=True,  # Don't fail entire pipeline if one fails
         )
 
@@ -134,17 +127,15 @@ async def build_market_data_snapshot(
             logger.error(f"Pivot points failed: {pivot_results}", exc_info=True)
             pivot_results = {}
 
-        if isinstance(prophet_results, Exception):
-            logger.error(f"Prophet forecasts failed: {prophet_results}", exc_info=True)
-            prophet_results = {}
-
         logger.info(
             f"✅ STAGE 2 Complete: "
             f"Technical={len(technical_results)}, "
-            f"Pivots={len(pivot_results)}, "
-            f"Prophet={len(prophet_results)} "
+            f"Pivots={len(pivot_results)} "
             f"({time.time() - stage2_start:.1f}s)"
         )
+
+        # Prophet removed - using hourly momentum pre-filtering instead
+        prophet_results = {}
 
         # ============================================
         # STAGE 3: Global Indicators (PARALLEL)
@@ -312,33 +303,8 @@ async def _fetch_pivot_points(
         return {}
 
 
-async def _fetch_prophet_forecasts(
-    symbols: List[str],
-    mode: str,
-    cache_manager,
-) -> Dict[str, dict]:
-    """Fetch Prophet forecasts for all symbols (batch mode, LITE)."""
-    
-    try:
-        logger.info(f"Starting Prophet forecasts for {len(symbols)} symbols (mode={mode})...")
-
-        results = await calculate_prophet_forecasts_batch(
-            symbols=symbols,
-            mode=mode,
-            cache_manager=cache_manager,
-        )
-
-        logger.info(f"Prophet forecasts complete: {len(results)} symbols")
-        return results
-
-    except Exception as e:
-        logger.error(f"Prophet forecasts failed: {e}", exc_info=True)
-        return {}
-
-
-async def _return_empty_dict() -> Dict[str, dict]:
-    """Return empty dict (for disabled Prophet)."""
-    return {}
+# Prophet forecasting removed - using hourly momentum pre-filtering instead
+# See: backend/services/market_data/hourly_momentum.py
 
 
 # ============================================

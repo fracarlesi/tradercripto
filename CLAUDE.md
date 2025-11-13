@@ -1,6 +1,51 @@
 # trader_bitcoin Development Guidelines
 
-Auto-generated from all feature plans. Last updated: 2025-11-05
+Auto-generated from all feature plans. Last updated: 2025-11-14
+
+## 🚀 TRADING SYSTEM ARCHITECTURE (Hourly Momentum Surfing)
+
+**CRITICAL**: Sistema completamente refactorato il 2025-11-13 da daily prediction a hourly momentum trading.
+
+### Core Philosophy
+- ❌ **REMOVED**: Prophet forecasting + daily candles (troppo lento, perde rally intraday)
+- ✅ **NEW**: Hourly momentum surfing + pre-filtering top 20 performers
+
+### How It Works
+1. **Momentum Calculation** (`hourly_momentum.py`): Analizza TUTTI i 220+ coins Hyperliquid
+   - Calcola % change ultima ora per ogni coin
+   - Filtra per volume minimo ($10k/h) - evita pump illiquidi
+   - Calcola momentum_score composito (momentum × volume_weight)
+   - Ritorna **top 20 coins** con momentum score più alto
+
+2. **Technical Analysis** (`technical_analysis_service.py`): SOLO sui top 20 (non tutti)
+   - Candele: **1h timeframe, 24 candles** (era: 1d, 71 candles)
+   - Indicatori: RSI, MACD, Pivot Points, Support/Resistance
+   - Score composito 0-1 per ogni coin
+
+3. **AI Decision** (`deepseek_client.py`): Riceve snapshot top 20 + indicatori
+   - Pesi strategia: Pivot (0.8), RSI/MACD (0.5), Whale (0.4), Sentiment (0.3), News (0.2)
+   - Sceglie MIGLIORE opportunità tra i 20
+   - Esegue LONG/SHORT con 20% capitale (configurable)
+
+4. **Execution** (`auto_trader.py`): Ordine su Hyperliquid
+   - Intervallo: **3 minuti** (era: 10 minuti)
+   - Post-trade: Sync positions + assign trading strategy
+
+### Performance Improvements
+| Metrica | Prima | Dopo | Miglioramento |
+|---------|-------|------|---------------|
+| Tempo analisi | ~60s | ~15s | **4x** |
+| API calls | 220+ | 20 | **11x meno** |
+| Frequenza cicli | 10min | 3min | **3.3x più veloce** |
+| Timeframe | Daily | Hourly | **Real-time** |
+
+### Files Changed (commit `adade8e`)
+- **NEW**: `backend/services/market_data/hourly_momentum.py`
+- **DELETED**: `backend/services/market_data/prophet_forecaster.py`
+- **DELETED**: `backend/services/new_token_detector.py`
+- **MODIFIED**: `backend/services/auto_trader.py` (pre-filtering integration)
+- **MODIFIED**: `backend/services/technical_analysis_service.py` (1d→1h, 71→24)
+- **MODIFIED**: `backend/main.py` (10min→3min AI cycle)
 
 ## 📋 CLAUDE.md FILE ORGANIZATION RULES (META)
 

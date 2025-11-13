@@ -17,7 +17,6 @@ from services.ai_decision_service import (
 )
 from services.asset_calculator import calc_positions_value
 from services.learning import save_decision_snapshot
-from services.new_token_detector import detect_new_tokens, format_new_tokens_for_ai
 from services.technical_analysis_service import calculate_technical_factors
 from services.trading.hyperliquid_trading_service import hyperliquid_trading_service
 
