@@ -41,6 +41,7 @@ services:
       # Trading configuration (from .env file)
       - HYPERLIQUID_PRIVATE_KEY=${HYPERLIQUID_PRIVATE_KEY}
       - HYPERLIQUID_WALLET_ADDRESS=${HYPERLIQUID_WALLET_ADDRESS}
+      - HYPERLIQUID_TESTNET=${HYPERLIQUID_TESTNET:-false}
 
       # AI configuration (from .env file)
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
