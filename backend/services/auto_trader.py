@@ -227,6 +227,68 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
         if is_executed:
             logger.info(f"✅ Order executed successfully: {execution_result}")
             save_ai_decision(db, account, decision, portfolio, executed=True)
+
+            # 8. Assign trading strategy to newly opened position (only for BUY/SHORT)
+            operation = decision.get("operation", "").lower()
+            if operation in ["buy", "short"]:
+                try:
+                    from services.trading.strategy_tracker import assign_strategy_to_position
+
+                    symbol = decision.get("symbol")
+                    technical_factors = portfolio.get("technical_factors", {})
+
+                    # CRITICAL: Sync positions from Hyperliquid BEFORE assigning strategy
+                    # Position may not exist in DB yet (scheduled sync runs every 60s)
+                    logger.info("Syncing positions from Hyperliquid to assign strategy...")
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        sync_result = loop.run_until_complete(
+                            hyperliquid_trading_service.sync_account_to_database_async(db, account)
+                        )
+                        if sync_result.get("success"):
+                            logger.info(f"Post-trade sync completed: {sync_result.get('positions', 0)} positions synced")
+                        else:
+                            logger.warning(f"Post-trade sync failed: {sync_result.get('error', 'Unknown error')}")
+                    finally:
+                        loop.close()
+
+                    # Extract technical data for this symbol
+                    recommendations = technical_factors.get("recommendations", [])
+                    symbol_data = next((r for r in recommendations if r["symbol"] == symbol), None)
+
+                    if symbol_data:
+                        # Prepare technical_data dict for strategy classification
+                        technical_data = {
+                            "technical_score": symbol_data.get("score", 0.0),
+                            "momentum": symbol_data.get("momentum", 0.0),
+                            "support": symbol_data.get("support", 0.0),
+                        }
+
+                        # Assign strategy (this updates the Position record in DB)
+                        strategy_type = assign_strategy_to_position(
+                            db=db,
+                            account_id=account.id,
+                            symbol=symbol,
+                            technical_data=technical_data,
+                            sentiment=None,  # TODO: Add sentiment from Fear & Greed Index
+                            prophet_trend=None,  # TODO: Add from Prophet forecast
+                        )
+
+                        if strategy_type:
+                            logger.info(f"✅ Strategy {strategy_type} assigned to position {symbol}")
+                        else:
+                            logger.warning(f"⚠️ Failed to assign strategy to {symbol} (position not found)")
+                    else:
+                        logger.warning(f"⚠️ No technical data for {symbol}, cannot assign strategy")
+
+                except Exception as e:
+                    # Don't fail the trade if strategy assignment fails
+                    logger.error(
+                        f"Failed to assign strategy to position {symbol}: {e}",
+                        extra={"context": {"account_id": account.id, "symbol": symbol}},
+                        exc_info=True,
+                    )
         else:
             logger.error(f"❌ Order execution failed or rejected: {execution_result}")
             save_ai_decision(db, account, decision, portfolio, executed=False)
