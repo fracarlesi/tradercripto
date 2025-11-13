@@ -424,6 +424,10 @@ try:
     app.include_router(orders_async_router)
     app.include_router(ai_router)  # AI usage tracking endpoint (T100)
     app.include_router(learning_router)  # Counterfactual learning & self-analysis
+
+    # Missed opportunities analysis
+    from api.missed_opportunities_routes import router as missed_opportunities_router
+    app.include_router(missed_opportunities_router)
 except ImportError:
     pass  # New routes not available yet
 
