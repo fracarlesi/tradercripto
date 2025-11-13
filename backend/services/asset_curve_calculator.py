@@ -41,8 +41,8 @@ async def get_all_asset_curves_data_new_async(db: Session, timeframe: str = "1h"
             # Last 8 hours (96 snapshots at 5-min intervals)
             start_time = end_time - timedelta(hours=8)
         elif timeframe == "1h":
-            # Last 7 days (168 snapshots at 1-hour intervals)
-            start_time = end_time - timedelta(days=7)
+            # Last 1 hour (12 snapshots at 5-min intervals)
+            start_time = end_time - timedelta(hours=1)
         elif timeframe == "1d":
             # Last 30 days (30 snapshots at 1-day intervals)
             start_time = end_time - timedelta(days=30)
