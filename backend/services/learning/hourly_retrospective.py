@@ -43,8 +43,10 @@ async def analyze_hourly_market() -> Dict[str, Any]:
         winners = await get_top_movers(direction="up", limit=5)
         losers = await get_top_movers(direction="down", limit=5)
 
-        logger.info(f"📈 Top 5 winners: {[f'{w[\"symbol\"]} (+{w[\"return_pct\"]:.1f}%)' for w in winners]}")
-        logger.info(f"📉 Top 5 losers: {[f'{l[\"symbol\"]} ({l[\"return_pct\"]:.1f}%)' for l in losers]}")
+        winner_str = ', '.join([f"{w['symbol']} (+{w['return_pct']:.1f}%)" for w in winners])
+        loser_str = ', '.join([f"{l['symbol']} ({l['return_pct']:.1f}%)" for l in losers])
+        logger.info(f"📈 Top 5 winners: {winner_str}")
+        logger.info(f"📉 Top 5 losers: {loser_str}")
 
         # 2. Get AI decision from 1 hour ago
         ai_decision = await get_decision_from_1h_ago()
