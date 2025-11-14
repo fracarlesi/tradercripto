@@ -14,12 +14,14 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
+from datetime import datetime
 
 import pandas as pd
 
 from factors.momentum import compute_momentum
 from factors.support import compute_support
 from services.market_data.hyperliquid_market_data import get_kline_data_from_hyperliquid
+from services.market_data.websocket_candle_service import get_websocket_candle_service
 
 logger = logging.getLogger(__name__)
 
@@ -42,14 +44,17 @@ RETRY_BACKOFF = 1.5  # Exponential backoff multiplier
 REQUEST_DELAY = 0.50  # 500ms delay between requests (increased to eliminate all 429 errors)
 
 
-def fetch_historical_data(symbols: list[str], period: str = "1d", count: int = 70) -> dict[str, pd.DataFrame]:
+def fetch_historical_data(symbols: list[str], period: str = "1h", count: int = 70) -> dict[str, pd.DataFrame]:
     """
-    Fetch historical OHLCV data for multiple symbols in parallel.
+    Fetch historical OHLCV data from WebSocket cache (ZERO API calls).
+
+    This function reads from the local WebSocket candle cache populated by
+    the persistent WebSocket connection. Zero rate limiting, sub-second latency.
 
     Args:
         symbols: List of symbols to fetch (e.g., ["BTC", "ETH", "SOL"])
-        period: Timeframe for candles (default: "1d" daily)
-        count: Number of candles to fetch (default: 70 days, min 61 for support calc)
+        period: Timeframe for candles (default: "1h" hourly, ONLY 1h supported by WebSocket)
+        count: Number of candles to fetch (default: 70, max available in cache)
 
     Returns:
         Dictionary mapping symbol to DataFrame with columns:
@@ -59,112 +64,71 @@ def fetch_historical_data(symbols: list[str], period: str = "1d", count: int = 7
     """
     history = {}
 
-    def fetch_single_symbol(symbol: str) -> tuple[str, pd.DataFrame | None]:
-        """
-        Helper function to fetch data for a single symbol with retry logic.
+    # Get WebSocket candle service (singleton)
+    ws_service = get_websocket_candle_service()
 
-        Implements exponential backoff for transient API failures.
-        Distinguishes between "no data available" (skip) vs "API error" (retry).
+    logger.info(f"Fetching historical data for {len(symbols)} symbols from WebSocket cache (0 API calls)")
+
+    def fetch_single_symbol_from_cache(symbol: str) -> tuple[str, pd.DataFrame | None]:
+        """
+        Helper function to fetch data for a single symbol from WebSocket cache.
+
+        Reads from local in-memory cache - instant, no API calls, no rate limiting.
 
         Returns:
-            Tuple of (symbol, DataFrame) or (symbol, None) if failed/no data
+            Tuple of (symbol, DataFrame) or (symbol, None) if no data in cache
         """
-        last_exception = None
-        retry_delay = RETRY_DELAY
+        try:
+            # Read candles from WebSocket cache (INSTANT, no API call!)
+            candles = ws_service.get_candles(symbol, limit=count)
 
-        for attempt in range(MAX_RETRIES + 1):
-            try:
-                # Fetch klines from Hyperliquid
-                klines = get_kline_data_from_hyperliquid(symbol, period=period, count=count)
+            # Check if we got data
+            if not candles or len(candles) < 2:
+                logger.debug(f"No cached data for {symbol} (<2 candles) - WebSocket warming up?")
+                return symbol, None
 
-                # Check if we got data
-                if not klines or len(klines) < 2:
-                    # No data available - this is expected for some symbols (newly listed, delisted, etc.)
-                    # Don't retry, just log once and skip
-                    if attempt == 0:  # Only log on first attempt
-                        logger.debug(f"No historical data for {symbol} (0 candles) - skipping")
-                    return symbol, None
-
-                # Convert to DataFrame
-                df = pd.DataFrame(klines)
-
-                # Rename columns to match factor calculation format
-                df = df.rename(columns={
-                    'datetime_str': 'Date',
-                    'open': 'Open',
-                    'high': 'High',
-                    'low': 'Low',
-                    'close': 'Close',
-                    'volume': 'Volume'
+            # Convert to DataFrame
+            # WebSocket candles format: {"t": timestamp_ms, "o": open, "h": high, "l": low, "c": close, "v": volume}
+            df_data = []
+            for candle in candles:
+                df_data.append({
+                    'Date': datetime.fromtimestamp(candle['t'] / 1000),  # Convert ms to datetime
+                    'Open': float(candle['o']),
+                    'High': float(candle['h']),
+                    'Low': float(candle['l']),
+                    'Close': float(candle['c']),
+                    'Volume': float(candle['v'])
                 })
 
-                # Convert Date to datetime
-                df['Date'] = pd.to_datetime(df['Date'])
+            df = pd.DataFrame(df_data)
 
-                # Sort by date (oldest first)
-                df = df.sort_values('Date', ascending=True).reset_index(drop=True)
+            # Sort by date (oldest first) - WebSocket returns newest first
+            df = df.sort_values('Date', ascending=True).reset_index(drop=True)
 
-                # Keep only required columns
-                df = df[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']]
+            logger.debug(f"✅ Got {len(df)} candles for {symbol} from cache")
 
-                logger.info(f"✅ Fetched {len(df)} candles for {symbol}")
+            return symbol, df
 
-                # Add delay between requests to avoid rate limiting
-                # Applied with all worker configurations to prevent 429 errors
-                time.sleep(REQUEST_DELAY)
+        except Exception as e:
+            logger.error(f"Failed to read {symbol} from WebSocket cache: {e}", exc_info=True)
+            return symbol, None
 
-                return symbol, df
+    # Read from cache (instant, no threading needed)
+    # WebSocket cache reads are already thread-safe and sub-millisecond
+    start_time = time.time()
 
-            except Exception as e:
-                last_exception = e
+    for symbol in symbols:
+        symbol_name, df = fetch_single_symbol_from_cache(symbol)
+        if df is not None:
+            history[symbol_name] = df
 
-                # Check if this is a retryable error (including 429 rate limiting)
-                error_str = str(e).lower()
-                error_type = str(type(e).__name__).lower()
-
-                is_retryable = (
-                    any(err_type in error_type for err_type in ['timeout', 'connection', 'http', 'network'])
-                    or '429' in error_str  # Retry on rate limiting errors
-                )
-
-                if is_retryable and attempt < MAX_RETRIES:
-                    # Retry with exponential backoff
-                    logger.warning(
-                        f"Retryable error fetching {symbol} (attempt {attempt + 1}/{MAX_RETRIES + 1}): "
-                        f"{type(e).__name__} - {str(e)[:100]}. Retrying in {retry_delay:.1f}s..."
-                    )
-                    time.sleep(retry_delay)
-                    retry_delay *= RETRY_BACKOFF
-                else:
-                    # Non-retryable error or max retries reached
-                    logger.error(
-                        f"Failed to fetch {symbol} after {attempt + 1} attempts: {e}",
-                        exc_info=(attempt == MAX_RETRIES)  # Full traceback only on last attempt
-                    )
-                    return symbol, None
-
-        # Should never reach here, but just in case
-        logger.error(f"Unexpected: Failed to fetch {symbol} after all retries")
-        return symbol, None
-
-    # Parallel execution with ThreadPoolExecutor
-    logger.info(f"Fetching historical data for {len(symbols)} symbols using {MAX_WORKERS} parallel workers")
-
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        # Submit all fetch tasks
-        future_to_symbol = {executor.submit(fetch_single_symbol, symbol): symbol
-                           for symbol in symbols}
-
-        # Collect results as they complete
-        for future in as_completed(future_to_symbol):
-            symbol, df = future.result()
-            if df is not None:
-                history[symbol] = df
+    elapsed = time.time() - start_time
 
     # Log detailed summary
     success_rate = (len(history) / len(symbols) * 100) if symbols else 0
     logger.info(
-        f"✅ Successfully fetched data for {len(history)}/{len(symbols)} symbols ({success_rate:.1f}%)"
+        f"✅ Fetched data for {len(history)}/{len(symbols)} symbols ({success_rate:.1f}%) "
+        f"in {elapsed:.2f}s from WebSocket cache"
     )
 
     # Log sample of successful symbols for debugging
@@ -172,9 +136,12 @@ def fetch_historical_data(symbols: list[str], period: str = "1d", count: int = 7
         successful_symbols = list(history.keys())[:10]
         logger.info(f"Sample successful symbols: {', '.join(successful_symbols)}")
 
-    # Note: Symbols without data are expected (newly listed, delisted, or perpetual contracts like kPEPE)
-    # These are automatically filtered out - only symbols with 70+ days of historical data are analyzed
-    logger.debug(f"Skipped {len(symbols) - len(history)} symbols (no historical data available)")
+    # Note: Symbols without cached data means WebSocket is warming up or symbol not subscribed
+    if len(history) < len(symbols):
+        logger.warning(
+            f"⚠️ Missing cache data for {len(symbols) - len(history)} symbols. "
+            f"WebSocket may still be warming up or symbols not subscribed."
+        )
 
     return history
 
@@ -208,8 +175,8 @@ def calculate_technical_factors(symbols: list[str]) -> dict[str, Any]:
     logger.info(f"Calculating technical factors for {len(symbols)} symbols")
 
     try:
-        # Fetch historical data (24 hours for hourly momentum trading)
-        history = fetch_historical_data(symbols, period="1h", count=24)
+        # Fetch historical data from WebSocket cache (70 candles for RSI/MACD precision)
+        history = fetch_historical_data(symbols, period="1h", count=70)
 
         if not history:
             logger.error("No historical data available for analysis")

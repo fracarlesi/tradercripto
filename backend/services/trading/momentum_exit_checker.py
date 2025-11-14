@@ -10,7 +10,7 @@ from typing import Dict, List
 import asyncio
 
 from services.trading.hyperliquid_trading_service import hyperliquid_trading_service
-from services.market_data.hourly_momentum import get_hourly_momentum_scores
+from services.market_data.hourly_momentum import calculate_hourly_momentum_sync
 from database.connection import SessionLocal
 from database.models import Position
 
@@ -48,7 +48,7 @@ async def check_momentum_exit_async(momentum_drop_threshold: float = 0.20) -> No
 
         # Get current momentum scores for all coins
         try:
-            momentum_data = get_hourly_momentum_scores(top_n=50)  # Get top 50 to detect drops
+            momentum_data = calculate_hourly_momentum_sync(limit=50)  # Get top 50 to detect drops
             current_momentum = {coin['symbol']: coin for coin in momentum_data}
         except Exception as e:
             logger.error(f"Failed to get momentum scores: {e}", exc_info=True)

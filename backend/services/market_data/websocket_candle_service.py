@@ -14,7 +14,7 @@ Architecture:
 Performance:
 - Zero rate limiting (WebSocket streaming)
 - Sub-second latency for new candles
-- Memory usage: ~220 symbols × 24 candles × 200 bytes = ~1 MB
+- Memory usage: ~220 symbols × 70 candles × 200 bytes = ~3 MB
 
 Usage:
     service = WebsocketCandleService()
@@ -58,7 +58,7 @@ class WebsocketCandleService:
     def __init__(
         self,
         cache_dir: str = "/app/data/websocket_cache",
-        max_candles_per_symbol: int = 24,
+        max_candles_per_symbol: int = 70,
         reconnect_delay_base: float = 1.0,
         reconnect_delay_max: float = 60.0,
         use_testnet: bool = False,
@@ -68,7 +68,7 @@ class WebsocketCandleService:
 
         Args:
             cache_dir: Directory for cache persistence
-            max_candles_per_symbol: Number of candles to keep per symbol (default 24 = 1 day)
+            max_candles_per_symbol: Number of candles to keep per symbol (default 70 = ~3 days for technical analysis)
             reconnect_delay_base: Base delay for exponential backoff (seconds)
             reconnect_delay_max: Max delay between reconnection attempts (seconds)
             use_testnet: Use Hyperliquid testnet instead of mainnet
