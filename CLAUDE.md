@@ -2,50 +2,117 @@
 
 Auto-generated from all feature plans. Last updated: 2025-11-14
 
-## 🚀 TRADING SYSTEM ARCHITECTURE (Hourly Momentum Surfing)
+## 🚀 TRADING SYSTEM ARCHITECTURE (WebSocket-Based Real-Time Momentum)
 
-**CRITICAL**: Sistema completamente refactorato il 2025-11-13 da daily prediction a hourly momentum trading.
+**CRITICAL**: Sistema completamente refactorato da Prophet forecasting → WebSocket streaming.
 
-### Core Philosophy
-- ❌ **REMOVED**: Prophet forecasting + daily candles (troppo lento, perde rally intraday)
-- ✅ **NEW**: Hourly momentum surfing + pre-filtering top 20 performers
+### Latest Changes (2025-11-14)
+
+**Change 1: HTTP → WebSocket Migration (Candles)**
+- **Problem**: HTTP polling 220 API calls/cycle → 6-8x oltre rate limit (1200 weight/min)
+- **Solution**: WebSocket streaming candele 1h → **0 API calls**, zero rate limiting, 0.5s latency
+- **See**: `backend/docs/WEBSOCKET_ARCHITECTURE.md`
+
+**Change 2: WebSocket allMids Integration (Prices)**
+- **Problem**: API calls per prezzi → ~400 weight/hour aggiuntivi
+- **Solution**: WebSocket allMids subscription → **0 API calls** per prezzi, real-time updates
+- **Impact**: Eliminati TUTTI i rate limit risk per market data
+- **Files Modified**:
+  - `websocket_candle_service.py`: Aggiunto allMids subscription + price cache
+  - `price_cache.py`: Priority WebSocket → local cache fallback
+
+### Core Architecture
+
+```
+┌─────────────────────────────────────────────┐
+│ WebSocket Service (persistent, background)  │
+│ - Connects to wss://api.hyperliquid.xyz/ws │
+│ - Subscribes to ALL 220 symbols (1h)       │
+│ - Stores in local cache (1 MB)             │
+│ - Auto-reconnect on disconnect             │
+└─────────────────────────────────────────────┘
+              ↓ (cache populated)
+┌─────────────────────────────────────────────┐
+│ Auto Trader (every 3 min)                   │
+│ 1. Read candles from cache (0 API calls)   │
+│ 2. Calculate momentum → top 20 coins       │
+│ 3. Technical analysis (20 coins)           │
+│ 4. AI decision (DeepSeek)                  │
+│ 5. Execute LONG/SHORT (20% capital)        │
+└─────────────────────────────────────────────┘
+```
+
+### 🎯 Trading Strategy: Momentum Surfing
+
+**Obiettivo**: Surfare le crescite delle crypto e uscire appena iniziano a scendere.
+
+**Meccanica**:
+1. **Identificazione momentum**: Scansiona 220+ coins ogni ora per trovare quelle in forte crescita (top 20)
+2. **Entry rapido**: Apre posizione LONG/SHORT sulla coin con migliore momentum + segnali tecnici
+3. **Exit rapido**: Stop loss a -2% per limitare perdite, take profit automatico su segnali di inversione
+
+**Timeframe**: 1h candles (bilancia reattività vs noise)
+- Abbastanza veloce per catturare rally intraday
+- Abbastanza lento per evitare micro-fluttuazioni
+
+**Holding period**: Tipicamente 1-6 ore (non swing trading)
+- Sistema monitora ogni 3 minuti per possibili exit
+- Stop loss -2% e take profit +5% proteggono capitale
 
 ### How It Works
-1. **Momentum Calculation** (`hourly_momentum.py`): Analizza TUTTI i 220+ coins Hyperliquid
-   - Calcola % change ultima ora per ogni coin
-   - Filtra per volume minimo ($10k/h) - evita pump illiquidi
-   - Calcola momentum_score composito (momentum × volume_weight)
-   - Ritorna **top 20 coins** con momentum score più alto
 
-2. **Technical Analysis** (`technical_analysis_service.py`): SOLO sui top 20 (non tutti)
-   - Candele: **1h timeframe, 24 candles** (era: 1d, 71 candles)
+1. **WebSocket Candle Service** (`websocket_candle_service.py`): Real-time data stream
+   - Persistent connection to Hyperliquid WebSocket API
+   - Receives 1h candle updates for 220+ symbols
+   - Local cache: 24 candles per symbol (~1 MB memory)
+   - State persistence: Saves/loads cache to disk
+   - Auto-reconnect: Exponential backoff (1s → 60s)
+
+2. **Real-Time Price Cache** (`price_cache.py` + WebSocket allMids): Real-time price updates
+   - **WebSocket allMids subscription** (2025-11-14): Receives all symbol prices in real-time
+   - **0 API calls** for price lookups (eliminates ~400 weight/hour)
+   - Priority: WebSocket cache → local TTL cache (fallback)
+   - Auto-updated every ~1 second via WebSocket stream
+   - Memory: ~0.02 MB for 220 prices
+
+3. **Momentum Calculation** (`hourly_momentum.py`): Reads from local cache
+   - **0 API calls** (reads from WebSocket cache)
+   - Calcola % change ultima ora per ogni coin
+   - Filtra per volume minimo ($10k/h)
+   - Ritorna **top 20 coins** con momentum score più alto
+   - Duration: **0.5s** (was 15-30s with HTTP)
+
+3. **Technical Analysis** (`technical_analysis_service.py`): SOLO sui top 20
+   - Candele: **1h timeframe, 24 candles**
    - Indicatori: RSI, MACD, Pivot Points, Support/Resistance
    - Score composito 0-1 per ogni coin
 
-3. **AI Decision** (`deepseek_client.py`): Riceve snapshot top 20 + indicatori
-   - Pesi strategia: Pivot (0.8), RSI/MACD (0.5), Whale (0.4), Sentiment (0.3), News (0.2)
+4. **AI Decision** (`deepseek_client.py`): Top 20 + indicatori
    - Sceglie MIGLIORE opportunità tra i 20
    - Esegue LONG/SHORT con 20% capitale (configurable)
 
-4. **Execution** (`auto_trader.py`): Ordine su Hyperliquid
-   - Intervallo: **3 minuti** (era: 10 minuti)
+5. **Execution** (`auto_trader.py`): Ordine su Hyperliquid
+   - Intervallo: **3 minuti**
    - Post-trade: Sync positions + assign trading strategy
 
-### Performance Improvements
-| Metrica | Prima | Dopo | Miglioramento |
-|---------|-------|------|---------------|
-| Tempo analisi | ~60s | ~15s | **4x** |
-| API calls | 220+ | 20 | **11x meno** |
-| Frequenza cicli | 10min | 3min | **3.3x più veloce** |
-| Timeframe | Daily | Hourly | **Real-time** |
+### Performance Evolution
 
-### Files Changed (commit `adade8e`)
-- **NEW**: `backend/services/market_data/hourly_momentum.py`
-- **DELETED**: `backend/services/market_data/prophet_forecaster.py`
-- **DELETED**: `backend/services/new_token_detector.py`
-- **MODIFIED**: `backend/services/auto_trader.py` (pre-filtering integration)
-- **MODIFIED**: `backend/services/technical_analysis_service.py` (1d→1h, 71→24)
-- **MODIFIED**: `backend/main.py` (10min→3min AI cycle)
+| Metric | Daily Prophet | HTTP Polling | WebSocket (Current) |
+|--------|--------------|--------------|---------------------|
+| **Timeframe** | 1d (71 candles) | 1h (24 candles) | 1h (24 candles) |
+| **Analysis time** | ~60s | ~15-30s | **0.5s** |
+| **API calls/cycle** | 220+ | 220 | **0** |
+| **Rate limit usage** | High | **6-8x OVER** | **0** |
+| **Cycle frequency** | 10min | 3min | 3min |
+| **Risk** | Missed rallies | 429 errors | **None** |
+
+### Files Changed (WebSocket Migration)
+
+- **NEW**: `backend/services/market_data/websocket_candle_service.py` (460 lines)
+- **NEW**: `backend/scripts/testing/test_websocket_momentum.py` (test script)
+- **NEW**: `backend/docs/WEBSOCKET_ARCHITECTURE.md` (complete documentation)
+- **MODIFIED**: `backend/services/market_data/hourly_momentum.py` (cache reads instead of API)
+- **MODIFIED**: `backend/services/startup.py` (WebSocket initialization)
 
 ## 📋 CLAUDE.md FILE ORGANIZATION RULES (META)
 

@@ -1,11 +1,13 @@
 """
 Price caching service to reduce API calls and improve performance
+
+Now integrated with WebSocket service for real-time prices from allMids subscription.
 """
 
 import logging
 import time
 from threading import Lock
-from typing import Any
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -86,9 +88,42 @@ class PriceCache:
 price_cache = PriceCache(ttl_seconds=30)  # Cache prices for 30 seconds
 
 
-def get_cached_price(symbol: str, market: str = "CRYPTO") -> float | None:
-    """Get price from cache if available"""
-    return price_cache.get(symbol, market)
+def get_cached_price(symbol: str, market: str = "CRYPTO") -> Optional[float]:
+    """
+    Get price from WebSocket cache (real-time) or fallback to local cache.
+
+    Priority:
+    1. WebSocket allMids cache (real-time, zero API calls)
+    2. Local TTL cache (fallback for non-WebSocket scenarios)
+
+    Args:
+        symbol: Symbol to get price for (e.g., "BTC")
+        market: Market identifier (default "CRYPTO", kept for backward compatibility)
+
+    Returns:
+        Price as float or None if not available
+    """
+    # Try WebSocket cache first (real-time prices from allMids)
+    try:
+        from services.market_data.websocket_candle_service import get_websocket_candle_service
+
+        ws_service = get_websocket_candle_service()
+        ws_price = ws_service.get_price(symbol)
+
+        if ws_price is not None:
+            logger.debug(f"WebSocket price hit for {symbol}: ${ws_price:.2f}")
+            return ws_price
+        else:
+            logger.debug(f"No WebSocket price for {symbol}, trying local cache")
+    except Exception as e:
+        logger.warning(f"WebSocket price lookup failed for {symbol}: {e}")
+
+    # Fallback to local TTL cache
+    local_price = price_cache.get(symbol, market)
+    if local_price is not None:
+        logger.debug(f"Local cache hit for {symbol}.{market}: ${local_price:.2f}")
+
+    return local_price
 
 
 def cache_price(symbol: str, market: str, price: float) -> None:

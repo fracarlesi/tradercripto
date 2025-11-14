@@ -11,8 +11,11 @@ logger = logging.getLogger(__name__)
 
 
 def initialize_services() -> None:
-    """Initialize all services"""
+    """Initialize all services (NOTE: WebSocket service now initialized in main.py lifespan)"""
     try:
+        # WebSocket service is now initialized in main.py lifespan context manager
+        # This ensures it runs on the main event loop and is properly managed by FastAPI
+
         # Start the scheduler
         start_scheduler()
         logger.info("Scheduler service started")
@@ -39,7 +42,6 @@ def initialize_services() -> None:
         # Captures periodic snapshots of portfolio value from Hyperliquid for historical charts
         from services.portfolio_snapshot_service import capture_all_accounts_snapshots_async
         from database.connection import SessionLocal
-        import asyncio
 
         def capture_snapshots_wrapper():
             """Wrapper to run async snapshot capture in sync context"""
@@ -149,8 +151,11 @@ def initialize_services() -> None:
 
 
 def shutdown_services() -> None:
-    """Shut down all services"""
+    """Shut down all services (NOTE: WebSocket shutdown now in main.py lifespan)"""
     try:
+        # WebSocket service shutdown is now handled in main.py lifespan context manager
+
+        # Stop scheduler
         from services.scheduler import stop_scheduler
 
         stop_scheduler()

@@ -111,6 +111,14 @@ async def lifespan(app: FastAPI):
     finally:
         db.close()
 
+    # Initialize WebSocket service FIRST (runs on main event loop)
+    from services.market_data.websocket_candle_service import get_websocket_candle_service
+    import asyncio
+
+    ws_service = get_websocket_candle_service()
+    ws_task = asyncio.create_task(ws_service.start(symbols=None))
+    logger.info("WebSocket candle service task created on main event loop")
+
     # Initialize all services (scheduler, market data tasks, auto trading, etc.)
     from services.startup import initialize_services
 
@@ -162,16 +170,16 @@ async def lifespan(app: FastAPI):
             job_id="stop_loss_check"
         )
 
-        # Add AI trading job (every 10 minutes) - Migrated from custom scheduler to APScheduler
+        # Add AI trading job (every 3 minutes) - Migrated from custom scheduler to APScheduler
         # APScheduler runs each job in a separate thread, so long-running technical analysis
         # (analyzing 220+ symbols) won't block other jobs from executing
-        # 3-minute interval for fast momentum capture Hyperliquid API rate limiting (1200 weight/min limit)
+        # 3-minute interval for fast momentum capture (now zero API calls via WebSocket)
         scheduler_service.add_sync_job(
             job_func=lambda: place_ai_driven_crypto_order(max_ratio=0.2),
-            interval_seconds=180,  # 3 minutes - Fast momentum trading - Avoid rate limiting with 220 symbols
+            interval_seconds=180,  # 3 minutes - Fast momentum surfing
             job_id="ai_crypto_trade"
         )
-        logger.info("AI trading job scheduled (APScheduler, non-blocking, 10-minute interval)")
+        logger.info("✅ AI trading job ENABLED (momentum surfing every 3 minutes)")
 
         # Add take-profit check job (every 60 seconds) - Automatically locks in +10% profits
         scheduler_service.add_sync_job(
@@ -188,6 +196,18 @@ async def lifespan(app: FastAPI):
     yield
 
     # SHUTDOWN: Code after yield runs on application shutdown
+    # Stop WebSocket service first (save cache to disk)
+    logger.info("Stopping WebSocket service...")
+    ws_task.cancel()
+    try:
+        await ws_task
+    except asyncio.CancelledError:
+        logger.info("WebSocket task cancelled successfully")
+
+    await ws_service.stop()
+    logger.info("WebSocket service stopped and cache saved")
+
+    # Stop scheduler
     try:
         scheduler_service.stop()
     except Exception as e:

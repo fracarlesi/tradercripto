@@ -1,17 +1,22 @@
 """
-Hourly Momentum Calculator - Fast momentum-based trading analysis.
+Hourly Momentum Calculator - WebSocket-based real-time momentum analysis.
 
-This service calculates hourly price momentum for all available coins
-and returns top performers to feed into AI decision-making.
+This service calculates hourly price momentum using LOCAL CACHE from WebSocket
+instead of HTTP API calls. This eliminates rate limiting and provides sub-second latency.
 
 Key Metrics:
 - % change in last 1 hour
 - Volume (to filter out low-liquidity pumps)
 - Price volatility (high/low range)
 
-Philosophy:
-Instead of predicting future trends with Prophet/daily analysis,
-we surf existing momentum in real-time.
+Architecture:
+- Reads from WebSocket local cache (in-memory)
+- Zero API calls during calculation (cache pre-populated via WebSocket stream)
+- Event-driven: Can be triggered on candle close events
+
+Performance:
+- Old: 220 API calls × 20 weight = 4400 weight (~15s, rate limited)
+- New: 0 API calls, reads from local cache (~0.5s)
 """
 
 import asyncio
@@ -19,8 +24,7 @@ import logging
 import time
 from typing import Dict, List
 
-from hyperliquid.info import Info
-from hyperliquid.utils import constants
+from services.market_data.websocket_candle_service import get_websocket_candle_service
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +34,10 @@ async def calculate_hourly_momentum(
     min_volume_usd: float = 10000.0,
 ) -> List[Dict]:
     """
-    Calculate hourly momentum for all available coins on Hyperliquid.
+    Calculate hourly momentum for all coins using WebSocket cache.
 
-    Returns top N coins with highest momentum (% gain in last hour).
+    This function reads from LOCAL CACHE (in-memory) populated by WebSocket stream.
+    Zero API calls = zero rate limiting.
 
     Args:
         limit: Number of top coins to return (default: 20 for AI analysis)
@@ -62,45 +67,51 @@ async def calculate_hourly_momentum(
     """
 
     logger.info("=" * 60)
-    logger.info("🚀 Calculating hourly momentum for all coins")
+    logger.info("🚀 Calculating hourly momentum from WebSocket cache")
     logger.info("=" * 60)
 
     start_time = time.time()
 
     try:
-        # Initialize Hyperliquid Info API
-        info = Info(constants.MAINNET_API_URL, skip_ws=True)
+        # Get WebSocket service (singleton)
+        ws_service = get_websocket_candle_service()
 
-        # Get all available coins
-        meta = info.meta()
-        all_coins = [asset["name"] for asset in meta["universe"]]
+        # Get cache stats
+        cache_stats = ws_service.get_cache_stats()
+        logger.info(
+            f"Cache: {cache_stats['symbols_cached']} symbols, "
+            f"{cache_stats['total_candles']} candles, "
+            f"{cache_stats['memory_mb']} MB"
+        )
 
-        logger.info(f"Analyzing {len(all_coins)} coins for hourly momentum...")
+        if not cache_stats["connected"]:
+            logger.warning("⚠️  WebSocket not connected - cache may be stale")
 
-        # Calculate end time (now) and start time (2 hours ago)
-        end_time_ms = int(time.time() * 1000)
-        start_time_ms = end_time_ms - (2 * 60 * 60 * 1000)  # 2 hours of data
+        # Get all subscribed symbols
+        all_coins = ws_service.subscribed_symbols
+
+        if not all_coins:
+            logger.error("No symbols in WebSocket cache - is service running?")
+            return []
+
+        logger.info(f"Analyzing {len(all_coins)} coins from cache...")
 
         performers = []
-        errors = 0
+        missing_data = 0
 
         for i, coin in enumerate(all_coins):
             try:
-                # Fetch 2 hours of 1h candles (should give us 2 candles: [-2h, -1h], [-1h, now])
-                candles = info.candles_snapshot(
-                    name=coin,
-                    interval="1h",
-                    startTime=start_time_ms,
-                    endTime=end_time_ms
-                )
+                # Read from local cache (instant, no API call)
+                candles = ws_service.get_candles(coin, limit=2)
 
                 if len(candles) < 2:
-                    # Not enough data (new coin or low activity)
+                    # Not enough data (new coin or WebSocket just started)
+                    missing_data += 1
                     continue
 
-                # Get last 2 candles
-                prev_candle = candles[-2]  # 1 hour ago
-                curr_candle = candles[-1]  # Current hour
+                # Get last 2 candles (cache returns most recent first)
+                curr_candle = candles[0]  # Most recent (current hour)
+                prev_candle = candles[1]  # 1 hour ago
 
                 # Extract OHLCV data
                 open_1h_ago = float(prev_candle.get("o", 0))
@@ -143,18 +154,12 @@ async def calculate_hourly_momentum(
                 if (i + 1) % 50 == 0:
                     logger.debug(f"Progress: {i+1}/{len(all_coins)} coins analyzed...")
 
-                # Rate limiting: Small delay every 10 requests to avoid 429
-                if (i + 1) % 10 == 0:
-                    await asyncio.sleep(0.1)
-
             except Exception as e:
-                errors += 1
-                if errors <= 3:
-                    logger.warning(f"Error analyzing {coin}: {str(e)[:50]}")
+                logger.warning(f"Error analyzing {coin}: {str(e)[:50]}")
                 continue
 
-        if errors > 3:
-            logger.warning(f"... and {errors - 3} more errors (rate limiting or missing data)")
+        if missing_data > 0:
+            logger.warning(f"Missing cache data for {missing_data}/{len(all_coins)} coins (WebSocket warming up?)")
 
         # Sort by momentum score (descending)
         performers.sort(key=lambda x: x["momentum_score"], reverse=True)
@@ -164,7 +169,7 @@ async def calculate_hourly_momentum(
 
         elapsed = time.time() - start_time
 
-        logger.info(f"✅ Analyzed {len(performers)}/{len(all_coins)} coins in {elapsed:.1f}s")
+        logger.info(f"✅ Analyzed {len(performers)}/{len(all_coins)} coins in {elapsed:.1f}s (from cache)")
         logger.info(f"📊 Top {len(top_performers)} performers by momentum:")
 
         for i, p in enumerate(top_performers[:5], 1):
