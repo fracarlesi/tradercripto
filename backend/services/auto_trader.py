@@ -195,6 +195,51 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
                 save_ai_decision(db, account, decision, portfolio, executed=False)
                 return
 
+            # 5b. Check if adding to existing position (momentum stacking)
+            # Allow stacking ONLY if momentum is accelerating (top 10 coins)
+            symbol = decision.get("symbol", "")
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                user_state = loop.run_until_complete(
+                    hyperliquid_trading_service.get_user_state_async()
+                )
+            finally:
+                loop.close()
+
+            existing_position = None
+            for pos in user_state.get('assetPositions', []):
+                if pos['position']['coin'] == symbol:
+                    existing_position = pos
+                    break
+
+            if existing_position:
+                # Already in position on this symbol
+                # Allow stacking ONLY if coin is in top 10 momentum (strong acceleration)
+                from services.market_data.hourly_momentum import get_hourly_momentum_scores
+                try:
+                    momentum_scores = get_hourly_momentum_scores(top_n=10)
+                    top_10_symbols = [m['symbol'] for m in momentum_scores]
+
+                    if symbol not in top_10_symbols:
+                        logger.warning(
+                            f"⚠️ Already in position on {symbol} (not in top 10 momentum). "
+                            f"Blocking position stacking. Consider rotation instead."
+                        )
+                        save_ai_decision(db, account, decision, portfolio, executed=False)
+                        return
+                    else:
+                        logger.info(
+                            f"✅ {symbol} in top 10 momentum - allowing position increment "
+                            f"(momentum acceleration detected)"
+                        )
+                except Exception as e:
+                    logger.error(f"Failed to check momentum for stacking: {e}", exc_info=True)
+                    # If momentum check fails, be conservative: don't stack
+                    logger.warning(f"⚠️ Already in position on {symbol}, blocking stack (momentum check failed)")
+                    save_ai_decision(db, account, decision, portfolio, executed=False)
+                    return
+
         # 6. Validate decision
         validation_result = _validate_decision(decision, portfolio, prices, max_ratio)
         if not validation_result["valid"]:
@@ -827,14 +872,14 @@ async def check_stop_loss_async(stop_loss_threshold: float = -0.02) -> None:
         logger.error(f"Stop-loss check failed: {e}", exc_info=True)
 
 
-async def check_take_profit_async(take_profit_threshold: float = 0.10) -> None:
+async def check_take_profit_async(take_profit_threshold: float = 0.05) -> None:
     """Check all open positions and close if profit exceeds threshold (async).
 
     This function runs every 30 seconds to lock in profits quickly.
-    Balanced approach: closes position if unrealized profit > 10%.
+    Momentum surfing approach: closes position if unrealized profit > 5%.
 
     Args:
-        take_profit_threshold: Profit threshold as positive decimal (default: 0.10 = +10%)
+        take_profit_threshold: Profit threshold as positive decimal (default: 0.05 = +5%)
 
     Returns:
         None

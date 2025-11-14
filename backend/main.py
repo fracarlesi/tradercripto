@@ -158,6 +158,16 @@ async def lifespan(app: FastAPI):
             interval_seconds=180,  # 3 minutes
             job_id="strategy_exit_check"
         )
+
+        # Add momentum reversal exit checker (every 60 seconds = 1 minute)
+        # CRITICAL for momentum surfing: exit quickly when momentum reverses
+        from services.trading.momentum_exit_checker import check_momentum_exit_sync
+
+        scheduler_service.add_sync_job(
+            job_func=check_momentum_exit_sync,
+            interval_seconds=60,  # 1 minute - frequent checks for quick exits
+            job_id="momentum_exit_check"
+        )
         logger.info("Strategy exit checker scheduled (every 3 minutes, dynamic rules)")
 
         # Add stop-loss check job (every 60 seconds) - Optimized to reduce API calls
