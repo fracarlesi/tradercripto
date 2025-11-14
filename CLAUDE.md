@@ -65,6 +65,7 @@ Auto-generated from all feature plans. Last updated: 2025-11-14
 - ❌ Detailed implementation checklists (>100 lines)
 - ❌ Monitoring setup details, CI/CD pipeline configs
 - ❌ Exhaustive reference documentation
+- ❌ **Temporary .md files in project root** (use `backend/docs/` or delete after conversation)
 
 ### Correct Organization Pattern:
 
@@ -131,6 +132,23 @@ Python 3.11+ (currently 3.13 in Dockerfile): Follow standard conventions
 - 001-production-refactor: Added Python 3.11+ (currently 3.13 in Dockerfile) + FastAPI, SQLAlchemy 2.0+ (async), hyperliquid-python-sdk >=0.20.0, APScheduler, uvicorn
 
 <!-- MANUAL ADDITIONS START -->
+
+## 📝 FILE MANAGEMENT RULES
+
+**CRITICAL**: NEVER create temporary .md files in project root during conversations.
+
+**Rules**:
+1. **Permanent documentation**: Create in `backend/docs/` with clear naming
+2. **Temporary explanations**: Provide inline in chat response, NO file creation
+3. **Analysis reports**: If >200 lines, create in `backend/docs/` OR just explain in chat
+4. **Root directory**: ONLY for permanent project files (README.md, CLAUDE.md, docker-compose.yml)
+
+**Examples**:
+- ❌ `RISPOSTA_DOMANDE_API.md` in root (temporary explanation)
+- ✅ `backend/docs/RATE_LIMIT_ANALYSIS_HOURLY_MOMENTUM.md` (permanent reference)
+- ✅ Explain in chat without file creation
+
+**Cleanup**: If temporary .md files exist in root, delete them at end of conversation.
 
 ## 🤝 USER DECISION-MAKING PROTOCOL
 
