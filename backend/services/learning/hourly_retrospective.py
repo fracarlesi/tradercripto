@@ -188,9 +188,9 @@ async def get_decision_from_1h_ago() -> Dict[str, Any] | None:
 
         return {
             'timestamp': snapshot.timestamp,
-            'decision': snapshot.decision,
+            'decision': snapshot.actual_decision,
             'symbol': snapshot.symbol,
-            'operation': snapshot.operation,
+            'operation': snapshot.actual_decision.lower() if snapshot.actual_decision else 'hold',
             'indicators': snapshot.indicators_snapshot
         }
 
@@ -200,7 +200,7 @@ def was_traded_by_ai(symbol: str, ai_decision: Dict[str, Any]) -> bool:
     if not ai_decision:
         return False
 
-    return ai_decision.get('symbol') == symbol and ai_decision.get('operation') in ['buy', 'short']
+    return ai_decision.get('symbol') == symbol and ai_decision.get('operation') in ['long', 'short']
 
 
 def analyze_missed_opportunity(
