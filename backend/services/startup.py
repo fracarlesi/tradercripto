@@ -112,36 +112,16 @@ def initialize_services() -> None:
         )
         logger.info("DeepSeek self-analysis task started (3-hour interval)")
 
-        # Add missed opportunities analysis (every 1 hour)
-        from services.learning.missed_opportunities_analyzer import analyze_missed_opportunities
-
-        def missed_opportunities_wrapper():
-            """
-            Wrapper for missed opportunities analysis.
-            Analyzes top market movers and checks why AI didn't trade them.
-            """
-            try:
-                result = asyncio.run(analyze_missed_opportunities(
-                    lookback_hours=1,
-                    min_move_pct=10.0,
-                ))
-
-                if result["status"] == "completed":
-                    logger.info(
-                        f"✅ Missed opportunities analysis complete: "
-                        f"{result['analyzed_movers']} opportunities analyzed"
-                    )
-                elif result["status"] == "no_movers":
-                    logger.info("No significant market movers found in last hour")
-            except Exception as e:
-                logger.error(f"Missed opportunities analysis failed: {e}", exc_info=True)
+        # Add hourly market retrospective (REPLACES missed_opportunities_analyzer)
+        # This provides REAL-TIME learning with dynamic weight adjustments
+        from services.learning.hourly_retrospective import analyze_hourly_market_sync
 
         task_scheduler.add_interval_task(
-            task_func=missed_opportunities_wrapper,
-            interval_seconds=3600,  # Every 1 hour
-            task_id="missed_opportunities_analysis",
+            task_func=analyze_hourly_market_sync,
+            interval_seconds=3600,  # Every 1 hour at XX:05
+            task_id="hourly_market_retrospective",
         )
-        logger.info("Missed opportunities analysis task started (1-hour interval)")
+        logger.info("Hourly market retrospective task started (1-hour interval with auto-correction)")
 
         logger.info("All services initialized successfully")
 

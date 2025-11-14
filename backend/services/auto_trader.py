@@ -111,6 +111,38 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
             f"✅ Technical analysis complete: {len(technical_factors.get('recommendations', []))} symbols with full data"
         )
 
+        # Apply dynamic adjustments from hourly retrospective learning
+        from services.learning.weight_adjustments import (
+            check_and_apply_adjustments,
+            log_adjustment_status
+        )
+
+        log_adjustment_status()  # Log current active adjustments
+
+        # Apply adjustments to each symbol's technical data
+        recommendations = technical_factors.get('recommendations', [])
+        adjusted_recommendations = []
+
+        for rec in recommendations:
+            symbol = rec['symbol']
+            technical_data = {
+                'score': rec['score'],
+                'momentum': rec['momentum'],
+                'support': rec['support']
+            }
+
+            # Apply any active adjustments (threshold override, score boost, etc.)
+            adjusted_data = check_and_apply_adjustments(symbol, technical_data)
+
+            # Update recommendation with adjusted values
+            rec_copy = rec.copy()
+            rec_copy['score'] = adjusted_data.get('score', rec['score'])
+            rec_copy['threshold_override'] = adjusted_data.get('threshold_override')
+            adjusted_recommendations.append(rec_copy)
+
+        # Replace original recommendations with adjusted ones
+        technical_factors['recommendations'] = adjusted_recommendations
+
         # Add technical factors to portfolio data for AI
         # (New tokens are now captured by hourly momentum - no separate detection needed)
         portfolio["technical_factors"] = technical_factors
