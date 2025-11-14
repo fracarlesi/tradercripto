@@ -38,7 +38,7 @@ def initialize_services() -> None:
         # NOTE: Hyperliquid account sync is now handled by APScheduler in main.py (periodic_sync_job every 30s)
         # Removed duplicate sync_all_active_accounts task to reduce API calls
 
-        # Add portfolio snapshot capture task (every 5 minutes)
+        # Add portfolio snapshot capture task (every 1 minute)
         # Captures periodic snapshots of portfolio value from Hyperliquid for historical charts
         from services.portfolio_snapshot_service import capture_all_accounts_snapshots_async
         from database.connection import SessionLocal
@@ -53,64 +53,16 @@ def initialize_services() -> None:
 
         task_scheduler.add_interval_task(
             task_func=capture_snapshots_wrapper,
-            interval_seconds=300,  # Capture every 5 minutes
+            interval_seconds=60,  # Capture every 1 minute
             task_id="portfolio_snapshot_capture",
         )
-        logger.info("Portfolio snapshot capture task started (5-minute interval)")
+        logger.info("Portfolio snapshot capture task started (1-minute interval)")
 
-        # Add counterfactual learning tasks
-        from services.learning import calculate_counterfactuals_batch, run_self_analysis
-
-        def calculate_counterfactuals_wrapper():
-            """
-            Wrapper for counterfactual calculation batch job.
-            Calculates counterfactual P&L for decision snapshots older than 24h.
-            """
-            try:
-                processed = asyncio.run(calculate_counterfactuals_batch(limit=100))
-                if processed > 0:
-                    logger.info(f"✅ Calculated counterfactuals for {processed} snapshots")
-            except Exception as e:
-                logger.error(f"Counterfactual calculation failed: {e}", exc_info=True)
-
-        task_scheduler.add_interval_task(
-            task_func=calculate_counterfactuals_wrapper,
-            interval_seconds=3600,  # Every 1 hour
-            task_id="counterfactual_calculation",
-        )
-        logger.info("Counterfactual calculation task started (1-hour interval)")
-
-        # Add self-analysis task (every 3 hours)
-        def self_analysis_wrapper():
-            """
-            Wrapper for DeepSeek self-analysis job.
-            Analyzes 50+ decisions with counterfactuals to suggest optimal weights.
-            """
-            try:
-                # Run analysis for account_id=1 (default account)
-                result = asyncio.run(run_self_analysis(account_id=1, limit=100))
-
-                if "error" in result:
-                    logger.warning(f"Self-analysis skipped: {result['error']}")
-                else:
-                    total_regret = result.get("total_regret_usd", 0)
-                    accuracy = result.get("accuracy_rate", 0) * 100
-                    suggested_weights = result.get("suggested_weights", {})
-
-                    logger.info(
-                        f"✅ Self-analysis complete for account 1: "
-                        f"Regret=${total_regret:.2f}, Accuracy={accuracy:.1f}%"
-                    )
-                    logger.info(f"💡 Suggested weights: {suggested_weights}")
-            except Exception as e:
-                logger.error(f"Self-analysis failed: {e}", exc_info=True)
-
-        task_scheduler.add_interval_task(
-            task_func=self_analysis_wrapper,
-            interval_seconds=10800,  # Every 3 hours
-            task_id="self_analysis",
-        )
-        logger.info("DeepSeek self-analysis task started (3-hour interval)")
+        # DISABLED: Counterfactual learning (replaced by hourly market retrospective)
+        # Old 24h feedback system - too slow for real-time trading
+        # Hourly retrospective provides 1h feedback with dynamic corrections
+        # from services.learning import calculate_counterfactuals_batch, run_self_analysis
+        # logger.info("Counterfactual learning disabled (replaced by hourly retrospective)")
 
         # Add hourly market retrospective (REPLACES missed_opportunities_analyzer)
         # This provides REAL-TIME learning with dynamic weight adjustments
