@@ -89,25 +89,26 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
             f"${portfolio['total_assets']:.2f} total"
         )
 
-        # 3.5. Pre-filter top 20 coins by hourly momentum (NEW: Fast momentum trading)
+        # 3.5. Get ALL subscribed symbols from WebSocket (221 coins)
         logger.info("=" * 60)
-        logger.info("STEP 1: Pre-filtering top 20 coins by hourly momentum")
-        logger.info("=" * 60)
-
-        from services.market_data.hourly_momentum import get_top_momentum_symbols
-
-        # Get top 20 coins with highest hourly momentum
-        top_momentum_symbols = asyncio.run(get_top_momentum_symbols(limit=20))
-        logger.info(f"✅ Pre-filtered to {len(top_momentum_symbols)} coins with best hourly momentum")
-
-        # 3.6. Calculate technical factors ONLY for top momentum coins (not all 220+)
-        logger.info("=" * 60)
-        logger.info("STEP 2: Technical analysis on top momentum coins")
+        logger.info("STEP 1: Fetching ALL coins from WebSocket cache")
         logger.info("=" * 60)
 
-        technical_factors = calculate_technical_factors(top_momentum_symbols)
+        from services.market_data.websocket_candle_service import get_websocket_candle_service
+
+        # Get ALL symbols subscribed to WebSocket (no pre-filtering!)
+        ws_service = get_websocket_candle_service()
+        all_symbols = list(ws_service.subscribed_symbols)
+        logger.info(f"✅ Found {len(all_symbols)} coins in WebSocket cache - analyzing ALL")
+
+        # 3.6. Calculate technical factors for ALL coins (WebSocket cache = ZERO API calls!)
+        logger.info("=" * 60)
+        logger.info(f"STEP 2: Technical analysis on ALL {len(all_symbols)} coins (WebSocket cache)")
+        logger.info("=" * 60)
+
+        technical_factors = calculate_technical_factors(all_symbols)
         logger.info(
-            f"Technical analysis: {len(technical_factors.get('recommendations', []))} symbols analyzed"
+            f"✅ Technical analysis complete: {len(technical_factors.get('recommendations', []))} symbols with full data"
         )
 
         # Add technical factors to portfolio data for AI
@@ -603,9 +604,10 @@ def _validate_decision(
         }
 
     # 4b. INTELLIGENT CAPITAL ALLOCATION VALIDATION (only for BUY/SHORT operations)
-    # Rule: Allow >25% allocation ONLY for exceptional opportunities
+    # Rule: Allow >50% allocation ONLY for exceptional opportunities
     # Exceptional = score >= 0.85 AND momentum >= 0.90
-    if operation in ["buy", "short"] and target_portion > 0.25:
+    # Strong = score >= 0.75 → 50% allocation
+    if operation in ["buy", "short"] and target_portion > 0.5:
         # Get technical factors from portfolio if available
         technical_factors = portfolio.get("technical_factors", {})
         recommendations = technical_factors.get("recommendations", [])
@@ -617,13 +619,13 @@ def _validate_decision(
             score = symbol_data["score"]
             momentum = symbol_data["momentum"]
 
-            # Rule: >25% allocation requires score >= 0.85 AND momentum >= 0.90
+            # Rule: >50% allocation requires score >= 0.85 AND momentum >= 0.90
             if score < 0.85 or momentum < 0.90:
                 logger.warning(
                     f"AI requested {target_portion:.1%} allocation on {symbol} but score={score:.3f}, "
-                    f"momentum={momentum:.3f} (not exceptional enough). Capping to 25% for diversification."
+                    f"momentum={momentum:.3f} (not exceptional enough). Capping to 50% for risk management."
                 )
-                target_portion = 0.25  # Cap to 25% for diversification
+                target_portion = 0.5  # Cap to 50% for strong signals
                 decision["target_portion_of_balance"] = target_portion  # Update decision
             else:
                 logger.info(
@@ -631,11 +633,11 @@ def _validate_decision(
                     f"Allowing {target_portion:.1%} allocation."
                 )
         else:
-            # If no technical data available, default to safety (cap at 25%)
+            # If no technical data available, default to safety (cap at 50%)
             logger.warning(
-                f"No technical data for {symbol} - capping allocation to 25% for safety"
+                f"No technical data for {symbol} - capping allocation to 50% for safety"
             )
-            target_portion = 0.25
+            target_portion = 0.5
             decision["target_portion_of_balance"] = target_portion
 
     # 5. Validate leverage (1-10x allowed)

@@ -83,8 +83,9 @@ def _format_technical_analysis(technical_factors: dict) -> str:
     lines.append("")
     lines.append("Signal Interpretation:")
     lines.append("  • Score > 0.7: Strong technical buy signal - high confidence")
-    lines.append("  • Score 0.6-0.7: Moderate buy signal")
-    lines.append("  • Score 0.4-0.6: Neutral - hold or wait for better signal")
+    lines.append("  • Score 0.75-0.85: Moderate buy signal (50% allocation)")
+    lines.append("  • Score 0.6-0.75: Weak - hold or wait for better signal")
+    lines.append("  • Score <0.75: NO NEW POSITIONS (too weak, high risk)")
     lines.append("  • Score < 0.4: Weak signal - consider selling or avoid buying")
     lines.append("  • Momentum: Measures upward price trend strength (higher = stronger uptrend)")
     lines.append("  • Support: Measures support level strength (higher = stronger buying pressure)")
@@ -96,7 +97,7 @@ def _format_technical_analysis(technical_factors: dict) -> str:
 
     lines.append("")
     lines.append(f"Total symbols analyzed: {len(recommendations)}")
-    lines.append("IMPORTANT: Prioritize symbols with high combined scores (>0.6) for BUY decisions.")
+    lines.append("IMPORTANT: Prioritize symbols with high combined scores (>0.75) for BUY decisions.")
 
     return "\n".join(lines)
 
@@ -899,38 +900,41 @@ The thresholds below are EVALUATION TRIGGERS, not automatic commands.
 
       **ALL 3 MUST BE TRUE!** If score < 0.85 → use 25% even if momentum is 0.95!
 
-   📊 NORMAL RULE (99% of cases): Diversify with 25% allocations:
-      • Score 0.60-0.84 → **ALWAYS use target_portion: 0.25** (even with high momentum!)
-      • **CRITICAL: Keep buying NEW 25% positions for EACH signal >= 0.60**
-      • Build portfolio of 4-5 positions at 25% each for proper diversification
-      • Example: Have MERL at 25% + see ZEC score 0.70 → BUY ZEC at 25% (don't wait!)
-      • Continue adding 25% positions until: (a) you have 4-5 positions, OR (b) no signals >= 0.60
-      • **DON'T wait for "exceptional" signals to diversify - normal signals >= 0.60 justify new 25% positions**
-      • Risk management: spread capital across multiple assets to reduce volatility
+   📊 NORMAL RULE (99% of cases): Higher conviction with 50% allocations:
+      • Score 0.75-0.84 → **ALWAYS use target_portion: 0.5** (50% allocation for strong signals)
+      • **CRITICAL: Only buy when score >= 0.75** (selective approach, quality over quantity)
+      • Build portfolio of 2-3 positions at 50% each for concentrated conviction
+      • Example: Have MERL at 50% + see ZEC score 0.80 → BUY ZEC at 50% (strong signal!)
+      • Continue adding 50% positions until: (a) you have 2-3 positions, OR (b) no signals >= 0.75
+      • **ONLY trade on STRONG signals >= 0.75** - weak signals waste capital on fees
+      • Risk management: fewer trades = less fees, higher conviction = better win rate
 
-   ❌ Score < 0.60 → HOLD or SELL (no new positions, weak signal)
+   ❌ Score < 0.75 → HOLD or SELL (no new positions, too weak, high risk of loss)
 
    💡 ALLOCATION EXAMPLES (PAY ATTENTION - These show the EXACT logic):
       • Score 0.92, Momentum 0.95, News: BTC ETF approval → 100% OK! (score >= 0.85 ✓)
       • Score 0.85, Momentum 0.95, News: positive → 100% OK! (exactly 0.85 counts ✓)
-      • Score 0.84, Momentum 0.95, News: positive → MAX 25%! (score < 0.85 ✗)
-      • Score 0.73, Momentum 0.93, News: positive → MAX 25%! (score < 0.85 ✗)
-      • Score 0.75, Momentum 0.88, News: neutral → MAX 25% (score < 0.85 ✗)
-      • Score 0.65, Momentum 0.75, News: positive → 25% (build 4 positions)
-      • Score 0.50, Momentum 0.60, News: negative → HOLD (don't buy)
+      • Score 0.84, Momentum 0.95, News: positive → 50%! (score >= 0.75, < 0.85 → 50%)
+      • Score 0.80, Momentum 0.93, News: positive → 50%! (score >= 0.75 → 50%)
+      • Score 0.75, Momentum 0.88, News: neutral → 50% (score exactly 0.75 → 50%)
+      • Score 0.70, Momentum 0.75, News: positive → HOLD (score < 0.75, too weak)
+      • Score 0.60, Momentum 0.70, News: positive → HOLD (score < 0.75, avoid!)
 
    🎯 CRITICAL DECISION TREE:
       1. Is score >= 0.85?
-         → NO: Use 25% allocation (target_portion: 0.25) - STOP HERE!
-         → YES: Check momentum and news...
-      2. Is momentum >= 0.90 AND news positive?
+         → NO: Check if score >= 0.75...
+         → YES: Check momentum and news for 100% allocation
+      2. Is score >= 0.75 (but < 0.85)?
+         → YES: Use 50% allocation (target_portion: 0.5)
+         → NO: HOLD (score < 0.75 is too weak, skip trade)
+      3. If score >= 0.85, is momentum >= 0.90 AND news positive?
          → YES: Use 100% allocation (target_portion: 1.0)
-         → NO: Use 25% allocation (target_portion: 0.25)
+         → NO: Use 50% allocation (target_portion: 0.5)
 
    🎯 PHILOSOPHY:
       • Exceptional opportunities (score >= 0.85 + all conditions) deserve 100% commitment
-      • Good opportunities (0.60-0.84) ALWAYS deserve diversification (25% max)
-      • Mediocre opportunities (< 0.60) deserve patience (HOLD)
+      • Strong opportunities (0.75-0.84) deserve concentrated bets (50%)
+      • Weak signals (< 0.75) deserve patience (HOLD) - avoid wasting capital on fees
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -991,7 +995,8 @@ Rules - LEVERAGE (CRITICAL):
 - IMPORTANT: Consider selling underperforming positions to free up cash for better opportunities
 - IMPORTANT: Diversification is key - don't get stuck in losing positions just because cash is low
 - IMPORTANT: You can sell up to 100% of a position if needed to rebalance the portfolio
-- IMPORTANT: ALWAYS prefer symbols with Technical Score > 0.6 for BUY decisions
+- IMPORTANT: ALWAYS prefer symbols with Technical Score > 0.75 for BUY decisions
+- Scores below 0.75 are too weak and waste capital on fees → HOLD instead
 - Only choose symbols you have data for
 
 CRITICAL INVESTMENT PRINCIPLES:
