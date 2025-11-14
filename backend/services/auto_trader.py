@@ -5,6 +5,7 @@ This file maintains backward compatibility while delegating to split services
 
 import asyncio
 import logging
+import math
 from decimal import Decimal
 from typing import Any
 
@@ -675,8 +676,11 @@ def _execute_order_async(decision: dict[str, Any], order_size: float, leverage: 
 
             if asset_info:
                 sz_decimals = asset_info.get('szDecimals', 8)
-                rounded_size = round(order_size, sz_decimals)
-                logger.info(f"Rounded order size from {order_size} to {rounded_size} ({sz_decimals} decimals)")
+                # Use ceil to ensure final value >= $10 after rounding
+                # Example: 0.0001036 BTC @ 5 decimals → ceil(0.0001036 * 10^5) / 10^5 = 0.00011
+                # This ensures: 0.00011 * $96,500 = $10.615 >= $10 ✅
+                rounded_size = math.ceil(order_size * 10**sz_decimals) / 10**sz_decimals
+                logger.info(f"Rounded order size UP from {order_size} to {rounded_size} ({sz_decimals} decimals)")
                 order_size = rounded_size
             else:
                 logger.warning(f"Asset {symbol} not found in meta, using raw size")
