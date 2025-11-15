@@ -119,7 +119,9 @@ async def _calculate_complete_trades(
                             'duration_minutes': int(duration_minutes),
                             'total_commission': round(entry['entry_commission'] + commission, 4),
                             'entry_trade_id': entry['trade_id'],
-                            'exit_trade_id': trade.id
+                            'exit_trade_id': trade.id,
+                            'leverage': entry.get('leverage'),  # Will be None for historical trades
+                            'strategy': entry.get('strategy')   # Will be None for historical trades
                         })
                     else:
                         # Entry for SHORT position

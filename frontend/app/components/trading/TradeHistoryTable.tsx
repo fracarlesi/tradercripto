@@ -26,6 +26,8 @@ interface CompleteTrade {
   total_commission: number
   entry_trade_id: number
   exit_trade_id: number
+  leverage?: number | null  // Optional leverage (null for historical trades)
+  strategy?: string | null   // Optional strategy (null for historical trades)
 }
 
 interface TradeHistoryData {
@@ -211,8 +213,10 @@ export default function TradeHistoryTable({ accountId }: TradeHistoryTableProps)
                     <TableHead className="text-right">Entry Price</TableHead>
                     <TableHead className="text-right">Exit Price</TableHead>
                     <TableHead className="text-right">Quantity</TableHead>
+                    <TableHead className="text-right">Leverage</TableHead>
                     <TableHead className="text-right">P&L</TableHead>
                     <TableHead className="text-right">P&L %</TableHead>
+                    <TableHead className="text-right">Strategy</TableHead>
                     <TableHead className="text-right">Duration</TableHead>
                     <TableHead className="text-right">Commission</TableHead>
                   </TableRow>
@@ -233,6 +237,9 @@ export default function TradeHistoryTable({ accountId }: TradeHistoryTableProps)
                       <TableCell className="text-right">${trade.entry_price.toFixed(2)}</TableCell>
                       <TableCell className="text-right">${trade.exit_price.toFixed(2)}</TableCell>
                       <TableCell className="text-right">{trade.quantity.toFixed(6)}</TableCell>
+                      <TableCell className="text-right text-xs">
+                        {trade.leverage ? `${trade.leverage.toFixed(1)}x` : '-'}
+                      </TableCell>
                       <TableCell className={`text-right font-medium ${
                         trade.pnl >= 0 ? 'text-green-600' : 'text-red-600'
                       }`}>
@@ -242,6 +249,9 @@ export default function TradeHistoryTable({ accountId }: TradeHistoryTableProps)
                         trade.pnl_pct >= 0 ? 'text-green-600' : 'text-red-600'
                       }`}>
                         {trade.pnl_pct >= 0 ? '+' : ''}{trade.pnl_pct.toFixed(2)}%
+                      </TableCell>
+                      <TableCell className="text-right text-xs">
+                        {trade.strategy || '-'}
                       </TableCell>
                       <TableCell className="text-right text-xs">{formatDuration(trade.duration_minutes)}</TableCell>
                       <TableCell className="text-right text-xs">${trade.total_commission.toFixed(4)}</TableCell>

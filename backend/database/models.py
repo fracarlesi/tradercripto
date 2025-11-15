@@ -168,6 +168,9 @@ class Position(Base):
     available_quantity: Mapped[Decimal] = mapped_column(Numeric(20, 8), nullable=False)
     average_cost: Mapped[Decimal] = mapped_column(Numeric(20, 8), nullable=False)
 
+    # Trading leverage (from Hyperliquid position data)
+    leverage: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)  # e.g. 3.00 = 3x leverage
+
     # Trading strategy metadata (for dynamic exit rules)
     strategy_type: Mapped[str | None] = mapped_column(String(50), nullable=True)  # MOMENTUM_BREAKOUT, TECHNICAL_SPECULATION, etc.
     take_profit_pct: Mapped[Decimal | None] = mapped_column(Numeric(5, 4), nullable=True)  # e.g. 0.08 = 8%
