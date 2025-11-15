@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { PieChart, Settings, TrendingUp, BarChart3, History } from 'lucide-react'
+import { Settings, BarChart3, History } from 'lucide-react'
 import SettingsDialog from './SettingsDialog'
 
 interface SidebarProps {
@@ -26,18 +26,6 @@ export default function Sidebar({ currentPage = 'comprehensive', onPageChange, o
             title="Open Alpha Arena"
           >
             <BarChart3 className="w-5 h-5" />
-          </button>
-
-          <button
-            className={`flex items-center justify-center w-10 h-10 rounded-lg transition-colors ${
-              currentPage === 'portfolio'
-                ? 'bg-secondary/80 text-secondary-foreground'
-                : 'hover:bg-muted text-muted-foreground'
-            }`}
-            onClick={() => onPageChange?.('portfolio')}
-            title="Portfolio"
-          >
-            <PieChart className="w-5 h-5" />
           </button>
 
           <button
@@ -74,18 +62,6 @@ export default function Sidebar({ currentPage = 'comprehensive', onPageChange, o
           >
             <BarChart3 className="w-5 h-5" />
             <span className="text-xs mt-1">Open Alpha Arena</span>
-          </button>
-          <button
-            className={`flex flex-col items-center justify-center w-12 h-12 rounded-lg transition-colors ${
-              currentPage === 'portfolio'
-                ? 'bg-secondary/80 text-secondary-foreground'
-                : 'hover:bg-muted text-muted-foreground'
-            }`}
-            onClick={() => onPageChange?.('portfolio')}
-            title="Portfolio"
-          >
-            <PieChart className="w-5 h-5" />
-            <span className="text-xs mt-1">Portfolio</span>
           </button>
           <button
             className={`flex flex-col items-center justify-center w-12 h-12 rounded-lg transition-colors ${

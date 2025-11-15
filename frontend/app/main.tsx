@@ -62,7 +62,6 @@ interface Order { id: number; order_no: string; symbol: string; name: string; ma
 interface Trade { id: number; order_id: number; account_id: number; symbol: string; name: string; market: string; side: string; price: number; quantity: number; commission: number; trade_time: string }
 
 const PAGE_TITLES: Record<string, string> = {
-  portfolio: 'Crypto Paper Trading',
   comprehensive: 'Open Alpha Arena',
   'trade-history': 'Trade History',
 }
@@ -281,23 +280,6 @@ function App() {
 
     return (
       <main className="flex-1 p-4 overflow-hidden">
-        {currentPage === 'portfolio' && (
-          <Portfolio
-            overview={overview}
-            positions={positions}
-            orders={orders}
-            trades={trades}
-            aiDecisions={aiDecisions}
-            allAssetCurves={allAssetCurves}
-            wsRef={wsRef}
-            onSwitchAccount={switchAccount}
-            onRefreshData={refreshData}
-            accountRefreshTrigger={accountRefreshTrigger}
-            accounts={accounts}
-            loadingAccounts={accountsLoading}
-          />
-        )}
-        
         {currentPage === 'comprehensive' && (
           <ComprehensiveView
             overview={overview}
