@@ -17,7 +17,8 @@ import Header from '@/components/layout/Header'
 import Sidebar from '@/components/layout/Sidebar'
 import Portfolio from '@/components/portfolio/Portfolio'
 import ComprehensiveView from '@/components/portfolio/ComprehensiveView'
-import { AIDecision, getAccounts } from '@/lib/api'
+import TradeHistoryTable from '@/components/trading/TradeHistoryTable'
+import { AIDecision, getAccounts} from '@/lib/api'
 
 interface User {
   id: number
@@ -62,6 +63,7 @@ interface Trade { id: number; order_id: number; account_id: number; symbol: stri
 const PAGE_TITLES: Record<string, string> = {
   portfolio: 'Crypto Paper Trading',
   comprehensive: 'Open Alpha Arena',
+  'trade-history': 'Trade History',
 }
 
 function App() {
@@ -311,6 +313,10 @@ function App() {
             accounts={accounts}
             loadingAccounts={accountsLoading}
           />
+        )}
+
+        {currentPage === 'trade-history' && account && (
+          <TradeHistoryTable accountId={account.id} />
         )}
       </main>
     )

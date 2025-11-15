@@ -458,6 +458,7 @@ try:
     from api.market_data_async import router as market_data_async_router
     from api.orders_async import router as orders_async_router
     from api.sync_routes import router as sync_router
+    from api.trade_history_routes import router as trade_history_router  # Complete trade history
 
     app.include_router(health_router)
     app.include_router(sync_router)
@@ -466,6 +467,7 @@ try:
     app.include_router(orders_async_router)
     app.include_router(ai_router)  # AI usage tracking endpoint (T100)
     app.include_router(learning_router)  # Counterfactual learning & self-analysis
+    app.include_router(trade_history_router)  # Trade history with P&L and duration
 
     # Missed opportunities analysis
     from api.missed_opportunities_routes import router as missed_opportunities_router
