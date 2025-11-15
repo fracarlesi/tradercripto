@@ -71,7 +71,7 @@ async def _calculate_complete_trades(
         complete_trades = []
 
         for symbol, symbol_trades in trades_by_symbol.items():
-            # Stack to track open positions
+            # Stack to track open positions (FIFO for correct P&L matching)
             position_stack = []
 
             for trade in symbol_trades:
@@ -80,51 +80,148 @@ async def _calculate_complete_trades(
                 commission = float(trade.commission)
 
                 if trade.side.lower() == "buy":
-                    # Entry for LONG position
-                    position_stack.append({
-                        'entry_side': 'buy',
-                        'entry_time': trade.trade_time,
-                        'entry_price': price,
-                        'quantity': quantity,
-                        'entry_commission': commission,
-                        'trade_id': trade.id
-                    })
+                    # Exit SHORT or entry LONG
+                    if position_stack and position_stack[-1]['entry_side'] == 'sell':
+                        # Exit SHORT position - match with accumulated short entries
+                        remaining_exit_qty = quantity
+                        exit_commission = commission
+
+                        # Accumulate matched short entries
+                        matched_entries = []
+
+                        while remaining_exit_qty > 0 and position_stack and position_stack[-1]['entry_side'] == 'sell':
+                            entry = position_stack[-1]
+
+                            # Match quantity (min of entry and exit remaining)
+                            matched_qty = min(entry['quantity'], remaining_exit_qty)
+
+                            # Record this match
+                            matched_entries.append({
+                                'entry_time': entry['entry_time'],
+                                'entry_price': entry['entry_price'],
+                                'quantity': matched_qty,
+                                'entry_commission': entry['entry_commission'] * (matched_qty / entry['quantity']),
+                                'trade_id': entry['trade_id']
+                            })
+
+                            # Update remaining quantities
+                            entry['quantity'] -= matched_qty
+                            entry['entry_commission'] *= (entry['quantity'] / (entry['quantity'] + matched_qty))
+                            remaining_exit_qty -= matched_qty
+
+                            # Remove entry from stack if fully matched
+                            if entry['quantity'] <= 0.000001:  # Float precision tolerance
+                                position_stack.pop()
+
+                        # Calculate P&L for each matched SHORT pair
+                        for matched in matched_entries:
+                            matched_qty = matched['quantity']
+
+                            # SHORT P&L: profit when exit price < entry price
+                            entry_value = matched['entry_price'] * matched_qty
+                            exit_cost = price * matched_qty
+                            pnl = entry_value - exit_cost - matched['entry_commission'] - (exit_commission * matched_qty / quantity)
+                            pnl_pct = (pnl / entry_value) * 100 if entry_value > 0 else 0
+
+                            # Calculate duration
+                            duration = trade.trade_time - matched['entry_time']
+                            duration_minutes = duration.total_seconds() / 60
+
+                            complete_trades.append({
+                                'symbol': symbol,
+                                'side': 'SHORT',
+                                'entry_time': matched['entry_time'].isoformat(),
+                                'exit_time': trade.trade_time.isoformat(),
+                                'entry_price': matched['entry_price'],
+                                'exit_price': price,
+                                'quantity': matched_qty,
+                                'pnl': round(pnl, 2),
+                                'pnl_pct': round(pnl_pct, 2),
+                                'duration_minutes': int(duration_minutes),
+                                'total_commission': round(matched['entry_commission'] + (exit_commission * matched_qty / quantity), 4),
+                                'entry_trade_id': matched['trade_id'],
+                                'exit_trade_id': trade.id,
+                                'leverage': None,  # Not available in Trade table
+                                'strategy': None   # Not available in Trade table
+                            })
+                    else:
+                        # Entry for LONG position - add to stack
+                        position_stack.append({
+                            'entry_side': 'buy',
+                            'entry_time': trade.trade_time,
+                            'entry_price': price,
+                            'quantity': quantity,
+                            'entry_commission': commission,
+                            'trade_id': trade.id
+                        })
 
                 elif trade.side.lower() == "sell":
                     # Exit for LONG or entry for SHORT
                     if position_stack and position_stack[-1]['entry_side'] == 'buy':
-                        # Exit LONG position
-                        entry = position_stack.pop()
+                        # Exit LONG position - match with accumulated entries
+                        remaining_exit_qty = quantity
+                        exit_commission = commission
 
-                        # Calculate P&L
-                        entry_cost = entry['entry_price'] * entry['quantity']
-                        exit_value = price * quantity
-                        pnl = exit_value - entry_cost - entry['entry_commission'] - commission
-                        pnl_pct = (pnl / entry_cost) * 100 if entry_cost > 0 else 0
+                        # Accumulate matched entries
+                        matched_entries = []
 
-                        # Calculate duration
-                        duration = trade.trade_time - entry['entry_time']
-                        duration_minutes = duration.total_seconds() / 60
+                        while remaining_exit_qty > 0 and position_stack and position_stack[-1]['entry_side'] == 'buy':
+                            entry = position_stack[-1]
 
-                        complete_trades.append({
-                            'symbol': symbol,
-                            'side': 'LONG',
-                            'entry_time': entry['entry_time'].isoformat(),
-                            'exit_time': trade.trade_time.isoformat(),
-                            'entry_price': entry['entry_price'],
-                            'exit_price': price,
-                            'quantity': entry['quantity'],
-                            'pnl': round(pnl, 2),
-                            'pnl_pct': round(pnl_pct, 2),
-                            'duration_minutes': int(duration_minutes),
-                            'total_commission': round(entry['entry_commission'] + commission, 4),
-                            'entry_trade_id': entry['trade_id'],
-                            'exit_trade_id': trade.id,
-                            'leverage': entry.get('leverage'),  # Will be None for historical trades
-                            'strategy': entry.get('strategy')   # Will be None for historical trades
-                        })
+                            # Match quantity (min of entry and exit remaining)
+                            matched_qty = min(entry['quantity'], remaining_exit_qty)
+
+                            # Record this match
+                            matched_entries.append({
+                                'entry_time': entry['entry_time'],
+                                'entry_price': entry['entry_price'],
+                                'quantity': matched_qty,
+                                'entry_commission': entry['entry_commission'] * (matched_qty / entry['quantity']),
+                                'trade_id': entry['trade_id']
+                            })
+
+                            # Update remaining quantities
+                            entry['quantity'] -= matched_qty
+                            entry['entry_commission'] *= (entry['quantity'] / (entry['quantity'] + matched_qty))
+                            remaining_exit_qty -= matched_qty
+
+                            # Remove entry from stack if fully matched
+                            if entry['quantity'] <= 0.000001:  # Float precision tolerance
+                                position_stack.pop()
+
+                        # Calculate P&L for each matched pair
+                        for matched in matched_entries:
+                            matched_qty = matched['quantity']
+
+                            # P&L calculation with MATCHED quantities
+                            entry_cost = matched['entry_price'] * matched_qty
+                            exit_value = price * matched_qty
+                            pnl = exit_value - entry_cost - matched['entry_commission'] - (exit_commission * matched_qty / quantity)
+                            pnl_pct = (pnl / entry_cost) * 100 if entry_cost > 0 else 0
+
+                            # Calculate duration
+                            duration = trade.trade_time - matched['entry_time']
+                            duration_minutes = duration.total_seconds() / 60
+
+                            complete_trades.append({
+                                'symbol': symbol,
+                                'side': 'LONG',
+                                'entry_time': matched['entry_time'].isoformat(),
+                                'exit_time': trade.trade_time.isoformat(),
+                                'entry_price': matched['entry_price'],
+                                'exit_price': price,
+                                'quantity': matched_qty,
+                                'pnl': round(pnl, 2),
+                                'pnl_pct': round(pnl_pct, 2),
+                                'duration_minutes': int(duration_minutes),
+                                'total_commission': round(matched['entry_commission'] + (exit_commission * matched_qty / quantity), 4),
+                                'entry_trade_id': matched['trade_id'],
+                                'exit_trade_id': trade.id,
+                                'leverage': None,  # Not available in Trade table
+                                'strategy': None   # Not available in Trade table
+                            })
                     else:
-                        # Entry for SHORT position
+                        # Entry for SHORT position - add to stack
                         position_stack.append({
                             'entry_side': 'sell',
                             'entry_time': trade.trade_time,
