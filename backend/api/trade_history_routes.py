@@ -79,7 +79,7 @@ async def _calculate_complete_trades(
                 price = float(trade.price)
                 commission = float(trade.commission)
 
-                if trade.side == "buy":
+                if trade.side.lower() == "buy":
                     # Entry for LONG position
                     position_stack.append({
                         'entry_side': 'buy',
@@ -90,7 +90,7 @@ async def _calculate_complete_trades(
                         'trade_id': trade.id
                     })
 
-                elif trade.side == "sell":
+                elif trade.side.lower() == "sell":
                     # Exit for LONG or entry for SHORT
                     if position_stack and position_stack[-1]['entry_side'] == 'buy':
                         # Exit LONG position
