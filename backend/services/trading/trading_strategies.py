@@ -43,7 +43,7 @@ STRATEGIES: Dict[StrategyType, StrategyRules] = {
         # High momentum (>0.85) + Moving fast
         min_score=0.60,
         min_momentum=0.85,
-        take_profit_pct=0.08,      # +8% (catch big moves)
+        take_profit_pct=0.02,      # +2% (quick momentum surfing)
         stop_loss_pct=-0.03,        # -3% (tight stop)
         max_hold_minutes=240,       # 4 hours
         leverage=3,
@@ -76,7 +76,7 @@ STRATEGIES: Dict[StrategyType, StrategyRules] = {
     "BALANCED": StrategyRules(
         # Default fallback strategy
         min_score=0.60,
-        take_profit_pct=0.03,      # +3%
+        take_profit_pct=0.015,     # +1.5% (quick profits)
         stop_loss_pct=-0.02,        # -2%
         max_hold_minutes=180,       # 3 hours
         leverage=2,
