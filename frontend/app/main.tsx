@@ -15,6 +15,7 @@ const resolveWsUrl = () => {
 
 import Header from '@/components/layout/Header'
 import Sidebar from '@/components/layout/Sidebar'
+import WebSocketWarningBanner from '@/components/layout/WebSocketWarningBanner'
 import Portfolio from '@/components/portfolio/Portfolio'
 import ComprehensiveView from '@/components/portfolio/ComprehensiveView'
 import TradeHistoryTable from '@/components/trading/TradeHistoryTable'
@@ -339,6 +340,7 @@ function App() {
           showAccountSelector={currentPage === 'portfolio' || currentPage === 'comprehensive'}
           onUserChange={switchUser}
         />
+        <WebSocketWarningBanner />
         {renderMainContent()}
       </div>
     </div>

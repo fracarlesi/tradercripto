@@ -48,6 +48,17 @@ class ReadinessResponse(BaseModel):
     message: str = Field(..., description="Human-readable readiness message")
 
 
+class WebSocketHealthResponse(BaseModel):
+    """WebSocket service health response model."""
+
+    healthy: bool = Field(..., description="True if WebSocket service is operational")
+    connected: bool = Field(..., description="WebSocket connection status")
+    symbols_cached: int = Field(..., description="Number of symbols in cache", ge=0)
+    total_candles: int = Field(..., description="Total candles across all symbols", ge=0)
+    memory_mb: float = Field(..., description="Cache memory usage in MB", ge=0)
+    message: str = Field(..., description="Human-readable status message")
+
+
 @router.get(
     "/health",
     response_model=HealthResponse,
@@ -241,4 +252,90 @@ async def get_metrics() -> Response:
             content=b"",
             media_type="text/plain; version=0.0.4; charset=utf-8",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@router.get(
+    "/health/websocket",
+    response_model=WebSocketHealthResponse,
+    status_code=status.HTTP_200_OK,
+    responses={
+        200: {"description": "WebSocket service healthy or degraded"},
+        503: {"description": "WebSocket service down"},
+    },
+)
+async def get_websocket_health() -> JSONResponse:
+    """WebSocket service health check endpoint.
+
+    Checks WebSocket connection status and cache health for the momentum trading system.
+
+    Health Criteria:
+    - healthy: WebSocket connected AND >= 100 symbols cached (sufficient for trading)
+    - degraded: WebSocket connected BUT < 100 symbols (warming up)
+    - down: WebSocket disconnected OR cache completely empty
+
+    Returns:
+        200: WebSocket service healthy or degraded (can still serve some requests)
+        503: WebSocket service down (trading should be suspended)
+    """
+    try:
+        from services.market_data.websocket_candle_service import get_websocket_candle_service
+
+        ws_service = get_websocket_candle_service()
+        stats = ws_service.get_cache_stats()
+
+        connected = stats["connected"]
+        symbols_cached = stats["symbols_cached"]
+        total_candles = stats["total_candles"]
+        memory_mb = stats["memory_mb"]
+
+        # Determine health status
+        # Healthy: connected AND sufficient cache (>= 100 symbols = ~45% coverage)
+        # Degraded: connected BUT insufficient cache (< 100 symbols = warming up)
+        # Down: not connected OR completely empty cache
+        is_healthy = connected and symbols_cached >= 100
+
+        if not connected:
+            http_status = status.HTTP_503_SERVICE_UNAVAILABLE
+            message = "WebSocket disconnected - trading suspended"
+        elif symbols_cached == 0:
+            http_status = status.HTTP_503_SERVICE_UNAVAILABLE
+            message = "WebSocket cache empty - trading suspended"
+        elif symbols_cached < 100:
+            http_status = status.HTTP_200_OK
+            message = f"WebSocket warming up ({symbols_cached}/221 symbols cached)"
+        else:
+            http_status = status.HTTP_200_OK
+            message = f"WebSocket operational ({symbols_cached}/221 symbols cached)"
+
+        response = WebSocketHealthResponse(
+            healthy=is_healthy,
+            connected=connected,
+            symbols_cached=symbols_cached,
+            total_candles=total_candles,
+            memory_mb=memory_mb,
+            message=message,
+        )
+
+        return JSONResponse(
+            status_code=http_status,
+            content=response.model_dump(mode="json"),
+        )
+
+    except Exception as e:
+        logger.error(
+            "WebSocket health check failed",
+            extra={"context": {"error": str(e)}},
+            exc_info=True,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content=WebSocketHealthResponse(
+                healthy=False,
+                connected=False,
+                symbols_cached=0,
+                total_candles=0,
+                memory_mb=0.0,
+                message=f"WebSocket health check error: {str(e)}",
+            ).model_dump(mode="json"),
         )

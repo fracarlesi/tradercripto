@@ -264,6 +264,21 @@ export async function testLLMConnection(testData: {
   return response.json()
 }
 
+// WebSocket health check
+export interface WebSocketHealthResponse {
+  healthy: boolean
+  connected: boolean
+  symbols_cached: number
+  total_candles: number
+  memory_mb: number
+  message: string
+}
+
+export async function getWebSocketHealth(): Promise<WebSocketHealthResponse> {
+  const response = await apiRequest('/health/websocket')
+  return response.json()
+}
+
 // Legacy aliases for backward compatibility
 export type AIAccount = TradingAccount
 export type AIAccountCreate = TradingAccountCreate

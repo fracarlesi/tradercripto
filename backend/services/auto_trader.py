@@ -57,6 +57,27 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
     """
     logger.info(f"=== AI Trading Cycle Started (max_ratio={max_ratio}) ===")
 
+    # CRITICAL SAFETY CHECK: Verify WebSocket health before trading
+    # If WebSocket is disconnected or cache is empty, trading MUST be suspended
+    from services.market_data.websocket_candle_service import get_websocket_candle_service
+
+    ws_service = get_websocket_candle_service()
+    cache_stats = ws_service.get_cache_stats()
+
+    if not cache_stats["connected"]:
+        logger.error("🚫 TRADING SUSPENDED: WebSocket not connected - cannot make informed decisions")
+        logger.error(f"WebSocket cache: {cache_stats['symbols_cached']} symbols, {cache_stats['total_candles']} candles")
+        logger.error("System will retry next cycle (3 minutes)")
+        return
+
+    if cache_stats["symbols_cached"] < 100:
+        # Less than ~45% symbols cached = insufficient data for momentum analysis
+        logger.warning(f"🚫 TRADING SUSPENDED: Insufficient cache data ({cache_stats['symbols_cached']}/221 symbols)")
+        logger.warning("WebSocket may be warming up or reconnecting - system will retry next cycle")
+        return
+
+    logger.info(f"✅ WebSocket health check passed: {cache_stats['symbols_cached']}/221 symbols cached")
+
     db = SessionLocal()
     try:
         # 1. Get active AI trading account
