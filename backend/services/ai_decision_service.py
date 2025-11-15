@@ -82,11 +82,11 @@ def _format_technical_analysis(technical_factors: dict) -> str:
     lines = ["Technical Analysis (Quantitative Signals - ALL analyzed symbols in TOON format):"]
     lines.append("")
     lines.append("Signal Interpretation:")
-    lines.append("  • Score > 0.7: Strong technical buy signal - high confidence")
-    lines.append("  • Score 0.75-0.85: Moderate buy signal (50% allocation)")
-    lines.append("  • Score 0.6-0.75: Weak - hold or wait for better signal")
-    lines.append("  • Score <0.75: NO NEW POSITIONS (too weak, high risk)")
-    lines.append("  • Score < 0.4: Weak signal - consider selling or avoid buying")
+    lines.append("  • Score >= 0.90: STRONG technical buy signal - high confidence (BUY)")
+    lines.append("  • Score 0.80-0.89: Moderate signal - consider buying with caution")
+    lines.append("  • Score 0.70-0.79: Weak - HOLD or wait for better signal")
+    lines.append("  • Score < 0.90: NO NEW POSITIONS (threshold raised to reduce overtrading)")
+    lines.append("  • Score < 0.70: Very weak signal - consider selling or avoid buying")
     lines.append("  • Momentum: Measures upward price trend strength (higher = stronger uptrend)")
     lines.append("  • Support: Measures support level strength (higher = stronger buying pressure)")
     lines.append("")
@@ -97,7 +97,7 @@ def _format_technical_analysis(technical_factors: dict) -> str:
 
     lines.append("")
     lines.append(f"Total symbols analyzed: {len(recommendations)}")
-    lines.append("IMPORTANT: Prioritize symbols with high combined scores (>0.75) for BUY decisions.")
+    lines.append("IMPORTANT: Prioritize symbols with high combined scores (>0.90) for BUY decisions.")
 
     return "\n".join(lines)
 
@@ -891,50 +891,50 @@ The thresholds below are EVALUATION TRIGGERS, not automatic commands.
    Let the validation handle the floor adjustment automatically - focus on signal quality!
 
 6. 🎲 CAPITAL ALLOCATION STRATEGY (CRITICAL - TOP PRIORITY!):
-   **RULE #1: CHECK SCORE FIRST - If score < 0.85, ALWAYS use 25% MAX (target_portion: 0.25)**
+   **RULE #1: CHECK SCORE FIRST - If score < 0.95, ALWAYS use 25% MAX (target_portion: 0.25)**
 
    ⚡ EXCEPTION: 100% allocation (target_portion: 1.0) ONLY when ALL 3 conditions TRUE:
-      1. Technical score >= 0.85 (EXCEPTIONAL, not just "good"!)
+      1. Technical score >= 0.95 (EXCEPTIONAL, not just "good"!)
       2. AND Momentum >= 0.90 (extremely strong trending)
       3. AND Positive fundamental news (catalyst present)
 
-      **ALL 3 MUST BE TRUE!** If score < 0.85 → use 25% even if momentum is 0.95!
+      **ALL 3 MUST BE TRUE!** If score < 0.95 → use 25% even if momentum is 0.95!
 
    📊 NORMAL RULE (99% of cases): Higher conviction with 50% allocations:
-      • Score 0.75-0.84 → **ALWAYS use target_portion: 0.5** (50% allocation for strong signals)
-      • **CRITICAL: Only buy when score >= 0.75** (selective approach, quality over quantity)
+      • Score 0.90-0.84 → **ALWAYS use target_portion: 0.5** (50% allocation for strong signals)
+      • **CRITICAL: Only buy when score >= 0.90** (selective approach, quality over quantity)
       • Build portfolio of 2-3 positions at 50% each for concentrated conviction
       • Example: Have MERL at 50% + see ZEC score 0.80 → BUY ZEC at 50% (strong signal!)
-      • Continue adding 50% positions until: (a) you have 2-3 positions, OR (b) no signals >= 0.75
-      • **ONLY trade on STRONG signals >= 0.75** - weak signals waste capital on fees
+      • Continue adding 50% positions until: (a) you have 2-3 positions, OR (b) no signals >= 0.90
+      • **ONLY trade on STRONG signals >= 0.90** - weak signals waste capital on fees
       • Risk management: fewer trades = less fees, higher conviction = better win rate
 
-   ❌ Score < 0.75 → HOLD or SELL (no new positions, too weak, high risk of loss)
+   ❌ Score < 0.90 → HOLD or SELL (no new positions, too weak, high risk of loss)
 
    💡 ALLOCATION EXAMPLES (PAY ATTENTION - These show the EXACT logic):
-      • Score 0.92, Momentum 0.95, News: BTC ETF approval → 100% OK! (score >= 0.85 ✓)
-      • Score 0.85, Momentum 0.95, News: positive → 100% OK! (exactly 0.85 counts ✓)
-      • Score 0.84, Momentum 0.95, News: positive → 50%! (score >= 0.75, < 0.85 → 50%)
-      • Score 0.80, Momentum 0.93, News: positive → 50%! (score >= 0.75 → 50%)
-      • Score 0.75, Momentum 0.88, News: neutral → 50% (score exactly 0.75 → 50%)
-      • Score 0.70, Momentum 0.75, News: positive → HOLD (score < 0.75, too weak)
-      • Score 0.60, Momentum 0.70, News: positive → HOLD (score < 0.75, avoid!)
+      • Score 0.92, Momentum 0.95, News: BTC ETF approval → 100% OK! (score >= 0.95 ✓)
+      • Score 0.95, Momentum 0.95, News: positive → 100% OK! (exactly 0.95 counts ✓)
+      • Score 0.84, Momentum 0.95, News: positive → 50%! (score >= 0.90, < 0.95 → 50%)
+      • Score 0.80, Momentum 0.93, News: positive → 50%! (score >= 0.90 → 50%)
+      • Score 0.90, Momentum 0.88, News: neutral → 50% (score exactly 0.90 → 50%)
+      • Score 0.70, Momentum 0.90, News: positive → HOLD (score < 0.90, too weak)
+      • Score 0.60, Momentum 0.70, News: positive → HOLD (score < 0.90, avoid!)
 
    🎯 CRITICAL DECISION TREE:
-      1. Is score >= 0.85?
-         → NO: Check if score >= 0.75...
+      1. Is score >= 0.95?
+         → NO: Check if score >= 0.90...
          → YES: Check momentum and news for 100% allocation
-      2. Is score >= 0.75 (but < 0.85)?
+      2. Is score >= 0.90 (but < 0.95)?
          → YES: Use 50% allocation (target_portion: 0.5)
-         → NO: HOLD (score < 0.75 is too weak, skip trade)
-      3. If score >= 0.85, is momentum >= 0.90 AND news positive?
+         → NO: HOLD (score < 0.90 is too weak, skip trade)
+      3. If score >= 0.95, is momentum >= 0.90 AND news positive?
          → YES: Use 100% allocation (target_portion: 1.0)
          → NO: Use 50% allocation (target_portion: 0.5)
 
    🎯 PHILOSOPHY:
-      • Exceptional opportunities (score >= 0.85 + all conditions) deserve 100% commitment
-      • Strong opportunities (0.75-0.84) deserve concentrated bets (50%)
-      • Weak signals (< 0.75) deserve patience (HOLD) - avoid wasting capital on fees
+      • Exceptional opportunities (score >= 0.95 + all conditions) deserve 100% commitment
+      • Strong opportunities (0.90-0.84) deserve concentrated bets (50%)
+      • Weak signals (< 0.90) deserve patience (HOLD) - avoid wasting capital on fees
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -984,7 +984,7 @@ Rules - LEVERAGE (CRITICAL):
 - leverage: Multiplier for position size (1-10 allowed, use intelligently based on signal strength)
 - leverage=1: No leverage (1:1 capital) - safest, use for weak signals (0.3-0.5 or 0.5-0.7)
 - leverage=2-3: Moderate leverage - use for moderate signals (0.5-0.65 or 0.35-0.5)
-- leverage=4-5: High leverage - use for strong signals (0.65-0.75 or 0.25-0.35)
+- leverage=4-5: High leverage - use for strong signals (0.65-0.90 or 0.25-0.35)
 - leverage=6-10: Very high leverage - use ONLY for VERY STRONG signals (>0.8 or <0.2)
 - Higher leverage = Higher profit potential BUT MUCH HIGHER RISK
 - CONSERVATIVE APPROACH: For technical score 0.7-0.8 or 0.2-0.3, use leverage 2-4x maximum
@@ -995,8 +995,8 @@ Rules - LEVERAGE (CRITICAL):
 - IMPORTANT: Consider selling underperforming positions to free up cash for better opportunities
 - IMPORTANT: Diversification is key - don't get stuck in losing positions just because cash is low
 - IMPORTANT: You can sell up to 100% of a position if needed to rebalance the portfolio
-- IMPORTANT: ALWAYS prefer symbols with Technical Score > 0.75 for BUY decisions
-- Scores below 0.75 are too weak and waste capital on fees → HOLD instead
+- IMPORTANT: ALWAYS prefer symbols with Technical Score > 0.90 for BUY decisions
+- Scores below 0.90 are too weak and waste capital on fees → HOLD instead
 - Only choose symbols you have data for
 
 CRITICAL INVESTMENT PRINCIPLES:
