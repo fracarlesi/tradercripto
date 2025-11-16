@@ -141,8 +141,8 @@ async def _calculate_complete_trades(
                                 'total_commission': round(matched['entry_commission'] + (exit_commission * matched_qty / quantity), 4),
                                 'entry_trade_id': matched['trade_id'],
                                 'exit_trade_id': trade.id,
-                                'leverage': None,  # Not available in Trade table
-                                'strategy': None   # Not available in Trade table
+                                'leverage': float(trade.leverage) if trade.leverage else None,
+                                'strategy': trade.strategy
                             })
                     else:
                         # Entry for LONG position - add to stack
@@ -217,8 +217,8 @@ async def _calculate_complete_trades(
                                 'total_commission': round(matched['entry_commission'] + (exit_commission * matched_qty / quantity), 4),
                                 'entry_trade_id': matched['trade_id'],
                                 'exit_trade_id': trade.id,
-                                'leverage': None,  # Not available in Trade table
-                                'strategy': None   # Not available in Trade table
+                                'leverage': float(trade.leverage) if trade.leverage else None,
+                                'strategy': trade.strategy
                             })
                     else:
                         # Entry for SHORT position - add to stack

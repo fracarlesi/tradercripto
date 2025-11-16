@@ -268,6 +268,10 @@ class Trade(Base):
     )
     trade_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
+    # Trading context (for complete trade history)
+    leverage: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
+    strategy: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
     # Relationships
     account: Mapped["Account"] = relationship("Account", back_populates="trades", lazy="selectin")
     order: Mapped[Optional["Order"]] = relationship(

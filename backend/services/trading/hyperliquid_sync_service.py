@@ -27,6 +27,7 @@ from services.infrastructure.alerting import (
 from services.trading.hyperliquid_trading_service import (
     hyperliquid_trading_service,
 )
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -340,6 +341,19 @@ class HyperliquidSyncService:
         try:
             created_count = 0
 
+            # Get current user state to extract leverage from positions
+            user_state = await hyperliquid_trading_service.get_user_state_async()
+            positions_data = user_state.get("assetPositions", [])
+
+            # Build leverage lookup map: symbol -> leverage
+            leverage_map = {}
+            for hl_pos in positions_data:
+                pos_data = hl_pos.get("position", {})
+                symbol = pos_data.get("coin")
+                leverage_value = pos_data.get("leverage", {}).get("value")
+                if symbol and leverage_value:
+                    leverage_map[symbol] = Decimal(str(leverage_value))
+
             for fill in fills:
                 coin = fill.get("coin")
                 side_char = fill.get("side")  # 'B' or 'S'
@@ -363,6 +377,21 @@ class HyperliquidSyncService:
                 # Convert side to standard format
                 side = "BUY" if side_char == "B" else "SELL"
 
+                # Get leverage from map (for currently open positions)
+                leverage = leverage_map.get(coin)
+
+                # Get strategy from Position table (if exists)
+                strategy = None
+                result = await db.execute(
+                    select(Position).where(
+                        Position.account_id == account.id,
+                        Position.symbol == coin
+                    )
+                )
+                position = result.scalar_one_or_none()
+                if position and position.strategy_type:
+                    strategy = position.strategy_type
+
                 # Create trade
                 trade = Trade(
                     account_id=account.id,
@@ -372,6 +401,8 @@ class HyperliquidSyncService:
                     quantity=size,
                     commission=Decimal("0"),
                     trade_time=trade_time,
+                    leverage=leverage,
+                    strategy=strategy,
                 )
 
                 await TradeRepository.create_trade(db=db, trade_data=trade)
