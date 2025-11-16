@@ -1,341 +1,329 @@
-import ccxt
 import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
 import ta
+from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Tuple
 
-class CryptoTechnicalAnalysis:
+from hyperliquid.info import Info
+from hyperliquid.utils import constants
+
+
+INTERVAL_TO_MS = {
+    "1m": 60_000,
+    "5m": 5 * 60_000,
+    "15m": 15 * 60_000,
+    "1h": 60 * 60_000,
+    "4h": 4 * 60 * 60_000,
+    "1d": 24 * 60 * 60_000,
+}
+
+
+class CryptoTechnicalAnalysisHL:
     """
-    Classe per recuperare e calcolare tutti gli indicatori tecnici di una criptovaluta
+    Analisi tecnica usando l'API Info di Hyperliquid.
+    Tutti gli indicatori principali sono centrati sul timeframe 15 minuti.
     """
-    
-    def __init__(self, exchange_name: str = 'binance'):
+
+    def __init__(self, testnet: bool = True):
+        base_url = constants.TESTNET_API_URL if testnet else constants.MAINNET_API_URL
+        self.info = Info(base_url, skip_ws=True)
+
+    # ==============================
+    #       FETCH OHLCV (HL)
+    # ==============================
+
+    def get_orderbook_volume(self, ticker: str) -> str:
         """
-        Inizializza la connessione all'exchange
-        
+        Restituisce una stringa con i volumi totali di bid e ask per un ticker (es. 'btc-usd').
+        Usa Info.l2_snapshot() dal wrapper ufficiale Hyperliquid.
+        """
+        coin = ticker.split('-')[0].upper()  # es. "BTC" da "btc-usd"
+
+        try:
+            orderbook = self.info.l2_snapshot(coin)
+        except Exception as e:
+            return f"Errore recuperando orderbook: {e}"
+
+        if not orderbook or "levels" not in orderbook:
+            return f"Nessun dato disponibile per {coin}"
+
+        bids = orderbook["levels"][0]
+        asks = orderbook["levels"][1]
+
+        bid_volume = sum(float(level["sz"]) for level in bids)
+        ask_volume = sum(float(level["sz"]) for level in asks)
+
+        return f"Bid Vol: {bid_volume}, Ask Vol: {ask_volume}"
+
+    def fetch_ohlcv(self, coin: str, interval: str, limit: int = 500) -> pd.DataFrame:
+        """
+        Recupera i dati OHLCV da Hyperliquid tramite Info.candles_snapshot.
+
         Args:
-            exchange_name: Nome dell'exchange (default: binance)
-        """
-        self.exchange = getattr(ccxt, exchange_name)({
-            'enableRateLimit': True,
-            'options': {'defaultType': 'future'}  # Per i perpetual futures
-        })
-    
-    def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int = 500) -> pd.DataFrame:
-        """
-        Recupera i dati OHLCV dall'exchange
-        
-        Args:
-            symbol: Simbolo della cripto (es. 'BTC/USDT')
-            timeframe: Timeframe (es. '1m', '4h')
-            limit: Numero di candele da recuperare
-            
+            coin: asset Hyperliquid (es. 'BTC', 'ETH')
+            interval: es. '15m', '1d'
+            limit: numero massimo di candele circa (usato per la finestra temporale)
+
         Returns:
-            DataFrame con i dati OHLCV
+            DataFrame con colonne: timestamp, open, high, low, close, volume
         """
-        ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
-        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        if interval not in INTERVAL_TO_MS:
+            raise ValueError(f"Interval '{interval}' non supportato in INTERVAL_TO_MS")
+
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        step_ms = INTERVAL_TO_MS[interval]
+        start_ms = now_ms - limit * step_ms
+
+        # ⚠️ Metodo corretto: candles_snapshot (non candle_snapshot)
+        ohlcv_data = self.info.candles_snapshot(
+            name=coin,
+            interval=interval,
+            startTime=start_ms,
+            endTime=now_ms,
+        )
+
+        if not ohlcv_data:
+            raise RuntimeError(f"Nessuna candela ricevuta per {coin} ({interval})")
+
+        df = pd.DataFrame(ohlcv_data)
+
+        # df ha colonne tipo: t, T, o, h, l, c, v, n, s, i
+        df["timestamp"] = pd.to_datetime(df["t"], unit="ms", utc=True)
+
+        # tieni solo quello che ci serve
+        df = df[["timestamp", "o", "h", "l", "c", "v"]].copy()
+        df.rename(
+            columns={
+                "o": "open",
+                "h": "high",
+                "l": "low",
+                "c": "close",
+                "v": "volume",
+            },
+            inplace=True,
+        )
+
+        for col in ["open", "high", "low", "close", "volume"]:
+            df[col] = df[col].astype(float)
+
+        df = df.sort_values("timestamp").reset_index(drop=True)
         return df
-    
+
+    # ==============================
+    #       INDICATORI TECNICI
+    # ==============================
     def calculate_ema(self, data: pd.Series, period: int) -> pd.Series:
-        """Calcola la EMA (Exponential Moving Average)"""
         return ta.trend.EMAIndicator(data, window=period).ema_indicator()
-    
+
     def calculate_macd(self, data: pd.Series) -> Tuple[pd.Series, pd.Series, pd.Series]:
-        """Calcola il MACD"""
         macd = ta.trend.MACD(data)
         return macd.macd(), macd.macd_signal(), macd.macd_diff()
-    
+
     def calculate_rsi(self, data: pd.Series, period: int) -> pd.Series:
-        """Calcola il RSI"""
         return ta.momentum.RSIIndicator(data, window=period).rsi()
-    
-    def calculate_atr(self, high: pd.Series, low: pd.Series, close: pd.Series, period: int) -> pd.Series:
-        """Calcola l'ATR (Average True Range)"""
-        return ta.volatility.AverageTrueRange(high, low, close, window=period).average_true_range()
-    
-    def calculate_pivot_points(self, high: float, low: float, close: float) -> Dict[str, float]:
-        """
-        Calcola i Pivot Points classici
-        
-        Args:
-            high: Massimo del periodo precedente
-            low: Minimo del periodo precedente
-            close: Chiusura del periodo precedente
-            
-        Returns:
-            Dizionario con PP, S1, S2, R1, R2
-        """
-        # Pivot Point principale
-        pp = (high + low + close) / 3
-        
-        # Livelli di supporto
+
+    def calculate_atr(
+        self, high: pd.Series, low: pd.Series, close: pd.Series, period: int
+    ) -> pd.Series:
+        return ta.volatility.AverageTrueRange(
+            high, low, close, window=period
+        ).average_true_range()
+
+    def calculate_pivot_points(
+        self, high: float, low: float, close: float
+    ) -> Dict[str, float]:
+        pp = (high + low + close) / 3.0
         s1 = (2 * pp) - high
         s2 = pp - (high - low)
-        
-        # Livelli di resistenza
         r1 = (2 * pp) - low
         r2 = pp + (high - low)
-        
-        return {
-            'pp': pp,
-            's1': s1,
-            's2': s2,
-            'r1': r1,
-            'r2': r2
-        }
-    
-    def get_funding_rate(self, symbol: str) -> float:
+        return {"pp": pp, "s1": s1, "s2": s2, "r1": r1, "r2": r2}
+
+    # ==============================
+    #   FUNDING / OI (placeholder)
+    # ==============================
+    def get_funding_rate(self, coin: str) -> float:
         """
-        Recupera il funding rate per i perpetual futures
-        
-        Args:
-            symbol: Simbolo della cripto (es. 'BTC/USDT')
-            
-        Returns:
-            Funding rate attuale
+        Per ora ritorniamo 0.0 per evitare problemi di compatibilità se
+        la tua versione dell'SDK non espone funding_history.
         """
-        try:
-            funding = self.exchange.fetch_funding_rate(symbol)
-            return funding['fundingRate']
-        except Exception as e:
-            print(f"Errore nel recupero del funding rate: {e}")
-            return 0.0
-    
-    def get_open_interest(self, symbol: str, timeframe: str = '5m', limit: int = 100) -> Dict[str, float]:
+        return 0.0
+
+    def get_open_interest(self, coin: str) -> Dict[str, float]:
         """
-        Recupera l'Open Interest
-        
-        Args:
-            symbol: Simbolo della cripto (es. 'BTC/USDT')
-            timeframe: Timeframe per calcolare la media
-            limit: Numero di dati storici per la media
-            
-        Returns:
-            Dict con latest e average open interest
+        Hyperliquid non espone un semplice 'open interest globale' via SDK.
+        Placeholder che ritorna 0.0.
         """
-        try:
-            oi_history = self.exchange.fetch_open_interest_history(symbol, timeframe, limit=limit)
-            if oi_history:
-                latest_oi = oi_history[-1]['openInterestValue']
-                avg_oi = np.mean([x['openInterestValue'] for x in oi_history])
-                return {'latest': latest_oi, 'average': avg_oi}
-        except Exception as e:
-            print(f"Errore nel recupero dell'open interest: {e}")
-        
-        return {'latest': 0.0, 'average': 0.0}
-    
+        return {"latest": 0.0, "average": 0.0}
+
+    # ==============================
+    #   ANALISI COMPLETA A 15m
+    # ==============================
     def get_complete_analysis(self, ticker: str) -> Dict:
-        """
-        Recupera tutti gli indicatori tecnici per un ticker
-        
-        Args:
-            ticker: Ticker della criptovaluta (es. 'BTC', 'ETH')
-            
-        Returns:
-            Dizionario completo con tutti gli indicatori
-        """
-        # Prepara il simbolo per l'exchange
-        symbol = f"{ticker}/USDT"
-        
-        # 1. DATI INTRADAY (1 minuto) - ultimi 10 minuti
-        df_1m = self.fetch_ohlcv(symbol, '1m', limit=100)
-        
-        # Calcola gli indicatori per l'intraday
-        df_1m['ema_20'] = self.calculate_ema(df_1m['close'], 20)
-        macd_line, signal_line, macd_diff = self.calculate_macd(df_1m['close'])
-        df_1m['macd'] = macd_diff  # MACD histogram
-        df_1m['rsi_7'] = self.calculate_rsi(df_1m['close'], 7)
-        df_1m['rsi_14'] = self.calculate_rsi(df_1m['close'], 14)
-        
-        # Prendi gli ultimi 10 dati
-        last_10 = df_1m.tail(10)
-        
-        # 2. DATI 4H per contesto long-term
-        df_4h = self.fetch_ohlcv(symbol, '4h', limit=100)
-        df_4h['ema_20'] = self.calculate_ema(df_4h['close'], 20)
-        df_4h['ema_50'] = self.calculate_ema(df_4h['close'], 50)
-        df_4h['atr_3'] = self.calculate_atr(df_4h['high'], df_4h['low'], df_4h['close'], 3)
-        df_4h['atr_14'] = self.calculate_atr(df_4h['high'], df_4h['low'], df_4h['close'], 14)
-        macd_4h, _, macd_diff_4h = self.calculate_macd(df_4h['close'])
-        df_4h['macd'] = macd_diff_4h
-        df_4h['rsi_14'] = self.calculate_rsi(df_4h['close'], 14)
-        
-        # Calcola volume medio
-        avg_volume = df_4h['volume'].tail(20).mean()
-        
-        last_10_4h = df_4h.tail(10)
-        
-        # 3. CALCOLA PIVOT POINTS
-        # Usa i dati giornalieri per calcolare i pivot points
-        df_daily = self.fetch_ohlcv(symbol, '1d', limit=2)
+        coin = ticker.upper()
+
+        # 1) DATI 15 MINUTI (intraday principale)
+        df_15m = self.fetch_ohlcv(coin, "15m", limit=200)
+
+        df_15m["ema_20"] = self.calculate_ema(df_15m["close"], 20)
+        macd_line, signal_line, macd_diff = self.calculate_macd(df_15m["close"])
+        df_15m["macd"] = macd_diff
+        df_15m["rsi_7"] = self.calculate_rsi(df_15m["close"], 7)
+        df_15m["rsi_14"] = self.calculate_rsi(df_15m["close"], 14)
+
+        last_10_15m = df_15m.tail(10)
+
+        # 2) CONTESTO "longer term" sempre a 15m ma su finestra più lunga
+        longer_term = df_15m.tail(50).copy()
+        longer_term["ema_20"] = self.calculate_ema(longer_term["close"], 20)
+        longer_term["ema_50"] = self.calculate_ema(longer_term["close"], 50)
+        longer_term["atr_3"] = self.calculate_atr(
+            longer_term["high"], longer_term["low"], longer_term["close"], 3
+        )
+        longer_term["atr_14"] = self.calculate_atr(
+            longer_term["high"], longer_term["low"], longer_term["close"], 14
+        )
+        macd_15m_long, _, macd_diff_15m_long = self.calculate_macd(
+            longer_term["close"]
+        )
+        longer_term["macd"] = macd_diff_15m_long
+        longer_term["rsi_14"] = self.calculate_rsi(longer_term["close"], 14)
+
+        avg_volume = longer_term["volume"].tail(20).mean()
+        last_10_longer = longer_term.tail(10)
+
+        # 3) PIVOT POINTS daily
+        df_daily = self.fetch_ohlcv(coin, "1d", limit=2)
         if len(df_daily) >= 2:
-            # Usa i dati del giorno precedente
             prev_day = df_daily.iloc[-2]
             pivot_points = self.calculate_pivot_points(
-                prev_day['high'], 
-                prev_day['low'], 
-                prev_day['close']
+                prev_day["high"], prev_day["low"], prev_day["close"]
             )
         else:
-            # Se non abbiamo dati giornalieri, usa i dati 4H
+            last = df_15m.iloc[-1]
             pivot_points = self.calculate_pivot_points(
-                df_4h['high'].iloc[-1], 
-                df_4h['low'].iloc[-1], 
-                df_4h['close'].iloc[-1]
+                last["high"], last["low"], last["close"]
             )
-        
-        # 4. OPEN INTEREST E FUNDING RATE
-        oi_data = self.get_open_interest(symbol)
-        funding_rate = self.get_funding_rate(symbol)
-        
-        # 5. VALORI CORRENTI
-        current_data = df_1m.iloc[-1]
-        current_4h = df_4h.iloc[-1]
-        
-        # 6. COMPILA IL RISULTATO
+
+        oi_data = self.get_open_interest(coin)
+        funding_rate = self.get_funding_rate(coin)
+
+        current_15m = df_15m.iloc[-1]
+        current_longer = longer_term.iloc[-1]
+
         result = {
-            'ticker': ticker,
-            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            "ticker": ticker,
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
             
-            # DATI CORRENTI
-            'current': {
-                'price': current_data['close'],
-                'ema20': current_data['ema_20'],
-                'macd': current_data['macd'],
-                'rsi_7': current_data['rsi_7']
+            "current": {
+                "price": current_15m["close"],
+                "ema20": current_15m["ema_20"],
+                "macd": current_15m["macd"],
+                "rsi_7": current_15m["rsi_7"],
             },
-            
-            # PIVOT POINTS
-            'pivot_points': pivot_points,
-            
-            # OPEN INTEREST E FUNDING
-            'derivatives': {
-                'open_interest_latest': oi_data['latest'],
-                'open_interest_average': oi_data['average'],
-                'funding_rate': funding_rate
+            "volume": self.get_orderbook_volume(ticker),
+            "pivot_points": pivot_points,
+
+            "derivatives": {
+                "open_interest_latest": oi_data["latest"],
+                "open_interest_average": oi_data["average"],
+                "funding_rate": funding_rate,
             },
-            
-            # SERIE INTRADAY (minuto per minuto)
-            'intraday': {
-                'mid_prices': last_10['close'].tolist(),
-                'ema_20': last_10['ema_20'].tolist(),
-                'macd': last_10['macd'].tolist(),
-                'rsi_7': last_10['rsi_7'].tolist(),
-                'rsi_14': last_10['rsi_14'].tolist()
+
+            "intraday": {
+                "mid_prices": last_10_15m["close"].tolist(),
+                "ema_20": last_10_15m["ema_20"].tolist(),
+                "macd": last_10_15m["macd"].tolist(),
+                "rsi_7": last_10_15m["rsi_7"].tolist(),
+                "rsi_14": last_10_15m["rsi_14"].tolist(),
             },
-            
-            # CONTESTO 4H
-            'longer_term_4h': {
-                'ema_20_current': current_4h['ema_20'],
-                'ema_50_current': current_4h['ema_50'],
-                'atr_3_current': current_4h['atr_3'],
-                'atr_14_current': current_4h['atr_14'],
-                'volume_current': current_4h['volume'],
-                'volume_average': avg_volume,
-                'macd_series': last_10_4h['macd'].tolist(),
-                'rsi_14_series': last_10_4h['rsi_14'].tolist()
-            }
+
+            "longer_term_15m": {
+                "ema_20_current": current_longer["ema_20"],
+                "ema_50_current": current_longer["ema_50"],
+                "atr_3_current": current_longer["atr_3"],
+                "atr_14_current": current_longer["atr_14"],
+                "volume_current": current_longer["volume"],
+                "volume_average": avg_volume,
+                "macd_series": last_10_longer["macd"].tolist(),
+                "rsi_14_series": last_10_longer["rsi_14"].tolist(),
+            },
         }
-        
         return result
-    
+
     def format_output(self, data: Dict) -> str:
-        """
-        Formatta l'output in modo leggibile come nell'esempio
-        
-        Args:
-            data: Dizionario con tutti i dati
-            
-        Returns:
-            Stringa formattata
-        """
-        output = f"\n{'='*80}\n"
-        output += f"ALL {data['ticker']} DATA\n"
-        output += f"Timestamp: {data['timestamp']}\n"
-        output += f"{'='*80}\n\n"
-        
-        # DATI CORRENTI
-        curr = data['current']
-        output += f"current_price = {curr['price']:.1f}, "
-        output += f"current_ema20 = {curr['ema20']:.3f}, "
-        output += f"current_macd = {curr['macd']:.3f}, "
-        output += f"current_rsi (7 period) = {curr['rsi_7']:.3f}\n\n"
-        
-        # PIVOT POINTS
-        pivot = data['pivot_points']
-        output += f"Pivot Points (based on previous day):\n"
-        output += f"R2 = {pivot['r2']:.2f}, R1 = {pivot['r1']:.2f}, "
-        output += f"PP = {pivot['pp']:.2f}, "
-        output += f"S1 = {pivot['s1']:.2f}, S2 = {pivot['s2']:.2f}\n\n"
-        
-        # DERIVATIVES
-        deriv = data['derivatives']
-        output += f"In addition, here is the latest {data['ticker']} open interest and funding rate for perps:\n"
-        output += f"Open Interest: Latest: {deriv['open_interest_latest']:.2f} "
-        output += f"Average: {deriv['open_interest_average']:.2f}\n"
+        output = f"\n<{data['ticker']}_data>\n"
+        output += f"Timestamp: {data['timestamp']} (UTC) (Hyperliquid, 15m)\n"
+        output += f"\n"
+
+        curr = data["current"]
+        output += (
+            f"current_price = {curr['price']:.1f}, "
+            f"current_ema20 = {curr['ema20']:.3f}, "
+            f"current_macd = {curr['macd']:.3f}, "
+            f"current_rsi (7 period) = {curr['rsi_7']:.3f}\n\n"
+        )
+        output += f"Volume: {data['volume']}\n\n"
+
+        pivot = data["pivot_points"]
+        output += "Pivot Points (based on previous day):\n"
+        output += (
+            f"R2 = {pivot['r2']:.2f}, R1 = {pivot['r1']:.2f}, "
+            f"PP = {pivot['pp']:.2f}, "
+            f"S1 = {pivot['s1']:.2f}, S2 = {pivot['s2']:.2f}\n\n"
+        )
+
+        deriv = data["derivatives"]
+        output += (
+            f"In addition, here is the latest {data['ticker']} funding data on Hyperliquid:\n"
+        )
+        output += (
+            f"Open Interest (placeholder): Latest: {deriv['open_interest_latest']:.2f} "
+            f"Average: {deriv['open_interest_average']:.2f}\n"
+        )
         output += f"Funding Rate: {deriv['funding_rate']:.2e}\n\n"
-        
-        # INTRADAY SERIES
-        intra = data['intraday']
-        output += f"Intraday series (by minute, oldest → latest):\n"
-        output += f"Mid prices: {[round(x, 1) for x in intra['mid_prices']]}\n"
-        output += f"EMA indicators (20‑period): {[round(x, 3) for x in intra['ema_20']]}\n"
-        output += f"MACD indicators: {[round(x, 3) for x in intra['macd']]}\n"
-        output += f"RSI indicators (7‑Period): {[round(x, 3) for x in intra['rsi_7']]}\n"
-        output += f"RSI indicators (14‑Period): {[round(x, 3) for x in intra['rsi_14']]}\n\n"
-        
-        # LONGER TERM
-        lt = data['longer_term_4h']
-        output += f"Longer‑term context (4‑hour timeframe):\n"
-        output += f"20‑Period EMA: {lt['ema_20_current']:.3f} vs. "
-        output += f"50‑Period EMA: {lt['ema_50_current']:.3f}\n"
-        output += f"3‑Period ATR: {lt['atr_3_current']:.3f} vs. "
-        output += f"14‑Period ATR: {lt['atr_14_current']:.3f}\n"
-        output += f"Current Volume: {lt['volume_current']:.3f} vs. "
-        output += f"Average Volume: {lt['volume_average']:.3f}\n"
-        output += f"MACD indicators: {[round(x, 3) for x in lt['macd_series']]}\n"
-        output += f"RSI indicators (14‑Period): {[round(x, 3) for x in lt['rsi_14_series']]}\n"
-        
-        output += f"\n{'='*80}\n"
-        
+
+        intra = data["intraday"]
+        output += "Intraday series (15m, oldest → latest):\n"
+        output += (
+            f"Mid prices: {[round(x, 1) for x in intra['mid_prices']]}\n"
+            f"EMA indicators (20-period): {[round(x, 3) for x in intra['ema_20']]}\n"
+            f"MACD indicators: {[round(x, 3) for x in intra['macd']]}\n"
+            f"RSI indicators (7-Period): {[round(x, 3) for x in intra['rsi_7']]}\n"
+            f"RSI indicators (14-Period): {[round(x, 3) for x in intra['rsi_14']]}\n\n"
+        )
+
+        lt = data["longer_term_15m"]
+        output += "Longer-term context (still 15-minute timeframe, wider window):\n"
+        output += (
+            f"20-Period EMA: {lt['ema_20_current']:.3f} vs. "
+            f"50-Period EMA: {lt['ema_50_current']:.3f}\n"
+            f"3-Period ATR: {lt['atr_3_current']:.3f} vs. "
+            f"14-Period ATR: {lt['atr_14_current']:.3f}\n"
+            f"Current Volume: {lt['volume_current']:.3f} vs. "
+            f"Average Volume: {lt['volume_average']:.3f}\n"
+            f"MACD indicators: {[round(x, 3) for x in lt['macd_series']]}\n"
+            f"RSI indicators (14-Period): {[round(x, 3) for x in lt['rsi_14_series']]}\n"
+        )
+        output += f"<{data['ticker']}_data>\n"
         return output
 
 
-def analyze_multiple_tickers(tickers: List[str], exchange_name: str = 'binance') -> str:
-    """
-    Analizza multipli ticker e ritorna tutto il testo formattato
-    
-    Args:
-        tickers: Lista di ticker da analizzare (es. ['BTC', 'ETH', 'BNB'])
-        exchange_name: Nome dell'exchange (default: binance)
-        
-    Returns:
-        Stringa con tutti i dati formattati
-    """
-    # Crea l'analizzatore
-    analyzer = CryptoTechnicalAnalysis(exchange_name=exchange_name)
-    
-    # Accumula tutti i risultati
+def analyze_multiple_tickers(tickers: List[str], testnet: bool = True) -> str:
+    analyzer = CryptoTechnicalAnalysisHL(testnet=testnet)
     full_output = ""
-    
+    datas = []
+    data = None
     for ticker in tickers:
         try:
-            # Ottieni l'analisi completa
             data = analyzer.get_complete_analysis(ticker)
-            
-            # Aggiungi l'output formattato
+            datas.append(data)
             full_output += analyzer.format_output(data)
-            
         except Exception as e:
-            full_output += f"\n{'='*80}\n"
-            full_output += f"ERRORE nell'analisi di {ticker}: {str(e)}\n"
-            full_output += f"{'='*80}\n\n"
-    
-    return full_output
+            print(f"Errore durante l'analisi di {ticker}: {e}")
+    return full_output, datas
 
-tickers = ['BTC', 'ETH', 'BNB']
-result = analyze_multiple_tickers(tickers)
-print(result)
+
+# if __name__ == "__main__":
+#     tickers = ["BTC", "ETH", "BNB"]
+#     result = analyze_multiple_tickers(tickers, testnet=True)
+#     print(result)

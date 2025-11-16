@@ -1,285 +1,131 @@
-import yfinance as yf
 import pandas as pd
-from datetime import datetime, timedelta
-import matplotlib.pyplot as plt
+from datetime import datetime, timezone, timedelta
 from prophet import Prophet
-import plotly.graph_objs as go
-from typing import Dict, Tuple, List
+from hyperliquid.info import Info
+from hyperliquid.utils import constants
 import warnings
 warnings.filterwarnings('ignore')
 
-class CryptoForecaster:
-    """
-    Sistema generalizzato per il forecasting di criptovalute con Prophet
-    Supporta previsioni a 1 minuto e 1 ora
-    """
-    
-    def __init__(self, tickers: List[str]):
-        """
-        Inizializza il forecaster con una lista di ticker
-        
-        Args:
-            tickers: Lista di ticker da analizzare (es. ['BTC-USD', 'ETH-USD'])
-        """
-        self.tickers = tickers
-        self.data = {}
-        self.forecasts = {}
-        
-    def download_data(self, timeframe: str = 'both'):
-        """
-        Scarica i dati per tutti i ticker con la granularità appropriata
-        
-        Args:
-            timeframe: 'minute', 'hour', o 'both'
-        """
-        for ticker in self.tickers:
-            print(f"Scaricando dati per {ticker}...")
-            
-            if timeframe in ['minute', 'both']:
-                # Per previsioni al minuto, scarica dati degli ultimi 7 giorni con intervallo 1m
-                self.data[f"{ticker}_1m"] = self._download_minute_data(ticker)
-                
-            if timeframe in ['hour', 'both']:
-                # Per previsioni all'ora, scarica dati degli ultimi 90 giorni con intervallo 1h
-                self.data[f"{ticker}_1h"] = self._download_hourly_data(ticker)
-    
-    def _download_minute_data(self, ticker: str) -> pd.DataFrame:
-        """Scarica dati con granularità al minuto (ultimi 7 giorni)"""
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=7)
-        
-        try:
-            df = yf.download(
-                ticker, 
-                start=start_date,
-                end=end_date,
-                interval='1m',
-                progress=False
-            )
-            
-            if df.empty:
-                print(f"Nessun dato al minuto disponibile per {ticker}")
-                return pd.DataFrame()
-                
-            df = df.reset_index()
-            df = df[['Datetime', 'Close']]
-            df.columns = ['ds', 'y']
-            df['ds'] = pd.to_datetime(df['ds'])
-            
-            # Rimuovi timezone per Prophet
-            df['ds'] = df['ds'].dt.tz_localize(None)
-            
-            print(f"Scaricati {len(df)} record al minuto per {ticker}")
-            return df
-            
-        except Exception as e:
-            print(f"Errore nel download dati al minuto per {ticker}: {e}")
-            return pd.DataFrame()
-    
-    def _download_hourly_data(self, ticker: str) -> pd.DataFrame:
-        """Scarica dati con granularità oraria (ultimi 90 giorni)"""
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=90)
-        
-        try:
-            df = yf.download(
-                ticker, 
-                start=start_date,
-                end=end_date,
-                interval='1h',
-                progress=False
-            )
-            
-            if df.empty:
-                print(f"Nessun dato orario disponibile per {ticker}")
-                return pd.DataFrame()
-                
-            df = df.reset_index()
-            df = df[['Datetime', 'Close']]
-            df.columns = ['ds', 'y']
-            df['ds'] = pd.to_datetime(df['ds'])
-            
-            # Rimuovi timezone per Prophet
-            df['ds'] = df['ds'].dt.tz_localize(None)
-            
-            print(f"Scaricati {len(df)} record orari per {ticker}")
-            return df
-            
-        except Exception as e:
-            print(f"Errore nel download dati orari per {ticker}: {e}")
-            return pd.DataFrame()
-    
-    def forecast_all(self):
-        """Genera previsioni per tutti i ticker e timeframe disponibili"""
-        for key, data in self.data.items():
-            if data.empty:
-                continue
-                
-            ticker, interval = key.rsplit('_', 1)
-            
-            if interval == '1m':
-                # Prevedi il prossimo minuto (1 periodo)
-                periods = 1
-                forecast_name = f"{ticker}_next_minute"
-            else:  # 1h
-                # Prevedi la prossima ora (1 periodo)
-                periods = 1
-                forecast_name = f"{ticker}_next_hour"
-            
-            print(f"Generando forecast per {forecast_name}...")
-            forecast_df, model = self._generate_forecast(data, periods)
-            
-            self.forecasts[forecast_name] = {
-                'forecast': forecast_df,
-                'model': model,
-                'data': data,
-                'ticker': ticker,
-                'interval': interval
-            }
-    
-    def _generate_forecast(self, data: pd.DataFrame, periods: int) -> Tuple[pd.DataFrame, Prophet]:
-        """Genera forecast usando Prophet"""
-        # Configura Prophet con parametri ottimizzati per crypto
-        model = Prophet(
-            daily_seasonality=True,
-            weekly_seasonality=True,
-            yearly_seasonality=False,
-            changepoint_prior_scale=0.05,
-            interval_width=0.95
+class HyperliquidForecaster:
+    def __init__(self, testnet: bool = True):
+        base_url = constants.TESTNET_API_URL if testnet else constants.MAINNET_API_URL
+        self.info = Info(base_url, skip_ws=True)
+        self.last_prices = {}  # Memorizza gli ultimi prezzi per calcolare la variazione
+
+    def _fetch_candles(self, coin: str, interval: str, limit: int) -> pd.DataFrame:
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        interval_ms = {"15m": 15*60_000, "1h": 60*60_000}[interval]
+        start_ms = now_ms - limit * interval_ms
+
+        data = self.info.candles_snapshot(
+            name=coin,
+            interval=interval,
+            startTime=start_ms,
+            endTime=now_ms
         )
-        
-        # Fit del modello
-        model.fit(data)
-        
-        # Genera previsioni
-        future = model.make_future_dataframe(periods=periods, freq='T' if periods == 1 else 'H')
+
+        if not data:
+            raise RuntimeError(f"No candles for {coin} {interval}")
+
+        df = pd.DataFrame(data)
+        df["ds"] = pd.to_datetime(df["t"], unit="ms", utc=True).dt.tz_convert(None)
+        df["y"] = df["c"].astype(float)
+
+        df = df[["ds", "y"]].sort_values("ds").reset_index(drop=True)
+        return df
+
+    def forecast(self, coin: str, interval: str) -> tuple:
+        if interval == "15m":
+            df = self._fetch_candles(coin, "15m", limit=300)
+            freq = "15min"
+        else:
+            df = self._fetch_candles(coin, "1h", limit=500)
+            freq = "H"
+
+        # Memorizza l'ultimo prezzo
+        last_price = df["y"].iloc[-1]
+
+        model = Prophet(daily_seasonality=True, weekly_seasonality=True)
+        model.fit(df)
+
+        future = model.make_future_dataframe(periods=1, freq=freq)
         forecast = model.predict(future)
-        
-        return forecast, model
-    
+
+        # Restituisce sia il forecast che l'ultimo prezzo
+        return forecast.tail(1)[["ds", "yhat", "yhat_lower", "yhat_upper"]], last_price
+
+    def forecast_many(self, tickers: list, intervals=("15m", "1h")):
+        results = []
+        for coin in tickers:
+            for interval in intervals:
+                try:
+                    forecast_data, last_price = self.forecast(coin, interval)
+                    fc = forecast_data.iloc[0]
+                    
+                    # Calcola la variazione percentuale
+                    variazione_pct = ((fc["yhat"] - last_price) / last_price) * 100
+                    
+                    # Determina il timeframe in italiano
+                    timeframe = "Prossimi 15 Minuti" if interval == "15m" else "Prossima Ora"
+                    
+                    results.append({
+                        "Ticker": coin,
+                        "Timeframe": timeframe,
+                        "Ultimo Prezzo": round(last_price, 2),
+                        "Previsione": round(fc["yhat"], 2),
+                        "Limite Inferiore": round(fc["yhat_lower"], 2),
+                        "Limite Superiore": round(fc["yhat_upper"], 2),
+                        "Variazione %": round(variazione_pct, 2),
+                        "Timestamp Previsione": fc["ds"]
+                    })
+                except Exception as e:
+                    results.append({
+                        "Ticker": coin,
+                        "Timeframe": "Prossimi 15 Minuti" if interval == "15m" else "Prossima Ora",
+                        "Ultimo Prezzo": None,
+                        "Previsione": None,
+                        "Limite Inferiore": None,
+                        "Limite Superiore": None,
+                        "Variazione %": None,
+                        "Timestamp Previsione": None,
+                        "error": str(e)
+                    })
+        return results
+
     def get_predictions_summary(self) -> pd.DataFrame:
-        """Restituisce un riepilogo di tutte le previsioni"""
-        summary_data = []
+        """Restituisce un DataFrame con il riepilogo delle previsioni (compatibile con il vecchio script)"""
+        if not hasattr(self, '_last_results'):
+            return pd.DataFrame()
+        return pd.DataFrame(self._last_results)
+
+    def get_crypto_forecasts(self, tickers: list):
+        """Metodo principale compatibile con il vecchio script"""
+        self._last_results = self.forecast_many(tickers, intervals=("15m", "1h"))
+        df = pd.DataFrame(self._last_results)
         
-        for name, forecast_data in self.forecasts.items():
-            forecast = forecast_data['forecast']
-            data = forecast_data['data']
+        # Rimuovi la colonna error se presente
+        if 'error' in df.columns:
+            df = df.drop('error', axis=1)
             
-            # Prendi l'ultima previsione (quella futura)
-            last_forecast = forecast.iloc[-1]
-            
-            # Prendi l'ultimo valore reale
-            last_actual = data['y'].iloc[-1]
-            
-            summary_data.append({
-                'Ticker': forecast_data['ticker'],
-                'Timeframe': 'Prossimo Minuto' if forecast_data['interval'] == '1m' else 'Prossima Ora',
-                'Ultimo Prezzo': round(last_actual, 2),
-                'Previsione': round(last_forecast['yhat'], 2),
-                'Limite Inferiore': round(last_forecast['yhat_lower'], 2),
-                'Limite Superiore': round(last_forecast['yhat_upper'], 2),
-                'Variazione %': round(((last_forecast['yhat'] - last_actual) / last_actual) * 100, 2),
-                'Timestamp Previsione': last_forecast['ds']
-            })
+        return df.to_string(index=False)
+
+# Funzione helper per mantenere compatibilità con il vecchio script
+def get_hyperliquid_forecasts(tickers=['BTC', 'ETH', 'SOL'], testnet=True):
+    forecaster = HyperliquidForecaster(testnet=testnet)
+    return forecaster.get_crypto_forecasts(tickers)
+
+def get_crypto_forecasts(tickers=['BTC', 'ETH', 'SOL'], testnet=True):
+    try:
+        forecaster = HyperliquidForecaster(testnet=True)
+        results = forecaster.forecast_many(["BTC", "ETH", "SOL"])
         
-        return pd.DataFrame(summary_data)
-    
-    def plot_forecast(self, ticker: str, timeframe: str = 'both'):
-        """Visualizza i grafici delle previsioni per un ticker specifico"""
-        
-        if timeframe in ['minute', 'both']:
-            self._plot_single_forecast(f"{ticker}_next_minute")
-            
-        if timeframe in ['hour', 'both']:
-            self._plot_single_forecast(f"{ticker}_next_hour")
-    
-    def _plot_single_forecast(self, forecast_name: str):
-        """Crea un grafico interattivo per una singola previsione"""
-        if forecast_name not in self.forecasts:
-            print(f"Nessuna previsione trovata per {forecast_name}")
-            return
-            
-        forecast_data = self.forecasts[forecast_name]
-        df = forecast_data['data']
-        forecast = forecast_data['forecast']
-        ticker = forecast_data['ticker']
-        interval = forecast_data['interval']
-        
-        # Crea il grafico
-        fig = go.Figure()
-        
-        # Aggiungi prezzi reali
-        fig.add_trace(go.Scatter(
-            x=df['ds'], 
-            y=df['y'], 
-            mode='lines', 
-            name='Prezzo Reale',
-            line=dict(color='blue')
-        ))
-        
-        # Aggiungi forecast
-        forecast_future = forecast[forecast['ds'] > df['ds'].max()]
-        
-        fig.add_trace(go.Scatter(
-            x=forecast['ds'], 
-            y=forecast['yhat'], 
-            mode='lines', 
-            name='Previsione',
-            line=dict(color='red')
-        ))
-        
-        # Aggiungi intervallo di confidenza
-        fig.add_trace(go.Scatter(
-            x=forecast['ds'], 
-            y=forecast['yhat_upper'],
-            fill=None,
-            mode='lines',
-            line=dict(color='rgba(255,0,0,0.2)'),
-            showlegend=False
-        ))
-        
-        fig.add_trace(go.Scatter(
-            x=forecast['ds'],
-            y=forecast['yhat_lower'],
-            fill='tonexty',
-            mode='lines',
-            line=dict(color='rgba(255,0,0,0.2)'),
-            name='Intervallo di Confidenza'
-        ))
-        
-        # Evidenzia la previsione futura
-        if not forecast_future.empty:
-            fig.add_trace(go.Scatter(
-                x=forecast_future['ds'],
-                y=forecast_future['yhat'],
-                mode='markers',
-                name='Previsione Futura',
-                marker=dict(size=10, color='green', symbol='star')
-            ))
-        
-        # Aggiorna layout
-        title = f"{ticker} - Previsione {'Prossimo Minuto' if interval == '1m' else 'Prossima Ora'}"
-        fig.update_layout(
-            title=title,
-            xaxis_title='Data/Ora',
-            yaxis_title='Prezzo (USD)',
-            hovermode='x unified',
-            template='plotly_white'
-        )
-        
-        fig.show()
-    
-    def save_predictions(self, filename: str = 'crypto_predictions.csv'):
-        """Salva le previsioni in un file CSV"""
-        summary = self.get_predictions_summary()
-        summary.to_csv(filename, index=False)
+        # Stampa il riepilogo come DataFrame
+        df = pd.DataFrame(results)
+        return df.to_string(index=False), df.to_json(orient='records')
+    except:
+        return None, None
 
 
-def get_crypto_forecasts(tickers = ['BTC-USD', 'ETH-USD', 'BNB-USD']):
-    # Crea l'istanza del forecaster
-    forecaster = CryptoForecaster(tickers)
-    forecaster.download_data(timeframe='both')
-    forecaster.forecast_all()
-    summary = forecaster.get_predictions_summary()
-    return summary.to_string(index=False)
-    
+# Esempio di utilizzo
+# if __name__ == "__main__":
+#     print(get_crypto_forecasts())

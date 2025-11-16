@@ -10,7 +10,7 @@ Portfolio Data:
 Analyze the market and portfolio, then respond with ONLY a JSON object in this exact format:
 {{
   "operation": "open" or "close" or "hold",
-  "symbol": "BTC" or "ETH" or "BNB",
+  "symbol": "BTC" or "ETH" or "SOL",
   "direction": "long" or "short",
   "target_portion_of_balance": 0.2,
   "leverage": 3,

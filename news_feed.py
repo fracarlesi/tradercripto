@@ -92,4 +92,4 @@ def fetch_latest_news(max_chars: int = 4000) -> str:
 
     except Exception as err:  # noqa: BLE001
         logger.warning("Failed to process news feed: %s", err)
-        return ""
+        return f"Failed to process news feed: {err}"

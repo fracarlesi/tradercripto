@@ -7,3 +7,7 @@ prophet
 yfinance
 matplotlib
 python-dotenv
+hyperliquid-python-sdk
+eth-account
+toonify
+psycopg2-binary

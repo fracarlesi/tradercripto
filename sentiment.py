@@ -90,6 +90,6 @@ def get_sentiment() -> str:
             f"  Valore: {sentiment_data['valore']}\n"
             f"  Classificazione: {sentiment_data['classificazione']}\n"
             f"  Timestamp: {sentiment_data['timestamp']}"
-        )
+        ), sentiment_data
     else:
         return "Impossibile recuperare il sentiment del mercato."

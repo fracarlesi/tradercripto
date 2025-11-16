@@ -76,9 +76,7 @@ def format_whale_alerts_to_string():
         if not alerts:
             return "Nessun alert trovato."
         
-        result = "🐋 WHALE ALERTS - MOVIMENTI CRYPTO SIGNIFICATIVI 🐋\n\n"
-        result += "=" * 80 + "\n"
-        
+        result = "🐋 WHALE ALERTS - MOVIMENTI CRYPTO SIGNIFICATIVI 🐋\n\n"        
         for alert in alerts:
             parts = alert.split(',', 5)
             
@@ -97,9 +95,9 @@ def format_whale_alerts_to_string():
                     formatted_time = "N/A"
                 
                 result += f"\n{emoji} ALERT del {formatted_time}\n"
-                result += f"💰 Importo: {amount}\n"
-                result += f"💵 Valore USD: {usd_value}\n"
-                result += f"📝 Descrizione: {description}\n"
+                result += f"Importo: {amount}\n"
+                result += f"Valore USD: {usd_value}\n"
+                result += f"Descrizione: {description}\n"
                 result += "\n"
         
         return result
