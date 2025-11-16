@@ -222,12 +222,18 @@ class HyperliquidSyncService:
                 if size != 0 and symbol:
                     entry_price = Decimal(str(pos_data.get("entryPx", "0")))
 
+                    # Extract leverage from position data
+                    leverage_data = pos_data.get("leverage", {})
+                    leverage_value = leverage_data.get("value")
+                    leverage = Decimal(str(leverage_value)) if leverage_value else None
+
                     position = Position(
                         account_id=account.id,
                         symbol=symbol,
                         quantity=abs(size),
                         available_quantity=abs(size),
                         average_cost=entry_price,
+                        leverage=leverage,
                     )
                     positions_to_create.append(position)
 
