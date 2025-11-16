@@ -50,7 +50,7 @@ print("---------------------------------------------------\n")
 #                    TEST 1 — OPEN ORDER
 # -------------------------------------------------------------------
 signal_open = {
-    "operation": "open",
+    "operation": "close",
     "symbol": "BNB",
     "direction": "long",
     "target_portion_of_balance": 0.05,

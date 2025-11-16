@@ -53,7 +53,8 @@ try:
         
     print("L'agente sta decidendo la sua azione!")
     out = previsione_trading_agent(system_prompt)
-    print(out)
+    bot.execute_signal(out)
+
 
     op_id = db_utils.log_bot_operation(out, system_prompt=system_prompt, indicators=indicators_json, news_text=news_txt, sentiment=sentiment_json, forecasts=forecasts_json)
     print(f"[db_utils] Operazione inserita con id={op_id}")

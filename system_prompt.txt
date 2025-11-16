@@ -7,15 +7,7 @@ Portfolio Data:
 {}
 </context_info>
 
-Analyze the market and portfolio, then respond with ONLY a JSON object in this exact format:
-{{
-  "operation": "open" or "close" or "hold",
-  "symbol": "BTC" or "ETH" or "SOL",
-  "direction": "long" or "short",
-  "target_portion_of_balance": 0.2,
-  "leverage": 3,
-  "reason": "Brief explanation of your decision"
-}}
+Analyze the market and portfolio, then respond with ONLY a JSON object.
 
 Rules:
 - Only ONE position per coin allowed.
@@ -29,7 +21,7 @@ Rules:
 - For "close": Close an existing position
   - symbol: which coin position to close
   - direction: must match the position side you want to close ("long" or "short")
-  - target_portion_of_balance: % of position to close (0.0-1.0, use 1.0 to close entire position)
+  - target_portion_of_balance can be omitted because it closes the all position.
 - For "hold": no action taken, direction can be omitted
 - IMPORTANT: You can only hold ONE position per coin at a time (either long OR short, not both)
 - Before opening a new position, check Current Positions to see if you already have a position on that coin
