@@ -366,6 +366,7 @@ class HyperliquidSyncService:
                 size = Decimal(str(fill.get("sz", "0")))
                 price = Decimal(str(fill.get("px", "0")))
                 time_ms = fill.get("time")
+                fee = Decimal(str(fill.get("fee", "0")))  # ✅ FIX 1: Read commission from fill
 
                 if not all([coin, side_char, time_ms]):
                     continue
@@ -383,10 +384,9 @@ class HyperliquidSyncService:
                 # Convert side to standard format
                 side = "BUY" if side_char == "B" else "SELL"
 
-                # Get leverage from map (for currently open positions)
-                leverage = leverage_map.get(coin)
-
-                # Get strategy from Position table (if exists)
+                # ✅ FIX 2: Get leverage from Position table (works for both open AND closed positions)
+                # Position table stores leverage when position was created/synced
+                leverage = None
                 strategy = None
                 result = await db.execute(
                     select(Position).where(
@@ -395,8 +395,13 @@ class HyperliquidSyncService:
                     )
                 )
                 position = result.scalar_one_or_none()
-                if position and position.strategy_type:
+                if position:
+                    leverage = position.leverage
                     strategy = position.strategy_type
+
+                # Fallback: If position not found in DB, try from current open positions
+                if leverage is None:
+                    leverage = leverage_map.get(coin)
 
                 # Create trade
                 trade = Trade(
@@ -405,9 +410,9 @@ class HyperliquidSyncService:
                     side=side,
                     price=price,
                     quantity=size,
-                    commission=Decimal("0"),
+                    commission=fee,  # ✅ Store real commission
                     trade_time=trade_time,
-                    leverage=leverage,
+                    leverage=leverage,  # ✅ From Position table (or fallback to open position)
                     strategy=strategy,
                 )
 
