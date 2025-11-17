@@ -401,22 +401,26 @@ class HyperliquidSyncService:
                 # Convert side to standard format
                 side = "BUY" if side_char == "B" else "SELL"
 
-                # Get leverage and strategy from Position table
-                # Position table always has complete data (populated from trade_metadata during sync_positions)
+                # Get leverage and strategy from trade_metadata table
+                # Read from trade_metadata (persists even after position is closed)
                 leverage = None
                 strategy = None
-                result = await db.execute(
-                    select(Position).where(
-                        Position.account_id == account.id,
-                        Position.symbol == coin
+                from database.models import TradeMetadata
+                metadata_result = await db.execute(
+                    select(TradeMetadata)
+                    .where(
+                        TradeMetadata.account_id == account.id,
+                        TradeMetadata.symbol == coin
                     )
+                    .order_by(TradeMetadata.created_at.desc())
+                    .limit(1)
                 )
-                position = result.scalar_one_or_none()
-                if position:
-                    leverage = position.leverage
-                    strategy = position.strategy_type
+                metadata = metadata_result.scalar_one_or_none()
+                if metadata:
+                    leverage = metadata.leverage
+                    strategy = metadata.strategy
                 else:
-                    # Position not found - check current open positions for leverage
+                    # Fallback to leverage_map if no metadata found
                     leverage = leverage_map.get(coin)
 
                 # Create trade
