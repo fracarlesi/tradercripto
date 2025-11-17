@@ -141,6 +141,9 @@ class Account(Base):
     )
     orders: Mapped[list["Order"]] = relationship("Order", back_populates="account", lazy="selectin")
     trades: Mapped[list["Trade"]] = relationship("Trade", back_populates="account", lazy="selectin")
+    trade_metadata: Mapped[list["TradeMetadata"]] = relationship(
+        "TradeMetadata", back_populates="account", lazy="selectin"
+    )
     ai_decisions: Mapped[list["AIDecisionLog"]] = relationship(
         "AIDecisionLog", back_populates="account", lazy="selectin"
     )
@@ -148,6 +151,34 @@ class Account(Base):
     __table_args__ = (
         Index("idx_accounts_user_active", "user_id", "is_active"),
         Index("idx_accounts_type", "account_type"),
+    )
+
+
+class TradeMetadata(Base):
+    """Persistent metadata for trades (leverage, strategy) stored at order execution time.
+
+    Purpose: Store leverage and strategy BEFORE position closes, so sync_fills() can read them.
+    Problem solved: Position table is deleted when position closes, losing leverage info.
+    Solution: Save metadata when order is placed, read from here during sync.
+    """
+
+    __tablename__ = "trade_metadata"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), nullable=False)
+    symbol: Mapped[str] = mapped_column(String(20), nullable=False)
+    leverage: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
+    strategy: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    # Relationships
+    account: Mapped["Account"] = relationship("Account", back_populates="trade_metadata")
+
+    __table_args__ = (
+        Index("idx_trade_metadata_account_symbol", "account_id", "symbol"),
+        Index("idx_trade_metadata_created_at", "created_at"),
     )
 
 

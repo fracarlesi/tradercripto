@@ -227,6 +227,22 @@ class HyperliquidSyncService:
                     leverage_value = leverage_data.get("value")
                     leverage = Decimal(str(leverage_value)) if leverage_value else None
 
+                    # Read strategy from trade_metadata (saved before order execution)
+                    strategy_type = None
+                    from database.models import TradeMetadata
+                    metadata_result = await db.execute(
+                        select(TradeMetadata)
+                        .where(
+                            TradeMetadata.account_id == account.id,
+                            TradeMetadata.symbol == symbol
+                        )
+                        .order_by(TradeMetadata.created_at.desc())
+                        .limit(1)
+                    )
+                    metadata = metadata_result.scalar_one_or_none()
+                    if metadata:
+                        strategy_type = metadata.strategy
+
                     position = Position(
                         account_id=account.id,
                         symbol=symbol,
@@ -234,6 +250,7 @@ class HyperliquidSyncService:
                         available_quantity=abs(size),
                         average_cost=entry_price,
                         leverage=leverage,
+                        strategy_type=strategy_type,
                     )
                     positions_to_create.append(position)
 
@@ -384,8 +401,8 @@ class HyperliquidSyncService:
                 # Convert side to standard format
                 side = "BUY" if side_char == "B" else "SELL"
 
-                # ✅ FIX 2: Get leverage from Position table (works for both open AND closed positions)
-                # Position table stores leverage when position was created/synced
+                # Get leverage and strategy from Position table
+                # Position table always has complete data (populated from trade_metadata during sync_positions)
                 leverage = None
                 strategy = None
                 result = await db.execute(
@@ -398,9 +415,8 @@ class HyperliquidSyncService:
                 if position:
                     leverage = position.leverage
                     strategy = position.strategy_type
-
-                # Fallback: If position not found in DB, try from current open positions
-                if leverage is None:
+                else:
+                    # Position not found - check current open positions for leverage
                     leverage = leverage_map.get(coin)
 
                 # Create trade
@@ -412,8 +428,8 @@ class HyperliquidSyncService:
                     quantity=size,
                     commission=fee,  # ✅ Store real commission
                     trade_time=trade_time,
-                    leverage=leverage,  # ✅ From Position table (or fallback to open position)
-                    strategy=strategy,
+                    leverage=leverage,  # ✅ From Position table (populated from trade_metadata during sync)
+                    strategy=strategy,  # ✅ From Position table (populated from trade_metadata during sync)
                 )
 
                 await TradeRepository.create_trade(db=db, trade_data=trade)

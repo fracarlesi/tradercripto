@@ -305,7 +305,7 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
         # 7. Execute order on Hyperliquid
         logger.info("Executing order on Hyperliquid...")
         leverage = validation_result.get("leverage", 1)
-        execution_result = _execute_order_async(decision, validation_result["order_size"], leverage)
+        execution_result = _execute_order_async(decision, validation_result["order_size"], leverage, account_id=account.id)
 
         # Check if order was actually executed (not just HTTP success)
         is_executed = False
@@ -748,13 +748,14 @@ def _validate_decision(
     return {"valid": False, "reason": "Unknown validation error"}
 
 
-def _execute_order_async(decision: dict[str, Any], order_size: float, leverage: int = 1) -> dict[str, Any]:
+def _execute_order_async(decision: dict[str, Any], order_size: float, leverage: int = 1, account_id: int | None = None) -> dict[str, Any]:
     """Execute order on Hyperliquid (wrapper for async call).
 
     Args:
         decision: AI decision with operation and symbol
         order_size: Calculated order size in base currency units
         leverage: Leverage multiplier (1-10x)
+        account_id: Account ID for saving trade metadata (optional)
 
     Returns:
         Order execution result dict
@@ -836,6 +837,34 @@ def _execute_order_async(decision: dict[str, Any], order_size: float, leverage: 
                 return {"status": "error", "message": f"Unknown operation: {operation}"}
 
             logger.info(f"Executing {operation.upper()} order: {symbol} size={order_size} leverage={leverage}x is_buy={is_buy} reduce_only={reduce_only}")
+
+            # Save leverage/strategy metadata BEFORE order (for NEW positions only)
+            # This ensures metadata persists even after position closes
+            if account_id and not reduce_only and operation in ["buy", "short"]:
+                try:
+                    from decimal import Decimal
+                    from database.connection import SessionLocal
+                    from database.models import TradeMetadata
+
+                    db = SessionLocal()
+                    try:
+                        # Determine strategy based on operation
+                        strategy = "LONG" if operation == "buy" else "SHORT"
+
+                        metadata = TradeMetadata(
+                            account_id=account_id,
+                            symbol=symbol,
+                            leverage=Decimal(str(leverage)),
+                            strategy=strategy
+                        )
+                        db.add(metadata)
+                        db.commit()
+                        logger.info(f"💾 Saved trade metadata: {symbol} leverage={leverage}x strategy={strategy}")
+                    finally:
+                        db.close()
+                except Exception as e:
+                    logger.error(f"Failed to save trade metadata: {e}", exc_info=True)
+                    # Don't fail the order if metadata save fails
 
             result = loop.run_until_complete(
                 hyperliquid_trading_service.place_market_order_async(
