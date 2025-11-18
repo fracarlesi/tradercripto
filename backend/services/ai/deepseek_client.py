@@ -70,6 +70,54 @@ class DeepSeekClient:
 
         logger.info(f"DeepSeekClient initialized for account {account.name} (model: {self.model})")
 
+    async def chat_async(
+        self,
+        model: str,
+        messages: list,
+        temperature: float = 0.7,
+        max_tokens: int = 500,
+    ) -> str:
+        """
+        Simple chat completion for exit agents and other simple prompts.
+
+        Args:
+            model: Model name (ignored, uses account's model)
+            messages: List of message dicts with 'role' and 'content'
+            temperature: Sampling temperature
+            max_tokens: Maximum tokens in response
+
+        Returns:
+            Response text content
+        """
+        try:
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}",
+            }
+
+            payload = {
+                "model": self.model,  # Use account's configured model
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
+
+            response_data = await self._call_api_with_retry(headers, payload)
+
+            if not response_data:
+                return "Unable to get response from DeepSeek"
+
+            # Extract text content from response
+            choices = response_data.get("choices", [])
+            if choices and len(choices) > 0:
+                return choices[0].get("message", {}).get("content", "")
+
+            return "No response content"
+
+        except Exception as e:
+            logger.error(f"chat_async failed: {e}", exc_info=True)
+            return f"Error: {str(e)}"
+
     async def get_trading_decision(
         self,
         market_snapshot: MarketDataSnapshot,
