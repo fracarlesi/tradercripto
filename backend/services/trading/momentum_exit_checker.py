@@ -67,14 +67,13 @@ async def check_momentum_exit_async(momentum_drop_threshold: float = 0.20) -> No
                 current_mom = current_momentum.get(symbol)
 
                 if not current_mom:
-                    # Coin not in top 50 momentum anymore → STRONG EXIT SIGNAL
-                    logger.warning(
-                        f"⚠️ {symbol} {side} dropped out of top 50 momentum → EXIT"
+                    # Coin not in top 50 momentum anymore
+                    # IMPORTANT: Don't exit immediately - this could be temporary fluctuation
+                    # Only log a warning, let the AI exit agents handle exit decisions
+                    logger.debug(
+                        f"⚠️ {symbol} {side} not in top 50 momentum - monitoring (letting AI agents decide)"
                     )
-                    await _execute_momentum_exit(
-                        symbol, abs(szi), side,
-                        f"Dropped out of momentum leaders (was in position)"
-                    )
+                    # Don't exit here - let the position develop and AI agents analyze
                     continue
 
                 # Get current momentum score and rank
@@ -94,14 +93,15 @@ async def check_momentum_exit_async(momentum_drop_threshold: float = 0.20) -> No
                         )
                         continue
 
-                    # Trigger 2: Dropped out of top 20 (losing momentum leadership)
-                    if rank > 20:
+                    # Trigger 2: Dropped significantly out of top positions
+                    # Only exit if dropped below rank 40 (give more room for fluctuation)
+                    if rank > 40:
                         logger.info(
-                            f"📉 {symbol} LONG dropped to rank #{rank} (out of top 20) → EXIT"
+                            f"📉 {symbol} LONG dropped to rank #{rank} (out of top 40) → EXIT"
                         )
                         await _execute_momentum_exit(
                             symbol, abs(szi), side,
-                            f"Dropped to rank #{rank}, momentum weakening"
+                            f"Dropped to rank #{rank}, momentum significantly weakened"
                         )
                         continue
 
