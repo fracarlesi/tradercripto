@@ -939,9 +939,17 @@ The thresholds below are EVALUATION TRIGGERS, not automatic commands.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Analyze ALL available cryptocurrencies, identify the BEST opportunity based on PROFIT/LOSS TRIGGERS FIRST, then TECHNICAL ANALYSIS, news, and market data.
+
+**IMPORTANT - SHORT ONLY MODE ENABLED**:
+Currently ONLY SHORT positions are allowed. DO NOT output "buy" operations.
+- If you see a bullish opportunity → output "hold" (we are not taking LONG positions)
+- Only output "short" when you see clear bearish signals (technical score < 0.3)
+- You can "sell" to close existing positions
+- This is temporary until we improve the LONG strategy
+
 Then respond with ONLY a JSON object in this exact format:
 {{
-  "operation": "buy" or "sell" or "short" or "hold",
+  "operation": "sell" or "short" or "hold",
   "symbol": one of the available symbols above,
   "target_portion_of_balance": 1.0,
   "leverage": 1,
@@ -969,11 +977,11 @@ Your job is to make the SMARTEST decision possible considering ALL factors toget
    • Consider opportunity cost: holding mediocre position vs buying strong one
 
 Rules - OPERATIONS:
-- operation must be "buy", "sell", "short", or "hold"
+- operation must be "buy", "short", "sell", or "hold"
 - "buy": Open LONG position (profit when price goes UP) - use when technical score > 0.7
-- "short": Open SHORT position (profit when price goes DOWN) - use when technical score < 0.3
+- "short": Open SHORT position (profit when price goes DOWN) - use when technical score < 0.3 (indicates WEAKNESS, price likely to fall)
 - "sell": Close existing position (long or short)
-- "hold": No action taken when technical score is between 0.3-0.7 (neutral zone)
+- "hold": No action taken when signals are unclear (0.3-0.7 range)
 
 Rules - POSITION SIZING:
 - target_portion_of_balance: % of available capital to use (0.0-1.0)

@@ -19,6 +19,7 @@ import WebSocketWarningBanner from '@/components/layout/WebSocketWarningBanner'
 import Portfolio from '@/components/portfolio/Portfolio'
 import ComprehensiveView from '@/components/portfolio/ComprehensiveView'
 import TradeHistoryTable from '@/components/trading/TradeHistoryTable'
+import AIInsights from '@/components/ai/AIInsights'
 import { AIDecision, getAccounts} from '@/lib/api'
 
 interface User {
@@ -64,6 +65,7 @@ interface Trade { id: number; order_id: number; account_id: number; symbol: stri
 const PAGE_TITLES: Record<string, string> = {
   comprehensive: 'Open Alpha Arena',
   'trade-history': 'Trade History',
+  'ai-insights': 'AI Insights',
 }
 
 function App() {
@@ -300,6 +302,10 @@ function App() {
 
         {currentPage === 'trade-history' && account && (
           <TradeHistoryTable accountId={account.id} />
+        )}
+
+        {currentPage === 'ai-insights' && account && (
+          <AIInsights accountId={account.id} />
         )}
       </main>
     )

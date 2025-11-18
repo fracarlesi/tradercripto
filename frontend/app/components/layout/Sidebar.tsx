@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Settings, BarChart3, History } from 'lucide-react'
+import { Settings, BarChart3, History, Brain } from 'lucide-react'
 import SettingsDialog from './SettingsDialog'
 
 interface SidebarProps {
@@ -41,6 +41,18 @@ export default function Sidebar({ currentPage = 'comprehensive', onPageChange, o
           </button>
 
           <button
+            className={`flex items-center justify-center w-10 h-10 rounded-lg transition-colors ${
+              currentPage === 'ai-insights'
+                ? 'bg-secondary/80 text-secondary-foreground'
+                : 'hover:bg-muted text-muted-foreground'
+            }`}
+            onClick={() => onPageChange?.('ai-insights')}
+            title="AI Insights"
+          >
+            <Brain className="w-5 h-5" />
+          </button>
+
+          <button
             className="flex items-center justify-center w-10 h-10 rounded-lg hover:bg-muted transition-colors text-muted-foreground"
             onClick={() => setSettingsOpen(true)}
             title="Settings"
@@ -74,6 +86,18 @@ export default function Sidebar({ currentPage = 'comprehensive', onPageChange, o
           >
             <History className="w-5 h-5" />
             <span className="text-xs mt-1">History</span>
+          </button>
+          <button
+            className={`flex flex-col items-center justify-center w-12 h-12 rounded-lg transition-colors ${
+              currentPage === 'ai-insights'
+                ? 'bg-secondary/80 text-secondary-foreground'
+                : 'hover:bg-muted text-muted-foreground'
+            }`}
+            onClick={() => onPageChange?.('ai-insights')}
+            title="AI Insights"
+          >
+            <Brain className="w-5 h-5" />
+            <span className="text-xs mt-1">AI</span>
           </button>
           <button
             className="flex flex-col items-center justify-center w-12 h-12 rounded-lg hover:bg-muted transition-colors text-muted-foreground"

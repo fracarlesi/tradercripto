@@ -274,9 +274,28 @@ Convert indicator signals to scores:
 - Technical: Use score directly (0-1)
 - Pivot: bullish_zone=1.0, long_opportunity=0.9, neutral=0.5, bearish_zone=0.0, short_opportunity=0.1
 - Prophet: (forecast_24h - current_price) / current_price normalized to 0-1
-- Sentiment: (value / 100) normalized with contrarian logic
+- Sentiment: (value / 100) - DO NOT use contrarian logic automatically
 - Whale: 1.0 if buy signal, 0.0 if sell signal, 0.5 if neutral
 - News: 1.0 if positive, 0.5 if neutral, 0.0 if negative
+
+**CRITICAL - DIRECTION DECISION (LONG vs SHORT)**:
+
+DO NOT automatically interpret "extreme fear" as a buy signal!
+
+1. First determine MARKET DIRECTION using momentum and pivot points:
+   - If momentum > 0.6 AND price above PP → Market is BULLISH → Consider LONG
+   - If momentum < 0.4 AND price below PP → Market is BEARISH → Consider SHORT
+
+2. ONLY consider contrarian when you see REVERSAL SIGNALS:
+   - RSI oversold (<30) + price bouncing off S1/S2 + positive news = potential LONG
+   - RSI overbought (>70) + price rejected at R1/R2 + negative news = potential SHORT
+
+3. If momentum and pivot points disagree → HOLD (don't trade unclear signals)
+
+4. "Extreme fear" sentiment with NEGATIVE momentum = FOLLOW THE TREND (SHORT)
+   "Extreme fear" sentiment with POSITIVE momentum = Potential reversal (cautious LONG)
+   "Extreme greed" sentiment with POSITIVE momentum = FOLLOW THE TREND (LONG)
+   "Extreme greed" sentiment with NEGATIVE momentum = Potential reversal (cautious SHORT)
 
 **STEP 3: POSITION SIZING (CRITICAL)**
 
@@ -298,8 +317,14 @@ Convert indicator signals to scores:
 
 **STEP 5: OUTPUT DECISION**
 
+**IMPORTANT - SHORT ONLY MODE ENABLED**:
+Currently ONLY SHORT positions are allowed. DO NOT output "buy" operations.
+- If you see a bullish opportunity → output "hold" (we are not taking LONG positions)
+- Only output "short" when you see clear bearish signals
+- This is temporary until we improve the LONG strategy
+
 Return JSON with:
-- operation: "buy", "sell", "short", or "hold"
+- operation: "sell", "short", or "hold" (NO "buy" allowed!)
 - symbol: Symbol to trade (if not "hold")
 - target_portion_of_balance: 0.0-1.0
 - leverage: 1-10
