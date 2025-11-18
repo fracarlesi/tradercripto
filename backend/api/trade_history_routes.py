@@ -20,14 +20,14 @@ router = APIRouter(prefix="/api/trade-history", tags=["trade-history"])
 async def _calculate_complete_trades(
     account_id: int,
     db: AsyncSession,
-    days: Optional[int] = None,
+    minutes: Optional[int] = None,
     symbol_filter: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """
     Calculate complete trades by pairing entry/exit fills.
 
     Algorithm:
-    1. Fetch all trades for account (filtered by days/symbol if provided)
+    1. Fetch all trades for account (filtered by minutes/symbol if provided)
     2. Group by symbol
     3. For each symbol, sort by time and pair buy→sell or sell→buy (for shorts)
     4. Calculate P&L and duration for each complete trade
@@ -35,7 +35,7 @@ async def _calculate_complete_trades(
     Args:
         account_id: Account ID to fetch trades for
         db: Database session
-        days: Optional filter for last N days
+        minutes: Optional filter for last N minutes
         symbol_filter: Optional filter for specific symbol
 
     Returns:
@@ -45,8 +45,8 @@ async def _calculate_complete_trades(
         # Build query
         query = select(Trade).where(Trade.account_id == account_id)
 
-        if days:
-            cutoff = datetime.utcnow() - timedelta(days=days)
+        if minutes:
+            cutoff = datetime.utcnow() - timedelta(minutes=minutes)
             query = query.where(Trade.trade_time >= cutoff)
 
         if symbol_filter:
@@ -250,7 +250,7 @@ async def _calculate_complete_trades(
 async def get_trade_history(
     account_id: int,
     db: AsyncSession = Depends(get_db),
-    days: Optional[int] = Query(None, description="Filter last N days"),
+    timeframe: Optional[str] = Query(None, description="Filter timeframe: 5m, 1h, 1d, or None for all"),
     symbol: Optional[str] = Query(None, description="Filter by symbol")
 ) -> Dict[str, Any]:
     """
@@ -288,17 +288,86 @@ async def get_trade_history(
         if not account:
             raise HTTPException(status_code=404, detail=f"Account {account_id} not found")
 
+        # Convert timeframe to minutes
+        minutes = None
+        if timeframe:
+            timeframe_map = {
+                '5m': 5,
+                '1h': 60,
+                '1d': 1440,  # 24 * 60
+            }
+            minutes = timeframe_map.get(timeframe)
+            # If timeframe is 'all' or unknown, minutes stays None (no filter)
+
         # Calculate complete trades
-        trades = await _calculate_complete_trades(account_id, db, days, symbol)
+        trades = await _calculate_complete_trades(account_id, db, minutes, symbol)
 
         # Calculate statistics
         total_trades = len(trades)
         total_pnl = sum(t['pnl'] for t in trades)
-        winning_trades = sum(1 for t in trades if t['pnl'] > 0)
+        winning_trades_list = [t for t in trades if t['pnl'] > 0]
+        losing_trades_list = [t for t in trades if t['pnl'] <= 0]
+        winning_trades = len(winning_trades_list)
         win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
 
         avg_pnl = total_pnl / total_trades if total_trades > 0 else 0
         avg_duration = sum(t['duration_minutes'] for t in trades) / total_trades if total_trades > 0 else 0
+
+        # Advanced metrics
+        gross_profit = sum(t['pnl'] for t in winning_trades_list)
+        gross_loss = abs(sum(t['pnl'] for t in losing_trades_list))
+        profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf') if gross_profit > 0 else 0
+
+        avg_win = gross_profit / len(winning_trades_list) if winning_trades_list else 0
+        avg_loss = abs(sum(t['pnl'] for t in losing_trades_list) / len(losing_trades_list)) if losing_trades_list else 0
+        risk_reward = avg_win / avg_loss if avg_loss > 0 else float('inf') if avg_win > 0 else 0
+
+        best_trade = max(t['pnl'] for t in trades) if trades else 0
+        worst_trade = min(t['pnl'] for t in trades) if trades else 0
+
+        # Calculate max drawdown (peak to trough)
+        cumulative_pnl = 0
+        peak = 0
+        max_drawdown = 0
+        for t in sorted(trades, key=lambda x: x['exit_time']):
+            cumulative_pnl += t['pnl']
+            if cumulative_pnl > peak:
+                peak = cumulative_pnl
+            drawdown = peak - cumulative_pnl
+            if drawdown > max_drawdown:
+                max_drawdown = drawdown
+
+        # Calculate consecutive wins/losses
+        max_consecutive_wins = 0
+        max_consecutive_losses = 0
+        current_wins = 0
+        current_losses = 0
+        for t in sorted(trades, key=lambda x: x['exit_time']):
+            if t['pnl'] > 0:
+                current_wins += 1
+                current_losses = 0
+                max_consecutive_wins = max(max_consecutive_wins, current_wins)
+            else:
+                current_losses += 1
+                current_wins = 0
+                max_consecutive_losses = max(max_consecutive_losses, current_losses)
+
+        # Performance by symbol
+        symbol_performance = {}
+        for t in trades:
+            sym = t['symbol']
+            if sym not in symbol_performance:
+                symbol_performance[sym] = {'trades': 0, 'wins': 0, 'pnl': 0}
+            symbol_performance[sym]['trades'] += 1
+            symbol_performance[sym]['pnl'] += t['pnl']
+            if t['pnl'] > 0:
+                symbol_performance[sym]['wins'] += 1
+
+        # Calculate win rate per symbol
+        for sym in symbol_performance:
+            sp = symbol_performance[sym]
+            sp['win_rate'] = round(sp['wins'] / sp['trades'] * 100, 1) if sp['trades'] > 0 else 0
+            sp['pnl'] = round(sp['pnl'], 2)
 
         return {
             "account_id": account_id,
@@ -309,6 +378,19 @@ async def get_trade_history(
             "losing_trades": total_trades - winning_trades,
             "avg_pnl": round(avg_pnl, 2),
             "avg_duration_minutes": int(avg_duration),
+            # Advanced metrics
+            "profit_factor": round(profit_factor, 2) if profit_factor != float('inf') else 999.99,
+            "risk_reward": round(risk_reward, 2) if risk_reward != float('inf') else 999.99,
+            "avg_win": round(avg_win, 2),
+            "avg_loss": round(avg_loss, 2),
+            "best_trade": round(best_trade, 2),
+            "worst_trade": round(worst_trade, 2),
+            "max_drawdown": round(max_drawdown, 2),
+            "max_consecutive_wins": max_consecutive_wins,
+            "max_consecutive_losses": max_consecutive_losses,
+            "gross_profit": round(gross_profit, 2),
+            "gross_loss": round(gross_loss, 2),
+            "symbol_performance": symbol_performance,
             "trades": trades
         }
 
@@ -346,7 +428,9 @@ async def get_trade_summary(
         }
     """
     try:
-        trades = await _calculate_complete_trades(account_id, db, days=days)
+        # Convert days to minutes
+        minutes = days * 1440 if days else None
+        trades = await _calculate_complete_trades(account_id, db, minutes=minutes)
 
         if not trades:
             return {

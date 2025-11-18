@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import NullPool, QueuePool, StaticPool
+from sqlalchemy.pool import NullPool, StaticPool
 
 
 def _set_sqlite_pragma(dbapi_conn, connection_record):
@@ -47,8 +47,8 @@ def create_engine() -> AsyncEngine:
             "timeout": 30.0,  # Increased timeout for concurrent access (default is 5.0)
         }
     else:
-        # PostgreSQL configuration
-        engine_kwargs["poolclass"] = QueuePool
+        # PostgreSQL configuration (asyncpg uses its own async pool)
+        # Do NOT set poolclass for async engines - let SQLAlchemy use AsyncAdaptedQueuePool
         engine_kwargs["pool_size"] = settings.db_pool_size
         engine_kwargs["max_overflow"] = settings.db_max_overflow
         engine_kwargs["pool_timeout"] = settings.db_pool_timeout

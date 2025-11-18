@@ -10,6 +10,8 @@ REPLACES: Old reconstruction algorithm that had critical bugs in P&L calculation
 import logging
 from datetime import UTC, datetime, timedelta
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from services.portfolio_snapshot_service import get_snapshots_for_chart
@@ -17,9 +19,9 @@ from services.portfolio_snapshot_service import get_snapshots_for_chart
 logger = logging.getLogger(__name__)
 
 
-async def get_all_asset_curves_data_new_async(db: Session, timeframe: str = "1h") -> list[dict]:
+async def get_all_asset_curves_data_new_async(db: AsyncSession, timeframe: str = "1h") -> list[dict]:
     """
-    Get asset curve data from portfolio snapshots.
+    Get asset curve data from portfolio snapshots (async version).
 
     Simple algorithm:
     1. Calculate time range based on timeframe
@@ -27,7 +29,7 @@ async def get_all_asset_curves_data_new_async(db: Session, timeframe: str = "1h"
     3. Return formatted data
 
     Args:
-        db: Database session
+        db: Async database session
         timeframe: Time period for the curve, options: "5m", "1h", "1d"
 
     Returns:
@@ -56,27 +58,44 @@ async def get_all_asset_curves_data_new_async(db: Session, timeframe: str = "1h"
         )
 
         # Get snapshots for all accounts
-        # Note: get_snapshots_for_chart already handles account_id filtering
-        # For now, we'll get snapshots for all accounts by querying without account_id filter
         from database.models import Account, PortfolioSnapshot
 
-        # Get all active accounts
-        accounts = db.query(Account).filter(Account.is_active == True).all()
+        # Get all active accounts (async)
+        result = await db.execute(select(Account).where(Account.is_active == True))
+        accounts = result.scalars().all()
 
         if not accounts:
             logger.warning("No active accounts found")
             return []
 
         # Collect snapshots for all accounts
+        # Query snapshots directly with async operations
         all_snapshots = []
         for account in accounts:
-            snapshots = get_snapshots_for_chart(
-                db=db,
-                account_id=account.id,
-                start_time=start_time,
-                end_time=end_time,
+            # Query snapshots for this account in the time range
+            result = await db.execute(
+                select(PortfolioSnapshot)
+                .where(
+                    PortfolioSnapshot.account_id == account.id,
+                    PortfolioSnapshot.snapshot_time >= start_time,
+                    PortfolioSnapshot.snapshot_time <= end_time
+                )
+                .order_by(PortfolioSnapshot.snapshot_time)
             )
-            all_snapshots.extend(snapshots)
+            snapshots = result.scalars().all()
+
+            # Convert to dict format
+            for snapshot in snapshots:
+                all_snapshots.append({
+                    "timestamp": int(snapshot.snapshot_time.timestamp()),
+                    "datetime_str": snapshot.snapshot_time.isoformat(),
+                    "account_id": snapshot.account_id,
+                    "user_id": account.user_id,
+                    "username": account.name,
+                    "total_assets": float(snapshot.total_assets),
+                    "cash": float(snapshot.withdrawable) if snapshot.withdrawable else 0,
+                    "positions_value": float(snapshot.total_assets) - float(snapshot.withdrawable or 0),
+                })
 
         if not all_snapshots:
             logger.warning(
@@ -113,6 +132,62 @@ async def get_all_asset_curves_data_new_async(db: Session, timeframe: str = "1h"
         all_snapshots.sort(key=lambda x: (x["timestamp"], x["account_id"]))
 
         logger.info(f"Returning {len(all_snapshots)} snapshot data points")
+        return all_snapshots
+
+    except Exception as e:
+        logger.error(f"Failed to get asset curve data: {e}", exc_info=True)
+        return []
+
+
+def get_all_asset_curves_data_sync(db: Session, timeframe: str = "1h") -> list[dict]:
+    """
+    Get asset curve data from portfolio snapshots (sync version for legacy compatibility).
+
+    Args:
+        db: Sync database session
+        timeframe: Time period for the curve, options: "5m", "1h", "1d"
+
+    Returns:
+        List of asset curve data points with timestamp, account info, and asset values
+    """
+    try:
+        # Calculate time range based on timeframe
+        end_time = datetime.now(UTC)
+
+        if timeframe == "5m":
+            start_time = end_time - timedelta(hours=8)
+        elif timeframe == "1h":
+            start_time = end_time - timedelta(hours=1)
+        elif timeframe == "1d":
+            start_time = end_time - timedelta(days=30)
+        else:
+            start_time = end_time - timedelta(days=7)
+
+        # Get snapshots for all accounts
+        from database.models import Account
+
+        # Get all active accounts
+        accounts = db.query(Account).filter(Account.is_active == True).all()
+
+        if not accounts:
+            return []
+
+        # Collect snapshots for all accounts
+        all_snapshots = []
+        for account in accounts:
+            snapshots = get_snapshots_for_chart(
+                db=db,
+                account_id=account.id,
+                start_time=start_time,
+                end_time=end_time,
+            )
+            all_snapshots.extend(snapshots)
+
+        if not all_snapshots:
+            return []
+
+        # Sort by timestamp for consistent ordering
+        all_snapshots.sort(key=lambda x: (x["timestamp"], x["account_id"]))
         return all_snapshots
 
     except Exception as e:

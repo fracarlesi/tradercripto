@@ -6,7 +6,6 @@ This module provides async WebSocket support with:
 - Proper cleanup on disconnect
 """
 
-import asyncio  # FIX: Add asyncio import
 import json
 from datetime import datetime
 
@@ -297,36 +296,18 @@ async def _send_snapshot_async_impl(db: AsyncSession, account_id: int):
         })
 
     # Get asset curve data for the chart (default timeframe: 1h)
-    # FIX: Call async function directly to avoid event loop deadlock
-    import asyncio
+    # Call async function directly with the current async session
     from services.asset_curve_calculator import get_all_asset_curves_data_new_async
-    from database.connection import SessionLocal
+    from database.connection import async_session_factory
 
-    def get_curves_sync():
-        """Sync wrapper that creates its own session for the curve calculation"""
-        try:
-            # Create a new sync session for this operation
-            sync_db = SessionLocal()
-            try:
-                # Run the async function in a new event loop (safe because we're in a thread)
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    curves = loop.run_until_complete(
-                        get_all_asset_curves_data_new_async(sync_db, "1h")
-                    )
-                    logger.info(f"Asset curves calculated: {len(curves)} points")
-                    return curves
-                finally:
-                    loop.close()
-            finally:
-                sync_db.close()
-        except Exception as e:
-            logger.error(f"Failed to calculate asset curves: {e}", exc_info=True)
-            return []
-
-    # Execute in a thread pool to avoid blocking the async event loop
-    all_asset_curves = await asyncio.to_thread(get_curves_sync)
+    try:
+        # Create a new async session for the curve calculation
+        async with async_session_factory() as curve_db:
+            all_asset_curves = await get_all_asset_curves_data_new_async(curve_db, "1h")
+            logger.info(f"Asset curves calculated: {len(all_asset_curves)} points")
+    except Exception as e:
+        logger.error(f"Failed to calculate asset curves: {e}", exc_info=True)
+        all_asset_curves = []
 
     # Build response
     response_data = {
@@ -539,26 +520,16 @@ async def websocket_endpoint_async(websocket: WebSocket):
                             )
                             continue
 
-                        # FIX: Use asyncio.to_thread() to avoid deadlock
+                        # Call async function directly with async session
                         from services.asset_curve_calculator import get_all_asset_curves_data_new_async
-                        from database.connection import SessionLocal
+                        from database.connection import async_session_factory
 
-                        def get_curves_sync():
-                            sync_db = SessionLocal()
-                            try:
-                                loop = asyncio.new_event_loop()
-                                asyncio.set_event_loop(loop)
-                                try:
-                                    curves = loop.run_until_complete(
-                                        get_all_asset_curves_data_new_async(sync_db, timeframe)
-                                    )
-                                    return curves
-                                finally:
-                                    loop.close()
-                            finally:
-                                sync_db.close()
-
-                        asset_curves = await asyncio.to_thread(get_curves_sync)
+                        try:
+                            async with async_session_factory() as curve_db:
+                                asset_curves = await get_all_asset_curves_data_new_async(curve_db, timeframe)
+                        except Exception as e:
+                            logger.error(f"Failed to get asset curves: {e}", exc_info=True)
+                            asset_curves = []
 
                         await websocket.send_text(
                             json.dumps(

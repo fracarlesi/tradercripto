@@ -10,6 +10,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 interface CompleteTrade {
@@ -30,6 +31,13 @@ interface CompleteTrade {
   strategy?: string | null   // Optional strategy (null for historical trades)
 }
 
+interface SymbolPerformance {
+  trades: number
+  wins: number
+  pnl: number
+  win_rate: number
+}
+
 interface TradeHistoryData {
   account_id: number
   total_trades: number
@@ -39,6 +47,19 @@ interface TradeHistoryData {
   losing_trades: number
   avg_pnl: number
   avg_duration_minutes: number
+  // Advanced metrics
+  profit_factor: number
+  risk_reward: number
+  avg_win: number
+  avg_loss: number
+  best_trade: number
+  worst_trade: number
+  max_drawdown: number
+  max_consecutive_wins: number
+  max_consecutive_losses: number
+  gross_profit: number
+  gross_loss: number
+  symbol_performance: Record<string, SymbolPerformance>
   trades: CompleteTrade[]
 }
 
@@ -46,16 +67,18 @@ interface TradeHistoryTableProps {
   accountId: number
 }
 
+type Timeframe = '5m' | '1h' | '1d' | 'all'
+
 export default function TradeHistoryTable({ accountId }: TradeHistoryTableProps) {
   const [data, setData] = useState<TradeHistoryData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [daysFilter, setDaysFilter] = useState<string>('30')
+  const [timeframe, setTimeframe] = useState<Timeframe>('1d')
   const [symbolFilter, setSymbolFilter] = useState<string>('all')
 
   useEffect(() => {
     fetchTradeHistory()
-  }, [accountId, daysFilter, symbolFilter])
+  }, [accountId, timeframe, symbolFilter])
 
   const fetchTradeHistory = async () => {
     try {
@@ -64,8 +87,8 @@ export default function TradeHistoryTable({ accountId }: TradeHistoryTableProps)
 
       // Build query parameters
       const params = new URLSearchParams()
-      if (daysFilter !== 'all') {
-        params.append('days', daysFilter)
+      if (timeframe !== 'all') {
+        params.append('timeframe', timeframe)
       }
       if (symbolFilter !== 'all') {
         params.append('symbol', symbolFilter)
@@ -114,39 +137,112 @@ export default function TradeHistoryTable({ accountId }: TradeHistoryTableProps)
 
   return (
     <div className="space-y-4">
-      {/* Statistics Summary Cards */}
+      {/* Statistics Summary Cards - Row 1: Basic Metrics */}
       {data && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <Card>
-            <CardHeader className="pb-2">
-              <CardDescription>Total Trades</CardDescription>
-              <CardTitle className="text-2xl">{data.total_trades}</CardTitle>
-            </CardHeader>
-          </Card>
+        <>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <Card>
+              <CardHeader className="pb-2">
+                <CardDescription>Total Trades</CardDescription>
+                <CardTitle className="text-2xl">{data.total_trades}</CardTitle>
+              </CardHeader>
+            </Card>
 
-          <Card>
-            <CardHeader className="pb-2">
-              <CardDescription>Total P&L</CardDescription>
-              <CardTitle className={`text-2xl ${data.total_pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                ${data.total_pnl.toFixed(2)}
-              </CardTitle>
-            </CardHeader>
-          </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardDescription>Total P&L</CardDescription>
+                <CardTitle className={`text-2xl ${data.total_pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                  ${data.total_pnl.toFixed(2)}
+                </CardTitle>
+              </CardHeader>
+            </Card>
 
-          <Card>
-            <CardHeader className="pb-2">
-              <CardDescription>Win Rate</CardDescription>
-              <CardTitle className="text-2xl">{data.win_rate.toFixed(1)}%</CardTitle>
-            </CardHeader>
-          </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardDescription>Win Rate</CardDescription>
+                <CardTitle className="text-2xl">{data.win_rate.toFixed(1)}%</CardTitle>
+              </CardHeader>
+            </Card>
 
-          <Card>
-            <CardHeader className="pb-2">
-              <CardDescription>Avg Duration</CardDescription>
-              <CardTitle className="text-2xl">{formatDuration(data.avg_duration_minutes)}</CardTitle>
-            </CardHeader>
-          </Card>
-        </div>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardDescription>Avg Duration</CardDescription>
+                <CardTitle className="text-2xl">{formatDuration(data.avg_duration_minutes)}</CardTitle>
+              </CardHeader>
+            </Card>
+          </div>
+
+          {/* Row 2: Advanced Metrics */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <Card>
+              <CardHeader className="pb-2">
+                <CardDescription>Profit Factor</CardDescription>
+                <CardTitle className={`text-2xl ${data.profit_factor >= 1 ? 'text-green-600' : 'text-red-600'}`}>
+                  {data.profit_factor.toFixed(2)}
+                </CardTitle>
+              </CardHeader>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-2">
+                <CardDescription>Risk/Reward</CardDescription>
+                <CardTitle className={`text-2xl ${data.risk_reward >= 1 ? 'text-green-600' : 'text-yellow-600'}`}>
+                  {data.risk_reward.toFixed(2)}
+                </CardTitle>
+              </CardHeader>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-2">
+                <CardDescription>Avg Win</CardDescription>
+                <CardTitle className="text-2xl text-green-600">${data.avg_win.toFixed(2)}</CardTitle>
+              </CardHeader>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-2">
+                <CardDescription>Avg Loss</CardDescription>
+                <CardTitle className="text-2xl text-red-600">-${data.avg_loss.toFixed(2)}</CardTitle>
+              </CardHeader>
+            </Card>
+          </div>
+
+          {/* Row 3: Risk Metrics */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <Card>
+              <CardHeader className="pb-2">
+                <CardDescription>Best Trade</CardDescription>
+                <CardTitle className="text-2xl text-green-600">${data.best_trade.toFixed(2)}</CardTitle>
+              </CardHeader>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-2">
+                <CardDescription>Worst Trade</CardDescription>
+                <CardTitle className="text-2xl text-red-600">${data.worst_trade.toFixed(2)}</CardTitle>
+              </CardHeader>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-2">
+                <CardDescription>Max Drawdown</CardDescription>
+                <CardTitle className="text-2xl text-red-600">${data.max_drawdown.toFixed(2)}</CardTitle>
+              </CardHeader>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-2">
+                <CardDescription>Max Wins/Losses</CardDescription>
+                <CardTitle className="text-xl">
+                  <span className="text-green-600">{data.max_consecutive_wins}W</span>
+                  {' / '}
+                  <span className="text-red-600">{data.max_consecutive_losses}L</span>
+                </CardTitle>
+              </CardHeader>
+            </Card>
+          </div>
+
+        </>
       )}
 
       {/* Filters */}
@@ -154,18 +250,15 @@ export default function TradeHistoryTable({ accountId }: TradeHistoryTableProps)
         <CardHeader>
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
             <CardTitle>Trade History</CardTitle>
-            <div className="flex gap-2">
-              <Select value={daysFilter} onValueChange={setDaysFilter}>
-                <SelectTrigger className="w-[140px]">
-                  <SelectValue placeholder="Time period" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="7">Last 7 days</SelectItem>
-                  <SelectItem value="30">Last 30 days</SelectItem>
-                  <SelectItem value="90">Last 90 days</SelectItem>
-                  <SelectItem value="all">All time</SelectItem>
-                </SelectContent>
-              </Select>
+            <div className="flex items-center gap-4">
+              <Tabs value={timeframe} onValueChange={(value) => setTimeframe(value as Timeframe)}>
+                <TabsList>
+                  <TabsTrigger value="5m">5 Minutes</TabsTrigger>
+                  <TabsTrigger value="1h">1 Hour</TabsTrigger>
+                  <TabsTrigger value="1d">1 Day</TabsTrigger>
+                  <TabsTrigger value="all">All Time</TabsTrigger>
+                </TabsList>
+              </Tabs>
 
               <Select value={symbolFilter} onValueChange={setSymbolFilter}>
                 <SelectTrigger className="w-[140px]">
@@ -202,7 +295,7 @@ export default function TradeHistoryTable({ accountId }: TradeHistoryTableProps)
           )}
 
           {!loading && !error && data && data.trades.length > 0 && (
-            <div className="overflow-x-auto">
+            <div className="overflow-auto max-h-[600px]">
               <Table>
                 <TableHeader>
                   <TableRow>

@@ -10,7 +10,7 @@ from typing import Dict, List
 import asyncio
 
 from services.trading.hyperliquid_trading_service import hyperliquid_trading_service
-from services.market_data.hourly_momentum import calculate_hourly_momentum_sync
+from services.market_data.hourly_momentum import calculate_hourly_momentum
 from database.connection import SessionLocal
 from database.models import Position
 
@@ -48,7 +48,7 @@ async def check_momentum_exit_async(momentum_drop_threshold: float = 0.20) -> No
 
         # Get current momentum scores for all coins
         try:
-            momentum_data = calculate_hourly_momentum_sync(limit=50)  # Get top 50 to detect drops
+            momentum_data = await calculate_hourly_momentum(limit=50)  # Get top 50 to detect drops
             current_momentum = {coin['symbol']: coin for coin in momentum_data}
         except Exception as e:
             logger.error(f"Failed to get momentum scores: {e}", exc_info=True)
@@ -174,13 +174,12 @@ async def _execute_momentum_exit(
         is_buy = (side == 'SHORT')
 
         # Execute market order with reduce_only=True
-        result = await hyperliquid_trading_service.place_order_async(
+        result = await hyperliquid_trading_service.place_market_order_async(
             symbol=symbol,
             is_buy=is_buy,
             size=size,
-            limit_px=None,  # Market order
             reduce_only=True,
-            order_type={'limit': {'tif': 'Ioc'}}  # Immediate or cancel
+            leverage=1  # Leverage irrelevant for closing
         )
 
         if result.get('status') == 'ok':
@@ -203,8 +202,17 @@ async def _execute_momentum_exit(
 
 
 def check_momentum_exit_sync() -> None:
-    """Synchronous wrapper for scheduler."""
+    """Synchronous wrapper for scheduler.
+
+    Uses new event loop to avoid conflict with existing loops.
+    """
     try:
-        asyncio.run(check_momentum_exit_async())
+        # Create new event loop to avoid "cannot be called from running event loop" error
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(check_momentum_exit_async())
+        finally:
+            loop.close()
     except Exception as e:
         logger.error(f"Momentum exit check (sync wrapper) failed: {e}", exc_info=True)

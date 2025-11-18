@@ -25,6 +25,8 @@ from services.asset_calculator import calc_positions_value
 from services.learning import save_decision_snapshot
 from services.technical_analysis_service import calculate_technical_factors
 from services.trading.hyperliquid_trading_service import hyperliquid_trading_service
+from services.market_data.ema_alignment import get_ema_alignment_for_symbols, get_ema_alignment_score_for_decision
+from services.market_data.risk_reward_calculator import validate_trade_risk_reward
 
 logger = logging.getLogger(__name__)
 
@@ -169,9 +171,61 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
         # Replace original recommendations with adjusted ones
         technical_factors['recommendations'] = adjusted_recommendations
 
+        # 3.7. Calculate EMA alignment for top 20 symbols (trend confirmation filter)
+        logger.info("=" * 60)
+        logger.info("STEP 3: Calculating EMA Alignment (25/50/100) for top symbols")
+        logger.info("=" * 60)
+
+        # Get top 20 symbols by technical score for EMA calculation
+        top_symbols = [r['symbol'] for r in sorted(
+            adjusted_recommendations,
+            key=lambda x: x['score'],
+            reverse=True
+        )[:20]]
+
+        ema_alignment_data = {}
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                ema_alignment_data = loop.run_until_complete(
+                    get_ema_alignment_for_symbols(top_symbols)
+                )
+            finally:
+                loop.close()
+
+            # Add EMA data to recommendations
+            for rec in adjusted_recommendations:
+                symbol = rec['symbol']
+                if symbol in ema_alignment_data:
+                    ema = ema_alignment_data[symbol]
+                    rec['ema_alignment'] = ema.alignment
+                    rec['ema_25'] = ema.ema_25
+                    rec['ema_50'] = ema.ema_50
+                    rec['ema_100'] = ema.ema_100
+                    rec['ema_score'] = ema.alignment_score
+                    rec['trend_strength'] = ema.trend_strength
+
+            aligned_count = sum(1 for e in ema_alignment_data.values()
+                              if e.alignment in ["BULLISH", "BEARISH"])
+            logger.info(
+                f"EMA alignment: {len(ema_alignment_data)} symbols analyzed, "
+                f"{aligned_count} with confirmed trend"
+            )
+        except Exception as e:
+            logger.error(f"EMA calculation failed: {e}", exc_info=True)
+
         # Add technical factors to portfolio data for AI
         # (New tokens are now captured by hourly momentum - no separate detection needed)
         portfolio["technical_factors"] = technical_factors
+        portfolio["ema_alignment"] = {
+            symbol: {
+                "alignment": ema.alignment,
+                "score": ema.alignment_score,
+                "trend_strength": ema.trend_strength
+            }
+            for symbol, ema in ema_alignment_data.items()
+        }
 
         # 4. Get AI decision (with caching)
         logger.info("Calling AI for trading decision...")
@@ -306,6 +360,60 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
             # Save failed decision to database for analysis
             save_ai_decision(db, account, decision, portfolio, executed=False)
             return
+
+        # 6b. Validate Risk/Reward ratio (minimum 1:2)
+        operation = decision.get("operation", "").lower()
+        if operation in ["buy", "short"]:
+            symbol = decision.get("symbol", "")
+            entry_price = prices.get(symbol, 0.0)
+
+            # Get pivot points for R:R calculation
+            recommendations = portfolio.get("technical_factors", {}).get("recommendations", [])
+            symbol_rec = next((r for r in recommendations if r["symbol"] == symbol), None)
+
+            if symbol_rec and entry_price > 0:
+                # Build pivot points from technical factors or calculate
+                from services.pivot_point_service import calculate_pivot_points_from_cache
+
+                try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        pivot_data = loop.run_until_complete(
+                            calculate_pivot_points_from_cache(symbol)
+                        )
+                    finally:
+                        loop.close()
+
+                    if pivot_data:
+                        direction = "LONG" if operation == "buy" else "SHORT"
+                        rr_validation = validate_trade_risk_reward(
+                            symbol=symbol,
+                            direction=direction,
+                            entry_price=entry_price,
+                            pivot_points=pivot_data,
+                            min_ratio=2.0,
+                        )
+
+                        if not rr_validation["valid"]:
+                            logger.warning(
+                                f"R:R REJECTED {symbol} {direction}: "
+                                f"R:R {rr_validation['rr_ratio']:.1f}:1 < 2:1 minimum. "
+                                f"Risk={rr_validation['risk_pct']:.1f}%, Reward={rr_validation['reward_pct']:.1f}%"
+                            )
+                            # Save failed decision for learning
+                            decision["rr_rejection"] = rr_validation
+                            save_ai_decision(db, account, decision, portfolio, executed=False)
+                            return
+
+                        logger.info(
+                            f"R:R APPROVED {symbol} {direction}: "
+                            f"R:R {rr_validation['rr_ratio']:.1f}:1 "
+                            f"(SL=${rr_validation['stop_loss']:.2f}, TP=${rr_validation['take_profit']:.2f})"
+                        )
+                except Exception as e:
+                    logger.error(f"R:R validation failed for {symbol}: {e}", exc_info=True)
+                    # Continue without R:R check if calculation fails
 
         # 7. Execute order on Hyperliquid
         logger.info("Executing order on Hyperliquid...")
@@ -1099,24 +1207,27 @@ def _execute_order_async(decision: dict[str, Any], order_size: float, leverage: 
         return {"status": "error", "message": str(e)}
 
 
-async def check_stop_loss_async(stop_loss_threshold: float = -0.02) -> None:
-    """Check all open positions and close if loss exceeds threshold (async).
+async def check_stop_loss_async() -> None:
+    """Check all open positions using AI Stop Loss agent for intelligent exit decisions.
 
-    This function runs every 60 seconds to protect against losses.
-    Conservative approach: closes position if unrealized loss > 2%.
+    This function runs every 60 seconds. Instead of fixed thresholds, it uses
+    DeepSeek AI to analyze market conditions and make intelligent stop-loss decisions.
 
-    Args:
-        stop_loss_threshold: Loss threshold as negative decimal (default: -0.02 = -2%)
+    The AI agent considers:
+    - Current P&L and trend
+    - Technical indicators (momentum, support levels)
+    - Whether this is a temporary dip or trend reversal
+    - Risk of larger losses if holding
 
     Returns:
         None
-
-    Example:
-        Position value: $100
-        Unrealized P&L: -$12
-        P&L %: -12%
-        Action: Close position (exceeds -10% threshold)
     """
+    from database.connection import async_session_factory
+    from database.models import Account
+    from services.agents.exit_agents import call_exit_agent
+    from services.technical_analysis_service import get_technical_analysis_structured
+    from sqlalchemy import select
+
     try:
         # Fetch current positions from Hyperliquid
         user_state = await hyperliquid_trading_service.get_user_state_async()
@@ -1126,70 +1237,102 @@ async def check_stop_loss_async(stop_loss_threshold: float = -0.02) -> None:
             logger.debug("No open positions to check for stop-loss")
             return
 
-        logger.info(f"Checking {len(positions)} positions for stop-loss (threshold: {stop_loss_threshold:.1%})")
+        # Get active account for AI calls
+        async with async_session_factory() as db:
+            result = await db.execute(
+                select(Account).where(Account.is_active == True)
+            )
+            account = result.scalar_one_or_none()
+
+        if not account:
+            logger.warning("No active account found for stop-loss agent")
+            return
+
+        # Extract symbols from positions for technical analysis
+        symbols = [pos['position']['coin'] for pos in positions if pos.get('position', {}).get('coin')]
+
+        # Get technical analysis for context (sync function)
+        try:
+            technical_data = get_technical_analysis_structured(symbols)
+            # Convert to format expected by exit_agents
+            technical_factors = {'recommendations': [
+                {'symbol': sym, **data} for sym, data in technical_data.items()
+            ]}
+        except Exception as e:
+            logger.warning(f"Failed to get technical analysis: {e}")
+            technical_factors = {'recommendations': []}
+
+        logger.info(f"AI Stop Loss Agent checking {len(positions)} positions")
 
         for pos in positions:
             try:
-                coin = pos['position']['coin']
-                szi = float(pos['position']['szi'])  # Signed size (negative = short)
-                entry_px = float(pos['position']['entryPx'])
-                position_value = float(pos['position']['positionValue'])
-                unrealized_pnl = float(pos['position']['unrealizedPnl'])
+                position_data = pos['position']
+                coin = position_data['coin']
+                szi = float(position_data.get('szi', 0))
 
-                # Calculate P&L percentage
-                if position_value > 0:
-                    pnl_pct = unrealized_pnl / position_value
-                else:
-                    continue  # Skip if position value is 0
+                if szi == 0:
+                    continue  # Skip empty positions
 
-                logger.debug(
-                    f"{coin}: Size={szi}, Entry=${entry_px:.2f}, "
-                    f"Value=${position_value:.2f}, P&L=${unrealized_pnl:.2f} ({pnl_pct:.2%})"
+                # Call AI Stop Loss agent
+                decision = await call_exit_agent(
+                    account=account,
+                    position_data=position_data,
+                    technical_factors=technical_factors,
+                    agent_type="STOP_LOSS"
                 )
 
-                # Check if loss exceeds threshold
-                if pnl_pct < stop_loss_threshold:
+                if decision and decision.should_exit and decision.confidence >= 0.6:
                     logger.warning(
-                        f"🛑 STOP-LOSS TRIGGERED for {coin}: "
-                        f"P&L={pnl_pct:.2%} < threshold={stop_loss_threshold:.2%}"
+                        f"🛑 AI STOP-LOSS for {coin}: "
+                        f"P&L={decision.pnl_pct:.2%}, Confidence={decision.confidence:.0%}\n"
+                        f"   Reasoning: {decision.reasoning}"
                     )
 
-                    # Close position immediately
+                    # Close position
                     await _close_position_async(
                         coin=coin,
                         size=abs(szi),
                         is_long=(szi > 0),
-                        reason="stop_loss"
+                        reason="ai_stop_loss"
                     )
 
-                    logger.info(f"✅ Stop-loss executed: Closed {coin} position")
+                    logger.info(f"✅ AI Stop-loss executed: Closed {coin} position")
+
+                elif decision:
+                    logger.debug(
+                        f"{coin}: AI recommends HOLD (P&L={decision.pnl_pct:.2%}, "
+                        f"Confidence={decision.confidence:.0%})"
+                    )
 
             except Exception as e:
-                logger.error(f"Error checking stop-loss for position: {e}", exc_info=True)
+                logger.error(f"Error in AI stop-loss for position: {e}", exc_info=True)
                 continue
 
     except Exception as e:
-        logger.error(f"Stop-loss check failed: {e}", exc_info=True)
+        logger.error(f"AI Stop-loss check failed: {e}", exc_info=True)
 
 
-async def check_take_profit_async(take_profit_threshold: float = 0.05) -> None:
-    """Check all open positions and close if profit exceeds threshold (async).
+async def check_take_profit_async() -> None:
+    """Check all open positions using AI Take Profit agent for intelligent exit decisions.
 
-    This function runs every 30 seconds to lock in profits quickly.
-    Momentum surfing approach: closes position if unrealized profit > 5%.
+    This function runs every 60 seconds. Instead of fixed thresholds, it uses
+    DeepSeek AI to analyze market conditions and make intelligent take-profit decisions.
 
-    Args:
-        take_profit_threshold: Profit threshold as positive decimal (default: 0.05 = +5%)
+    The AI agent considers:
+    - Current P&L and momentum trend
+    - Technical indicators (overbought/oversold)
+    - Whether momentum is slowing
+    - Optimal time to lock in profits
 
     Returns:
         None
-
-    Example:
-        Position value: $100
-        Unrealized P&L: +$11
-        P&L %: +11%
-        Action: Close position (exceeds +10% threshold)
     """
+    from database.connection import async_session_factory
+    from database.models import Account
+    from services.agents.exit_agents import call_exit_agent
+    from services.technical_analysis_service import get_technical_analysis_structured
+    from sqlalchemy import select
+
     try:
         # Fetch current positions from Hyperliquid
         user_state = await hyperliquid_trading_service.get_user_state_async()
@@ -1199,50 +1342,79 @@ async def check_take_profit_async(take_profit_threshold: float = 0.05) -> None:
             logger.debug("No open positions to check for take-profit")
             return
 
-        logger.info(f"Checking {len(positions)} positions for take-profit (threshold: +{take_profit_threshold:.1%})")
+        # Get active account for AI calls
+        async with async_session_factory() as db:
+            result = await db.execute(
+                select(Account).where(Account.is_active == True)
+            )
+            account = result.scalar_one_or_none()
+
+        if not account:
+            logger.warning("No active account found for take-profit agent")
+            return
+
+        # Extract symbols from positions for technical analysis
+        symbols = [pos['position']['coin'] for pos in positions if pos.get('position', {}).get('coin')]
+
+        # Get technical analysis for context (sync function)
+        try:
+            technical_data = get_technical_analysis_structured(symbols)
+            # Convert to format expected by exit_agents
+            technical_factors = {'recommendations': [
+                {'symbol': sym, **data} for sym, data in technical_data.items()
+            ]}
+        except Exception as e:
+            logger.warning(f"Failed to get technical analysis: {e}")
+            technical_factors = {'recommendations': []}
+
+        logger.info(f"AI Take Profit Agent checking {len(positions)} positions")
 
         for pos in positions:
             try:
-                coin = pos['position']['coin']
-                szi = float(pos['position']['szi'])  # Signed size (negative = short)
-                entry_px = float(pos['position']['entryPx'])
-                position_value = float(pos['position']['positionValue'])
-                unrealized_pnl = float(pos['position']['unrealizedPnl'])
+                position_data = pos['position']
+                coin = position_data['coin']
+                szi = float(position_data.get('szi', 0))
 
-                # Calculate P&L percentage
-                if position_value > 0:
-                    pnl_pct = unrealized_pnl / position_value
-                else:
-                    continue  # Skip if position value is 0
+                if szi == 0:
+                    continue  # Skip empty positions
 
-                logger.debug(
-                    f"{coin}: Size={szi}, Entry=${entry_px:.2f}, "
-                    f"Value=${position_value:.2f}, P&L=${unrealized_pnl:.2f} ({pnl_pct:.2%})"
+                # Call AI Take Profit agent
+                decision = await call_exit_agent(
+                    account=account,
+                    position_data=position_data,
+                    technical_factors=technical_factors,
+                    agent_type="TAKE_PROFIT"
                 )
 
-                # Check if profit exceeds threshold
-                if pnl_pct > take_profit_threshold:
+                if decision and decision.should_exit and decision.confidence >= 0.6:
                     logger.warning(
-                        f"💰 TAKE-PROFIT TRIGGERED for {coin}: "
-                        f"P&L={pnl_pct:.2%} > threshold=+{take_profit_threshold:.2%}"
+                        f"💰 AI TAKE-PROFIT for {coin}: "
+                        f"P&L={decision.pnl_pct:.2%}, Confidence={decision.confidence:.0%}\n"
+                        f"   Reasoning: {decision.reasoning}"
                     )
 
-                    # Close position immediately to lock in profit
+                    # Close position to lock in profit
                     await _close_position_async(
                         coin=coin,
                         size=abs(szi),
                         is_long=(szi > 0),
-                        reason="take_profit"
+                        reason="ai_take_profit"
                     )
 
-                    logger.info(f"✅ Take-profit executed: Closed {coin} position with +{pnl_pct:.2%} profit")
+                    logger.info(f"✅ AI Take-profit executed: Closed {coin} with {decision.pnl_pct:.2%} profit")
+
+                elif decision:
+                    logger.debug(
+                        f"{coin}: AI recommends HOLD (P&L={decision.pnl_pct:.2%}, "
+                        f"Confidence={decision.confidence:.0%})"
+                    )
 
             except Exception as e:
-                logger.error(f"Error checking take-profit for position: {e}", exc_info=True)
+                logger.error(f"Error in AI take-profit for position: {e}", exc_info=True)
                 continue
 
     except Exception as e:
-        logger.error(f"Take-profit check failed: {e}", exc_info=True)
+        logger.error(f"AI Take-profit check failed: {e}", exc_info=True)
 
 
 async def _close_position_async(coin: str, size: float, is_long: bool, reason: str) -> dict[str, Any]:

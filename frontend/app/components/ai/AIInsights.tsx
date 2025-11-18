@@ -179,7 +179,7 @@ export default function AIInsights({ accountId }: AIInsightsProps) {
       </Card>
 
       {/* Decisions List */}
-      <div className="space-y-3">
+      <div className="space-y-3 overflow-auto max-h-[600px]">
         {filteredSnapshots.length === 0 ? (
           <Card className="p-8 text-center text-muted-foreground">
             No AI decisions found with current filters.

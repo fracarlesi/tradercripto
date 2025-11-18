@@ -1,17 +1,40 @@
 # =============================================================================
-# Simplified Docker Compose for VPS Deployment (Hetzner/DigitalOcean)
+# Docker Compose for VPS Deployment with PostgreSQL
 # =============================================================================
-# This file uses SQLite (no PostgreSQL needed) and removes optional monitoring
-# Perfect for personal crypto trading bot running 24/7
+# Migrated from SQLite to PostgreSQL for better concurrency
 #
 # Usage:
 #   docker-compose -f docker-compose.simple.yml up -d
 #
 # =============================================================================
 
-version: '3.8'
-
 services:
+  # =============================================================================
+  # PostgreSQL Database
+  # =============================================================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: trader_postgres
+    restart: unless-stopped
+
+    environment:
+      - POSTGRES_USER=trader
+      - POSTGRES_PASSWORD=trader_secure_pwd_2024
+      - POSTGRES_DB=trader_db
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trader -d trader_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+    # Not exposed externally for security
+    expose:
+      - "5432"
+
   # =============================================================================
   # Trading Application (Backend + Frontend)
   # =============================================================================
@@ -23,6 +46,10 @@ services:
     container_name: trader_app
     restart: unless-stopped
 
+    depends_on:
+      postgres:
+        condition: service_healthy
+
     # JSON log driver for easy debugging
     logging:
       driver: "json-file"
@@ -31,8 +58,8 @@ services:
         max-file: "5"
 
     environment:
-      # Database: Use SQLite (file-based, no PostgreSQL needed)
-      - DATABASE_URL=sqlite+aiosqlite:///./data/data.db
+      # Database: PostgreSQL
+      - DATABASE_URL=postgresql+asyncpg://trader:trader_secure_pwd_2024@postgres:5432/trader_db
 
       # Application settings
       - DEBUG=false
@@ -51,15 +78,15 @@ services:
       - SYNC_INTERVAL_SECONDS=60
       - AI_DECISION_INTERVAL=180
 
-      # Connection pool (reduced for SQLite)
-      - DB_POOL_SIZE=5
-      - DB_MAX_OVERFLOW=2
+      # Connection pool (optimized for PostgreSQL)
+      - DB_POOL_SIZE=10
+      - DB_MAX_OVERFLOW=5
 
     ports:
       - "5611:5611"
 
     volumes:
-      # Persistent data volume for SQLite database
+      # Keep app_data for other files (logs, cache, etc.)
       - app_data:/app/data
 
     healthcheck:
@@ -76,6 +103,9 @@ services:
 # Volumes
 # =============================================================================
 volumes:
+  postgres_data:
+    driver: local
+    name: trader_postgres_data
   app_data:
     driver: local
     name: trader_app_data

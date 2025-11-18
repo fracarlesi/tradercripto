@@ -198,9 +198,11 @@ class DeepSeekClient:
 
 **Your Task**:
 1. Analyze ALL {symbols_count} symbols using the structured JSON below
-2. Consider ALL 6 indicators for EACH symbol:
+2. Consider ALL 8 indicators for EACH symbol:
    - Technical Analysis (momentum + support)
    - Pivot Points (support/resistance levels)
+   - EMA Alignment (25/50/100 trend confirmation)
+   - Risk/Reward Ratio (minimum 1:2 required)
    - Prophet Forecast (24h price prediction)
    - Sentiment Index (market fear/greed)
    - Whale Alerts (large transactions)
@@ -226,11 +228,13 @@ Below is the COMPLETE market data snapshot. Each symbol has:
 - price: Current market price
 - technical_analysis: Momentum + support scores (0-1), signal (STRONG_BUY/BUY/HOLD/SELL/STRONG_SELL)
 - pivot_points: PP, R1-R3, S1-S3, current_zone, signal
+- ema_alignment: EMA 25/50/100 alignment (BULLISH/BEARISH/MIXED), alignment_score (0-1), trend_strength
+- risk_reward: R:R ratio, stop_loss, take_profit levels (if available)
 - prophet_forecast: 24h price forecast, trend, confidence (if available)
 - market_data: Volume, price_change_24h, etc.
 
 **IMPORTANT**: Some symbols may have null prophet_forecast (Prophet only enabled for select symbols).
-This is NORMAL - analyze those symbols using the other 5 indicators.
+This is NORMAL - analyze those symbols using the other 7 indicators.
 
 MARKET DATA JSON:
 ```json
@@ -297,6 +301,53 @@ DO NOT automatically interpret "extreme fear" as a buy signal!
    "Extreme greed" sentiment with POSITIVE momentum = FOLLOW THE TREND (LONG)
    "Extreme greed" sentiment with NEGATIVE momentum = Potential reversal (cautious SHORT)
 
+**CRITICAL - EMA ALIGNMENT FILTER (Ezekiel Chew Strategy)**:
+
+The ema_alignment data confirms trend direction. ALWAYS check this before entry:
+
+1. For LONG positions, REQUIRE:
+   - ema_alignment = "BULLISH" or "WEAK_BULLISH"
+   - This means: Price > EMA25 > EMA50 > EMA100 (stacked bullish)
+   - alignment_score >= 0.67 (at least 2/3 conditions met)
+   - Higher trend_strength = stronger momentum
+
+2. For SHORT positions, REQUIRE:
+   - ema_alignment = "BEARISH" or "WEAK_BEARISH"
+   - This means: Price < EMA25 < EMA50 < EMA100 (stacked bearish)
+   - alignment_score >= 0.67 (at least 2/3 conditions met)
+
+3. If ema_alignment = "MIXED":
+   - EMAs are not aligned → AVOID this trade!
+   - The trend is unclear, high risk of reversal
+   - Only consider if other indicators are EXTREMELY strong (score > 0.9)
+
+4. Scoring: Add EMA alignment to your weighted score calculation:
+   - BULLISH/BEARISH alignment = 1.0
+   - WEAK alignment = 0.7
+   - MIXED = 0.0 (penalty for unclear trend)
+
+**CRITICAL - RISK/REWARD RATIO (Mohsen Hassan Strategy)**:
+
+NEVER take trades with Risk:Reward < 1:2. Check risk_reward data:
+
+1. rr_ratio >= 2.0 → APPROVED (minimum requirement)
+   - Risk $1 to make $2 or more
+
+2. rr_ratio >= 3.0 → EXCELLENT
+   - Risk $1 to make $3+ → higher confidence, consider larger position
+
+3. rr_ratio < 2.0 → REJECTED
+   - DO NOT take this trade regardless of other indicators!
+   - The reward doesn't justify the risk
+
+4. Use provided levels:
+   - stop_loss: Set your stop loss at this level
+   - take_profit: Set your take profit at this level
+   - risk_pct / reward_pct: Risk and reward as percentage of entry
+
+5. The system has already validated R:R >= 1:2 before execution.
+   Your role is to prioritize trades with HIGHER R:R ratios.
+
 **STEP 3: POSITION SIZING (CRITICAL)**
 
 - If weighted_score >= 0.85 AND technical.momentum >= 0.90 AND news positive:
@@ -345,10 +396,12 @@ Respond with ONLY a JSON object (no markdown, no explanations):
   "symbol": "BTC",
   "target_portion_of_balance": 1.0,
   "leverage": 1,
-  "reason": "BTC shows strong technical score (0.87) + bullish Prophet forecast (+2.3%) + positive whale activity. Pivot points confirm bullish zone. High conviction trade.",
+  "reason": "BTC shows strong technical score (0.87) + BULLISH EMA alignment + R:R 2.5:1 + bullish Prophet forecast (+2.3%). Pivot points confirm bullish zone. High conviction trade.",
   "analysis": {{
     "indicators_used": [
       "technical_analysis (score: 0.87, weight: {strategy_weights['technical_analysis']:.2f})",
+      "ema_alignment (BULLISH, alignment_score: 0.95, trend_strength: 0.72)",
+      "risk_reward (ratio: 2.5:1, SL: $95,000, TP: $108,000)",
       "prophet_forecast (trend: up, +2.3%, weight: {strategy_weights['prophet']:.2f})",
       "pivot_points (zone: bullish, weight: {strategy_weights['pivot_points']:.2f})",
       "whale_alerts (signal: buy, weight: {strategy_weights['whale_alerts']:.2f})"

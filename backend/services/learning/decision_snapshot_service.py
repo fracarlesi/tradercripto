@@ -348,20 +348,22 @@ async def get_snapshots_for_analysis(
     """
     async with async_session_factory() as db:
         try:
+            # Base query: get all snapshots for account
             stmt = (
                 select(DecisionSnapshot)
-                .where(
-                    and_(
-                        DecisionSnapshot.account_id == account_id,
-                        DecisionSnapshot.regret.isnot(None),
-                    )
-                )
+                .where(DecisionSnapshot.account_id == account_id)
                 .order_by(desc(DecisionSnapshot.timestamp))
                 .limit(limit)
             )
 
+            # If min_regret is specified, only return snapshots with regret calculated
             if min_regret is not None:
-                stmt = stmt.where(DecisionSnapshot.regret >= min_regret)
+                stmt = stmt.where(
+                    and_(
+                        DecisionSnapshot.regret.isnot(None),
+                        DecisionSnapshot.regret >= min_regret,
+                    )
+                )
 
             result = await db.execute(stmt)
             snapshots = result.scalars().all()
