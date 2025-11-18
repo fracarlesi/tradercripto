@@ -80,60 +80,19 @@ async def check_momentum_exit_async(momentum_drop_threshold: float = 0.20) -> No
                 momentum_score = current_mom['momentum_score']
                 rank = current_mom.get('rank', 999)
 
-                # Exit triggers for LONG positions
-                if side == 'LONG':
-                    # Trigger 1: Momentum becomes negative (downtrend started)
-                    if momentum_score < 0:
-                        logger.info(
-                            f"📉 {symbol} LONG momentum turned negative ({momentum_score:.3f}) → EXIT"
-                        )
-                        await _execute_momentum_exit(
-                            symbol, abs(szi), side,
-                            f"Momentum reversed to negative: {momentum_score:.3f}"
-                        )
-                        continue
+                # NO AUTOMATIC EXITS - All decisions delegated to AI Exit Agents
+                # The AI agents (Stop Loss and Take Profit) will analyze:
+                # - Current P&L
+                # - Technical indicators
+                # - Momentum trends
+                # - Market context
+                # And make intelligent exit decisions
 
-                    # Trigger 2: Dropped significantly out of top positions
-                    # Only exit if dropped below rank 40 (give more room for fluctuation)
-                    if rank > 40:
-                        logger.info(
-                            f"📉 {symbol} LONG dropped to rank #{rank} (out of top 40) → EXIT"
-                        )
-                        await _execute_momentum_exit(
-                            symbol, abs(szi), side,
-                            f"Dropped to rank #{rank}, momentum significantly weakened"
-                        )
-                        continue
-
-                # Exit triggers for SHORT positions
-                elif side == 'SHORT':
-                    # Trigger 1: Momentum becomes positive (uptrend started - bad for SHORT)
-                    if momentum_score > 0:
-                        logger.info(
-                            f"📈 {symbol} SHORT momentum turned positive ({momentum_score:.3f}) → EXIT"
-                        )
-                        await _execute_momentum_exit(
-                            symbol, abs(szi), side,
-                            f"Momentum reversed to positive: {momentum_score:.3f}"
-                        )
-                        continue
-
-                    # Trigger 2: Momentum weakening (less negative = upward pressure)
-                    # For SHORT, we want strong negative momentum
-                    if momentum_score > -0.02:  # Close to zero = trend exhausted
-                        logger.info(
-                            f"📈 {symbol} SHORT momentum weakening ({momentum_score:.3f}) → EXIT"
-                        )
-                        await _execute_momentum_exit(
-                            symbol, abs(szi), side,
-                            f"Downward momentum exhausted: {momentum_score:.3f}"
-                        )
-                        continue
-
-                # If still in top 20, log status but don't exit yet
+                # Just log the current status for monitoring
                 logger.debug(
-                    f"✅ {symbol} {side} still strong: rank #{rank}, "
-                    f"momentum {momentum_score:.3f}, P&L ${unrealized_pnl:.2f}"
+                    f"📊 {symbol} {side}: rank #{rank}, "
+                    f"momentum {momentum_score:.3f}, P&L ${unrealized_pnl:.2f} "
+                    f"- AI agents will decide exit"
                 )
 
             except Exception as e:
