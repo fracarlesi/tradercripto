@@ -172,7 +172,7 @@ async def lifespan(app: FastAPI):
 
         # Add stop-loss check job (every 60 seconds) - Optimized to reduce API calls
         # NOTE: This is now a BACKUP safety check, primary exits handled by strategy_exit_check
-        from services.auto_trader import check_stop_loss_async, check_take_profit_async, place_ai_driven_crypto_order
+        from services.auto_trader import check_stop_loss_async, check_take_profit_async, place_multi_agent_order
 
         scheduler_service.add_sync_job(
             job_func=check_stop_loss_async,
@@ -180,16 +180,17 @@ async def lifespan(app: FastAPI):
             job_id="stop_loss_check"
         )
 
-        # Add AI trading job (every 3 minutes) - Migrated from custom scheduler to APScheduler
+        # Add MULTI-AGENT ORCHESTRATED trading job (every 3 minutes)
+        # Uses LONG and SHORT specialized agents with orchestrator for conflict resolution
         # APScheduler runs each job in a separate thread, so long-running technical analysis
         # (analyzing 220+ symbols) won't block other jobs from executing
         # 3-minute interval for fast momentum capture (now zero API calls via WebSocket)
         scheduler_service.add_sync_job(
-            job_func=lambda: place_ai_driven_crypto_order(max_ratio=0.2),
+            job_func=lambda: place_multi_agent_order(max_ratio=0.2),
             interval_seconds=180,  # 3 minutes - Fast momentum surfing
             job_id="ai_crypto_trade"
         )
-        logger.info("✅ AI trading job ENABLED (momentum surfing every 3 minutes)")
+        logger.info("✅ MULTI-AGENT ORCHESTRATOR trading ENABLED (LONG + SHORT agents every 3 minutes)")
 
         # Add take-profit check job (every 60 seconds) - Automatically locks in +10% profits
         scheduler_service.add_sync_job(

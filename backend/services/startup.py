@@ -4,7 +4,7 @@ import asyncio
 import logging
 import threading
 
-from services.auto_trader import AI_TRADE_JOB_ID, place_ai_driven_crypto_order
+from services.auto_trader import AI_TRADE_JOB_ID, place_ai_driven_crypto_order, place_multi_agent_order
 from services.scheduler import setup_market_tasks, start_scheduler, task_scheduler
 
 logger = logging.getLogger(__name__)

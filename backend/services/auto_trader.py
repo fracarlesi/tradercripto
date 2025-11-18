@@ -13,8 +13,13 @@ from database.connection import SessionLocal
 from database.models import Account
 from services.ai_decision_service import (
     call_ai_for_decision,
+    call_ai_for_agent_decision,
     get_decision_cache,
     save_ai_decision,
+)
+from services.orchestrator_service import (
+    orchestrator_service,
+    AgentProposal,
 )
 from services.asset_calculator import calc_positions_value
 from services.learning import save_decision_snapshot
@@ -405,6 +410,217 @@ def place_ai_driven_crypto_order(max_ratio: float = 0.2) -> None:
     finally:
         db.close()
         logger.info("=== AI Trading Cycle Completed ===")
+
+
+def place_multi_agent_order(max_ratio: float = 0.2) -> None:
+    """
+    Place AI-driven crypto order using MULTI-AGENT ORCHESTRATOR system.
+
+    This function:
+    1. Gets the active AI trading account
+    2. Fetches market data and builds portfolio
+    3. Calls BOTH LONG and SHORT agents in parallel
+    4. Uses orchestrator to resolve conflicts
+    5. Executes approved trades
+
+    Args:
+        max_ratio: Maximum portion of portfolio per trade (0.0-1.0)
+    """
+    logger.info("=" * 60)
+    logger.info("=== MULTI-AGENT ORCHESTRATED TRADING CYCLE ===")
+    logger.info("=" * 60)
+
+    # CRITICAL SAFETY CHECK: Verify WebSocket health before trading
+    from services.market_data.websocket_candle_service import get_websocket_candle_service
+
+    ws_service = get_websocket_candle_service()
+    cache_stats = ws_service.get_cache_stats()
+
+    if not cache_stats["connected"]:
+        logger.error("🚫 TRADING SUSPENDED: WebSocket not connected")
+        return
+
+    if cache_stats["symbols_cached"] < 100:
+        logger.warning(f"🚫 TRADING SUSPENDED: Insufficient cache ({cache_stats['symbols_cached']}/221 symbols)")
+        return
+
+    logger.info(f"✅ WebSocket health OK: {cache_stats['symbols_cached']}/221 symbols cached")
+
+    db = SessionLocal()
+    try:
+        # 1. Get active AI trading account
+        account = (
+            db.query(Account)
+            .filter(Account.account_type == "AI", Account.is_active == True)
+            .first()
+        )
+
+        if not account:
+            logger.warning("No active AI trading account found")
+            return
+
+        logger.info(f"Trading with account: {account.name} (id={account.id})")
+
+        # 2. Fetch market data
+        prices = _fetch_market_prices()
+        logger.info(f"Fetched prices for {len(prices)} symbols")
+
+        # 3. Build portfolio data
+        portfolio = _build_portfolio_data(db, account)
+        logger.info(
+            f"Portfolio: ${portfolio['cash']:.2f} cash, "
+            f"{len(portfolio['positions'])} positions, "
+            f"${portfolio['total_assets']:.2f} total"
+        )
+
+        # 4. Get technical factors for all symbols
+        ws_service = get_websocket_candle_service()
+        all_symbols = list(ws_service.subscribed_symbols)
+        technical_factors = calculate_technical_factors(all_symbols)
+        portfolio["technical_factors"] = technical_factors
+
+        # 5. Get current positions from Hyperliquid (for orchestrator)
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            user_state = loop.run_until_complete(
+                hyperliquid_trading_service.get_user_state_async()
+            )
+            current_positions = user_state.get('assetPositions', [])
+        finally:
+            loop.close()
+
+        # 6. Call BOTH agents
+        logger.info("=" * 40)
+        logger.info("STEP 1: Calling LONG and SHORT agents")
+        logger.info("=" * 40)
+
+        # Call LONG agent
+        logger.info("[LONG] Calling LONG agent...")
+        long_decision = asyncio.run(
+            call_ai_for_agent_decision(account, portfolio, prices, "LONG")
+        )
+
+        # Call SHORT agent
+        logger.info("[SHORT] Calling SHORT agent...")
+        short_decision = asyncio.run(
+            call_ai_for_agent_decision(account, portfolio, prices, "SHORT")
+        )
+
+        # 7. Convert decisions to proposals
+        long_proposal = None
+        short_proposal = None
+
+        if long_decision and long_decision.get("operation") != "hold":
+            # Find technical score for symbol
+            symbol = long_decision.get("symbol", "BTC")
+            recommendations = technical_factors.get("recommendations", [])
+            symbol_data = next((r for r in recommendations if r["symbol"] == symbol), None)
+            technical_score = symbol_data["score"] if symbol_data else 0.5
+
+            long_proposal = AgentProposal(
+                agent_type="LONG",
+                operation=long_decision.get("operation", "hold"),
+                symbol=symbol,
+                confidence=float(long_decision.get("target_portion_of_balance", 0.5)),
+                target_portion=float(long_decision.get("target_portion_of_balance", 0.5)),
+                leverage=int(long_decision.get("leverage", 1)),
+                reasoning=long_decision.get("reason", ""),
+                technical_score=technical_score,
+            )
+            logger.info(f"[LONG] Proposal: {long_proposal.operation} {long_proposal.symbol} @ {long_proposal.target_portion:.0%}")
+
+        if short_decision and short_decision.get("operation") != "hold":
+            symbol = short_decision.get("symbol", "BTC")
+            recommendations = technical_factors.get("recommendations", [])
+            symbol_data = next((r for r in recommendations if r["symbol"] == symbol), None)
+            technical_score = symbol_data["score"] if symbol_data else 0.5
+
+            short_proposal = AgentProposal(
+                agent_type="SHORT",
+                operation=short_decision.get("operation", "hold"),
+                symbol=symbol,
+                confidence=float(short_decision.get("target_portion_of_balance", 0.5)),
+                target_portion=float(short_decision.get("target_portion_of_balance", 0.5)),
+                leverage=int(short_decision.get("leverage", 1)),
+                reasoning=short_decision.get("reason", ""),
+                technical_score=technical_score,
+            )
+            logger.info(f"[SHORT] Proposal: {short_proposal.operation} {short_proposal.symbol} @ {short_proposal.target_portion:.0%}")
+
+        # 8. Orchestrator resolves conflicts
+        logger.info("=" * 40)
+        logger.info("STEP 2: Orchestrator resolving proposals")
+        logger.info("=" * 40)
+
+        decisions = orchestrator_service.resolve_proposals(
+            long_proposal=long_proposal,
+            short_proposal=short_proposal,
+            current_positions=current_positions,
+        )
+
+        if not decisions:
+            logger.info("Orchestrator: No trades to execute (all HOLD or blocked)")
+            return
+
+        # 9. Execute each approved decision
+        logger.info("=" * 40)
+        logger.info(f"STEP 3: Executing {len(decisions)} approved trades")
+        logger.info("=" * 40)
+
+        for decision in decisions:
+            # Convert orchestrator decision to execution format
+            trade_decision = {
+                "operation": decision.operation,
+                "symbol": decision.symbol,
+                "target_portion_of_balance": decision.target_portion,
+                "leverage": decision.leverage,
+                "reason": decision.reasoning,
+            }
+
+            logger.info(
+                f"Executing [{decision.agent_type}]: {decision.operation} "
+                f"{decision.symbol} @ {decision.target_portion:.0%} capital, {decision.leverage}x"
+            )
+
+            # Validate decision
+            validation_result = _validate_decision(trade_decision, portfolio, prices, max_ratio)
+            if not validation_result["valid"]:
+                logger.warning(f"Validation failed: {validation_result['reason']}")
+                save_ai_decision(db, account, trade_decision, portfolio, executed=False)
+                continue
+
+            # Execute order
+            leverage = validation_result.get("leverage", 1)
+            execution_result = _execute_order_async(
+                trade_decision,
+                validation_result["order_size"],
+                leverage,
+                account_id=account.id
+            )
+
+            # Check result
+            is_executed = False
+            if execution_result.get("status") == "ok":
+                response = execution_result.get("response", {})
+                if response.get("type") == "order":
+                    statuses = response.get("data", {}).get("statuses", [])
+                    has_errors = any(s.get("error") for s in statuses)
+                    if not has_errors:
+                        is_executed = True
+
+            if is_executed:
+                logger.info(f"✅ [{decision.agent_type}] Order executed: {decision.symbol}")
+                save_ai_decision(db, account, trade_decision, portfolio, executed=True)
+            else:
+                logger.error(f"❌ [{decision.agent_type}] Order failed: {execution_result}")
+                save_ai_decision(db, account, trade_decision, portfolio, executed=False)
+
+    except Exception as e:
+        logger.error(f"Multi-agent trading cycle failed: {e}", exc_info=True)
+    finally:
+        db.close()
+        logger.info("=== Multi-Agent Trading Cycle Completed ===")
 
 
 def _fetch_market_prices() -> dict[str, float]:

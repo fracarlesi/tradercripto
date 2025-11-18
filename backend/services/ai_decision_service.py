@@ -16,6 +16,8 @@ from sqlalchemy.orm import Session
 
 from database.models import Account, AIDecisionLog
 from services.market_data.news_feed import fetch_latest_news
+from services.agents.long_agent import get_long_agent_prompt
+from services.agents.short_agent import get_short_agent_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -1314,3 +1316,212 @@ def get_active_ai_accounts(db: Session) -> list[Account]:
         return []
 
     return valid_accounts
+
+
+async def call_ai_for_agent_decision(
+    account: Account,
+    portfolio: dict,
+    prices: dict[str, float],
+    agent_type: str
+) -> dict | None:
+    """
+    Call AI model API to get trading decision for a specific agent type.
+
+    This is similar to call_ai_for_decision but appends the agent-specific
+    prompt suffix (LONG or SHORT) to guide the AI's response.
+
+    Args:
+        account: Trading account with API credentials
+        portfolio: Portfolio data with positions and technical factors
+        prices: Current market prices
+        agent_type: "LONG" or "SHORT" - determines which agent prompt to use
+
+    Returns:
+        AI decision dict with operation, symbol, target_portion_of_balance, leverage, reason
+        or None if error/skipped
+    """
+    # Check if this is a default API key
+    if _is_default_api_key(account.api_key):
+        logger.info(f"Skipping AI trading for account {account.name} - using default API key")
+        return None
+
+    try:
+        # Fetch news (with caching)
+        news_summary = fetch_latest_news()
+        news_section = news_summary if news_summary else "No recent CoinJournal news available."
+
+        # Generate list of available symbols
+        available_symbols = ", ".join([f'"{s}"' for s in SUPPORTED_SYMBOLS.keys()])
+
+        # Format technical analysis for AI
+        technical_section = _format_technical_analysis(portfolio.get("technical_factors", {}))
+
+        # Extract high-score symbols for pivot analysis
+        technical_factors = portfolio.get("technical_factors", {})
+        recommendations = technical_factors.get("recommendations", [])
+
+        high_score_symbols = [
+            rec["symbol"]
+            for rec in sorted(recommendations, key=lambda x: x.get("score", 0), reverse=True)
+            if rec.get("score", 0) > 0.7
+        ]
+
+        logger.info(f"[{agent_type}] Filtered {len(high_score_symbols)} high-score symbols for analysis")
+
+        # Calculate pivot points
+        pivot_section = await _format_pivot_points(portfolio, prices, high_score_symbols)
+
+        # Get sentiment and whale data
+        sentiment_section = _format_sentiment()
+        whale_section = _format_whale_alerts()
+
+        # Calculate profit % for each position
+        positions_with_profit = []
+        for pos in portfolio.get("positions", []):
+            symbol = pos.get("symbol")
+            entry_price = pos.get("avg_cost", 0)
+            current_price = prices.get(symbol, entry_price)
+
+            if entry_price > 0:
+                profit_pct = ((current_price - entry_price) / entry_price) * 100
+            else:
+                profit_pct = 0
+
+            pos_with_profit = pos.copy()
+            pos_with_profit["current_price"] = current_price
+            pos_with_profit["profit_pct"] = round(profit_pct, 2)
+            positions_with_profit.append(pos_with_profit)
+
+        # Convert to TOON format
+        prices_list = [{"symbol": s, "price": p} for s, p in prices.items()]
+        prices_toon = toon_encode(prices_list, root_name="market_prices")
+        positions_toon = toon_encode(positions_with_profit, root_name="positions") if positions_with_profit else "positions[0]:\n(No active positions)"
+
+        # Get strategy weights
+        weights = _get_strategy_weights(account)
+
+        # Get agent-specific prompt suffix
+        if agent_type == "LONG":
+            agent_prompt_suffix = get_long_agent_prompt()
+        elif agent_type == "SHORT":
+            agent_prompt_suffix = get_short_agent_prompt()
+        else:
+            logger.error(f"Invalid agent_type: {agent_type}")
+            return None
+
+        # Build prompt - simplified version focused on agent task
+        prompt = f"""You are a cryptocurrency trading AI specialized for {agent_type} positions.
+
+Portfolio Data:
+- Total Assets: ${portfolio.get("total_assets", 0):.2f}
+- Available Cash: ${portfolio.get("cash", 0):.2f} (50% allocated to {agent_type} agent)
+- Current Positions:
+{positions_toon}
+
+Current Market Prices ({len(prices)} cryptocurrencies):
+{prices_toon}
+
+{technical_section}
+
+{pivot_section}
+{sentiment_section}
+
+{whale_section}
+
+Latest Crypto News:
+{news_section}
+
+Available symbols: {available_symbols}
+
+{agent_prompt_suffix}
+
+Analyze the market and respond with ONLY a JSON object:
+{{
+  "operation": "buy" or "short" or "sell" or "hold",
+  "symbol": "SYMBOL",
+  "target_portion_of_balance": 0.0 to 1.0,
+  "leverage": 1 to 10,
+  "reason": "Brief explanation"
+}}
+
+Remember: You are the {agent_type} agent. Focus ONLY on {agent_type.lower()} opportunities!
+"""
+
+        # Count tokens
+        input_tokens = count_tokens(prompt)
+        logger.info(f"[{agent_type}] AI prompt: ~{input_tokens} tokens")
+
+        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {account.api_key}"}
+
+        payload = {
+            "model": account.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.7,
+        }
+
+        base_url = account.base_url.rstrip("/")
+        api_endpoint = f"{base_url}/chat/completions"
+
+        # Retry logic
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = requests.post(
+                    api_endpoint,
+                    headers=headers,
+                    json=payload,
+                    timeout=300,
+                    verify=False,
+                )
+
+                if response.status_code == 200:
+                    break
+                elif response.status_code == 429:
+                    wait_time = (2**attempt) + random.uniform(0, 1)
+                    logger.warning(f"[{agent_type}] API rate limited, waiting {wait_time:.1f}s...")
+                    if attempt < max_retries - 1:
+                        time.sleep(wait_time)
+                        continue
+                    return None
+                else:
+                    logger.error(f"[{agent_type}] API returned {response.status_code}: {response.text}")
+                    return None
+            except requests.RequestException as req_err:
+                if attempt < max_retries - 1:
+                    time.sleep((2**attempt) + random.uniform(0, 1))
+                    continue
+                logger.error(f"[{agent_type}] API request failed: {req_err}", exc_info=True)
+                return None
+
+        result = response.json()
+
+        # Extract text from response
+        if "choices" in result and len(result["choices"]) > 0:
+            text_content = result["choices"][0].get("message", {}).get("content", "")
+
+            if not text_content:
+                logger.error(f"[{agent_type}] Empty content in AI response")
+                return None
+
+            # Clean up response
+            text_content = text_content.strip()
+            if "```json" in text_content:
+                text_content = text_content.split("```json")[1].split("```")[0].strip()
+            elif "```" in text_content:
+                text_content = text_content.split("```")[1].split("```")[0].strip()
+
+            try:
+                decision = json.loads(text_content)
+            except json.JSONDecodeError:
+                logger.error(f"[{agent_type}] Failed to parse JSON response")
+                return None
+
+            logger.info(f"[{agent_type}] AI decision: {decision}")
+            return decision
+
+        logger.error(f"[{agent_type}] Unexpected response format: {result}")
+        return None
+
+    except Exception as err:
+        logger.error(f"[{agent_type}] Unexpected error: {err}", exc_info=True)
+        return None
