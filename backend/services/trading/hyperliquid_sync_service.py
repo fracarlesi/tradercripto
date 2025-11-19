@@ -210,10 +210,12 @@ class HyperliquidSyncService:
             hyperliquid_positions = user_state.get("assetPositions", [])
 
             # Clear all existing positions (clear-recreate strategy)
-            # Use direct SQL DELETE to ensure it's executed immediately
+            # Use direct SQL DELETE and flush to ensure it's executed before INSERT
             from sqlalchemy import delete
             await db.execute(delete(Position).where(Position.account_id == account.id))
-            await db.commit()  # Commit the delete before inserting new positions
+            await db.flush()  # Flush the delete (stays in same transaction)
+            # Expire all to clear session cache and avoid stale identity map
+            db.expire_all()
 
             # Create fresh positions from Hyperliquid
             positions_to_create = []
