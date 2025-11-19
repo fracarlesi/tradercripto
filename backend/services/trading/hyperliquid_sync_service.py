@@ -210,7 +210,10 @@ class HyperliquidSyncService:
             hyperliquid_positions = user_state.get("assetPositions", [])
 
             # Clear all existing positions (clear-recreate strategy)
-            await PositionRepository.clear_positions(db=db, account_id=account.id)
+            # Use direct SQL DELETE to ensure it's executed immediately
+            from sqlalchemy import delete
+            await db.execute(delete(Position).where(Position.account_id == account.id))
+            await db.commit()  # Commit the delete before inserting new positions
 
             # Create fresh positions from Hyperliquid
             positions_to_create = []
@@ -535,26 +538,27 @@ class HyperliquidSyncService:
                 if not account:
                     raise SyncException(f"Account {account_id} not found")
 
-                # Atomic sync operations
+                # Sync operations
                 # Note: Balance is NOT synced - always fetched from Hyperliquid API in real-time
-                async with db.begin_nested():
-                    # 1. Sync positions (clear-recreate)
-                    positions_synced = await self.sync_positions(db=db, account=account)
+                # Not using begin_nested() to allow commits between clear-recreate steps
 
-                    # 2. Get fills from Hyperliquid
-                    fills = await hyperliquid_trading_service.get_user_fills_async(limit=100)
+                # 1. Sync positions (clear-recreate - commits internally)
+                positions_synced = await self.sync_positions(db=db, account=account)
 
-                    # 3. Sync orders from fills
-                    orders_synced = await self.sync_orders_from_fills(
-                        db=db, account=account, fills=fills
-                    )
+                # 2. Get fills from Hyperliquid
+                fills = await hyperliquid_trading_service.get_user_fills_async(limit=100)
 
-                    # 4. Sync trades from fills
-                    trades_synced = await self.sync_trades_from_fills(
-                        db=db, account=account, fills=fills
-                    )
+                # 3. Sync orders from fills
+                orders_synced = await self.sync_orders_from_fills(
+                    db=db, account=account, fills=fills
+                )
 
-                # Commit transaction
+                # 4. Sync trades from fills
+                trades_synced = await self.sync_trades_from_fills(
+                    db=db, account=account, fills=fills
+                )
+
+                # Commit all changes
                 await db.commit()
 
                 # Record success
