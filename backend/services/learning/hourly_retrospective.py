@@ -22,7 +22,7 @@ from services.learning.weight_adjustments import (
     clear_expired_adjustments
 )
 from database.connection import get_async_session_factory
-from database.models import DecisionSnapshot
+from database.models import DecisionSnapshot, PendingStrategySuggestion
 
 logger = logging.getLogger(__name__)
 
@@ -77,10 +77,10 @@ async def analyze_hourly_market() -> Dict[str, Any]:
                     'avoided_loss': abs(loser['return_pct'])
                 })
 
-        # 5. Apply dynamic corrections based on missed opportunities
-        corrections_applied = apply_dynamic_corrections(missed_winners)
+        # 5. Save suggestions for manual review (NO auto-apply)
+        suggestions_saved = await save_suggestions_for_review(missed_winners)
 
-        # 6. Clear expired adjustments (older than 6 hours)
+        # 6. Clear expired adjustments (older than 6 hours) - keep for cleanup
         clear_expired_adjustments(max_age_hours=6)
 
         # Log summary
@@ -88,14 +88,14 @@ async def analyze_hourly_market() -> Dict[str, Any]:
         logger.info(f"📊 SUMMARY:")
         logger.info(f"  • Missed opportunities: {len(missed_winners)}")
         logger.info(f"  • Avoided losses: {len(avoided_losses)}")
-        logger.info(f"  • Corrections applied: {len(corrections_applied)}")
+        logger.info(f"  • Suggestions saved for review: {len(suggestions_saved)}")
         logger.info("=" * 60)
 
         return {
             "status": "success",
             "missed_winners": missed_winners,
             "avoided_losses": avoided_losses,
-            "corrections": corrections_applied
+            "suggestions_saved": suggestions_saved
         }
 
     except Exception as e:
@@ -291,44 +291,85 @@ def analyze_missed_opportunity(
     }
 
 
-def apply_dynamic_corrections(missed_opportunities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+async def save_suggestions_for_review(missed_opportunities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Apply dynamic weight/threshold adjustments based on missed opportunities.
+    Save strategy suggestions to database for manual review.
+
+    Instead of auto-applying corrections, we save them as pending suggestions
+    that can be reviewed and applied manually.
 
     Returns:
-        List of corrections applied
+        List of suggestions saved
     """
-    corrections_applied = []
+    suggestions_saved = []
 
     for miss in missed_opportunities:
         correction = miss.get('correction')
         if not correction:
             continue
 
-        # Apply correction
+        # Prepare suggestion data based on correction type
         if correction['type'] == 'LOWER_THRESHOLD_HIGH_MOMENTUM':
-            apply_adjustment(
-                adjustment_type='threshold_momentum',
-                value=0.70,  # Lower threshold to 0.70
-                duration_hours=3,
-                condition={'momentum_min': 0.90},
-                reason=correction['reason']
-            )
-            corrections_applied.append(correction)
-            logger.info(f"✅ APPLIED: Threshold 0.75 → 0.70 when momentum > 0.90 (duration: 3h)")
+            suggestion_data = {
+                'type': 'LOWER_THRESHOLD',
+                'from': 0.75,
+                'to': 0.70,
+                'condition': {'momentum_min': 0.90},
+                'duration_hours': 3
+            }
+            suggestion_type = 'threshold_adjustment'
 
         elif correction['type'] == 'BOOST_SCORE_MOMENTUM_SUPPORT':
-            apply_adjustment(
-                adjustment_type='score_boost',
-                value=0.05,  # Boost score by 0.05
-                duration_hours=3,
-                condition={'momentum_min': 0.85, 'support_min': 0.70},
-                reason=correction['reason']
-            )
-            corrections_applied.append(correction)
-            logger.info(f"✅ APPLIED: Score boost +0.05 when momentum > 0.85 AND support > 0.70 (duration: 3h)")
+            suggestion_data = {
+                'type': 'SCORE_BOOST',
+                'boost_amount': 0.05,
+                'condition': {'momentum_min': 0.85, 'support_min': 0.70},
+                'duration_hours': 3
+            }
+            suggestion_type = 'score_boost'
+        else:
+            continue
 
-    return corrections_applied
+        # Save to database
+        try:
+            async with get_async_session_factory()() as session:
+                suggestion = PendingStrategySuggestion(
+                    source='hourly_retrospective',
+                    suggestion_type=suggestion_type,
+                    symbol=miss.get('symbol'),
+                    suggestion_data=suggestion_data,
+                    reason=correction['reason'],
+                    evidence={
+                        'missed_profit': miss.get('potential_profit', 0),
+                        'return_pct': miss.get('return_pct', 0),
+                        'score': miss.get('score', 0),
+                        'momentum': miss.get('momentum', 0),
+                        'support': miss.get('support', 0)
+                    },
+                    status='pending'
+                )
+                session.add(suggestion)
+                await session.commit()
+
+                suggestions_saved.append({
+                    'id': suggestion.id,
+                    'type': suggestion_type,
+                    'symbol': miss.get('symbol'),
+                    'reason': correction['reason']
+                })
+
+                logger.info(
+                    f"💾 SAVED SUGGESTION: {suggestion_type} for {miss.get('symbol')} "
+                    f"(reason: {correction['reason'][:50]}...)"
+                )
+
+        except Exception as e:
+            logger.error(f"Failed to save suggestion for {miss.get('symbol')}: {e}", exc_info=True)
+
+    if suggestions_saved:
+        logger.info(f"📋 {len(suggestions_saved)} suggestions saved for manual review")
+
+    return suggestions_saved
 
 
 # Sync wrapper for scheduler

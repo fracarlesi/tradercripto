@@ -612,3 +612,65 @@ class MissedOpportunitiesReport(Base):
         Index("idx_reports_analyzed_at", "analyzed_at"),
         Index("idx_reports_status", "status"),
     )
+
+
+class PendingStrategySuggestion(Base):
+    """
+    Pending strategy suggestions for manual review.
+
+    Stores suggestions from the learning system (hourly retrospective, self-analysis)
+    that require manual approval before being applied to the trading strategy.
+
+    Workflow:
+    1. Learning system identifies pattern → creates suggestion
+    2. User reviews via dashboard
+    3. User decides to apply or dismiss
+    4. If applied, changes are made manually to code/config
+    """
+
+    __tablename__ = "pending_strategy_suggestions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+
+    # When and where it came from
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
+    source: Mapped[str] = mapped_column(
+        String(50), nullable=False
+    )  # 'hourly_retrospective', 'self_analysis', 'counterfactual'
+
+    # Suggestion details
+    suggestion_type: Mapped[str] = mapped_column(
+        String(50), nullable=False
+    )  # 'threshold_adjustment', 'score_boost', 'weight_change', etc.
+
+    symbol: Mapped[str | None] = mapped_column(String(20), nullable=True)  # If specific to a symbol
+
+    # The actual suggestion (JSON for flexibility)
+    suggestion_data: Mapped[dict] = mapped_column(JSON, nullable=False)
+    # Example: {"type": "LOWER_THRESHOLD", "from": 0.75, "to": 0.70, "condition": {"momentum_min": 0.90}}
+
+    # Why this suggestion was made
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # Evidence/context
+    evidence: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Example: {"missed_profit": 15.50, "occurrences": 3, "symbols": ["BTC", "ETH"]}
+
+    # Status tracking
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="pending", index=True
+    )  # 'pending', 'applied', 'dismissed', 'expired'
+
+    reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    review_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        Index("idx_suggestions_created_at", "created_at"),
+        Index("idx_suggestions_status", "status"),
+        Index("idx_suggestions_source", "source"),
+        Index("idx_suggestions_type", "suggestion_type"),
+    )
