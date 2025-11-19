@@ -138,7 +138,16 @@ def classify_opportunity(
 
 
 def get_strategy_rules(strategy_type: StrategyType) -> StrategyRules:
-    """Get exit rules for a strategy type."""
+    """Get exit rules for a strategy type.
+
+    Falls back to BALANCED for invalid/unknown strategy types.
+    This handles legacy data where direction (LONG/SHORT) was stored as strategy_type.
+    """
+    if strategy_type not in STRATEGIES:
+        logger.warning(
+            f"Unknown strategy_type '{strategy_type}', falling back to BALANCED"
+        )
+        return STRATEGIES["BALANCED"]
     return STRATEGIES[strategy_type]
 
 
