@@ -52,7 +52,7 @@ class SchedulerService:
         logger.info("Scheduler service stopped")
 
     def add_sync_job(
-        self, job_func: Callable, interval_seconds: int, job_id: str = "sync_job"
+        self, job_func: Callable, interval_seconds: int, job_id: str = "sync_job", start_delay_seconds: int = 0
     ) -> None:
         """Add periodic sync job to scheduler.
 
@@ -60,6 +60,7 @@ class SchedulerService:
             job_func: Async callable to execute periodically
             interval_seconds: Interval between job executions
             job_id: Unique identifier for the job (default: "sync_job")
+            start_delay_seconds: Delay before first execution (default: 0)
 
         Raises:
             RuntimeError: If scheduler not started
@@ -67,7 +68,12 @@ class SchedulerService:
         if self._scheduler is None:
             raise RuntimeError("Scheduler not started - call start() first")
 
-        trigger = IntervalTrigger(seconds=interval_seconds)
+        from datetime import datetime, timedelta
+
+        # Calculate start time with delay to stagger job execution
+        start_date = datetime.now() + timedelta(seconds=start_delay_seconds) if start_delay_seconds > 0 else None
+
+        trigger = IntervalTrigger(seconds=interval_seconds, start_date=start_date)
 
         self._scheduler.add_job(
             job_func,
@@ -83,6 +89,7 @@ class SchedulerService:
                 "context": {
                     "job_id": job_id,
                     "interval_seconds": interval_seconds,
+                    "start_delay_seconds": start_delay_seconds,
                 }
             },
         )

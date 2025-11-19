@@ -136,10 +136,12 @@ async def lifespan(app: FastAPI):
 
     try:
         scheduler_service.start()
+        # Stagger jobs to avoid all firing at once (offset by 15s each)
         scheduler_service.add_sync_job(
             job_func=periodic_sync_job,
             interval_seconds=async_settings.sync_interval_seconds,
             job_id="hyperliquid_sync",
+            start_delay_seconds=45,  # Starts at :45 each minute
         )
 
         # Add daily AI usage reset job at midnight (T101)
@@ -166,7 +168,8 @@ async def lifespan(app: FastAPI):
         scheduler_service.add_sync_job(
             job_func=check_momentum_exit_sync,
             interval_seconds=60,  # 1 minute - frequent checks for quick exits
-            job_id="momentum_exit_check"
+            job_id="momentum_exit_check",
+            start_delay_seconds=0,  # Starts at :00 each minute
         )
         logger.info("Strategy exit checker scheduled (every 3 minutes, dynamic rules)")
 
@@ -177,7 +180,8 @@ async def lifespan(app: FastAPI):
         scheduler_service.add_sync_job(
             job_func=check_stop_loss_async,
             interval_seconds=60,
-            job_id="stop_loss_check"
+            job_id="stop_loss_check",
+            start_delay_seconds=15,  # Starts at :15 each minute
         )
 
         # Add MULTI-AGENT ORCHESTRATED trading job (every 3 minutes)
@@ -196,7 +200,8 @@ async def lifespan(app: FastAPI):
         scheduler_service.add_sync_job(
             job_func=check_take_profit_async,
             interval_seconds=60,
-            job_id="take_profit_check"
+            job_id="take_profit_check",
+            start_delay_seconds=30,  # Starts at :30 each minute
         )
         logger.info("Take-profit job scheduled (every 60 seconds, +10% threshold)")
 

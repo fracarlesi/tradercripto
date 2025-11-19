@@ -1397,24 +1397,43 @@ async def check_take_profit_async() -> None:
             logger.debug("No valid positions to check for take-profit")
             return
 
-        logger.info(f"AI Take Profit Agent checking {len(valid_positions)} positions SEQUENTIALLY")
+        logger.info(f"AI Take Profit Agent checking {len(valid_positions)} positions with semaphore (max 3 concurrent)")
 
-        # Execute AI calls SEQUENTIALLY to avoid overlapping and rate limits
-        for pos in valid_positions:
-            position_data = pos['position']
-            coin = position_data['coin']
-            szi = float(position_data.get('szi', 0))
+        # Use semaphore to limit concurrent API calls (max 3 at a time)
+        # This prevents blocking the event loop for too long while still being efficient
+        import asyncio
+        semaphore = asyncio.Semaphore(3)
 
-            try:
-                decision = await call_exit_agent(
-                    account=account,
-                    position_data=position_data,
-                    technical_factors=technical_factors,
-                    agent_type="TAKE_PROFIT"
-                )
-            except Exception as e:
-                logger.error(f"Error in AI take-profit for {coin}: {e}", exc_info=True)
+        async def check_position_with_semaphore(pos):
+            """Check single position with rate limiting via semaphore."""
+            async with semaphore:
+                position_data = pos['position']
+                coin = position_data['coin']
+                szi = float(position_data.get('szi', 0))
+                try:
+                    decision = await call_exit_agent(
+                        account=account,
+                        position_data=position_data,
+                        technical_factors=technical_factors,
+                        agent_type="TAKE_PROFIT"
+                    )
+                    return (position_data, decision, szi)
+                except Exception as e:
+                    logger.error(f"Error in AI take-profit for {coin}: {e}", exc_info=True)
+                    return (position_data, None, szi)
+
+        # Execute with limited concurrency
+        tasks = [check_position_with_semaphore(pos) for pos in valid_positions]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Process results
+        for result in results:
+            if isinstance(result, Exception):
+                logger.error(f"Task failed: {result}", exc_info=True)
                 continue
+
+            position_data, decision, szi = result
+            coin = position_data['coin']
 
             if decision and decision.should_exit and decision.confidence >= 0.6:
                 logger.warning(
