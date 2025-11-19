@@ -434,9 +434,9 @@ class HyperliquidSyncService:
                 # Convert timestamp
                 trade_time = datetime.fromtimestamp(time_ms / 1000.0, tz=UTC)
 
-                # Check for duplicate using composite key
+                # Check for duplicate using composite key (per account)
                 existing = await TradeRepository.find_duplicate(
-                    db=db, trade_time=trade_time, symbol=coin, quantity=size, price=price
+                    db=db, account_id=account.id, trade_time=trade_time, symbol=coin, quantity=size, price=price
                 )
                 if existing:
                     continue

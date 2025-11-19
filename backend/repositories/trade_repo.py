@@ -17,6 +17,7 @@ class TradeRepository:
     @staticmethod
     async def find_duplicate(
         db: AsyncSession,
+        account_id: int,
         trade_time: datetime,
         symbol: str,
         quantity: Decimal,
@@ -26,6 +27,7 @@ class TradeRepository:
 
         Args:
             db: Async database session
+            account_id: Account ID (trades are unique per account)
             trade_time: Trade execution timestamp
             symbol: Trading symbol
             quantity: Trade quantity
@@ -36,6 +38,7 @@ class TradeRepository:
         """
         result = await db.execute(
             select(Trade).where(
+                Trade.account_id == account_id,
                 Trade.trade_time == trade_time,
                 Trade.symbol == symbol,
                 Trade.quantity == quantity,
