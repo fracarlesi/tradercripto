@@ -160,7 +160,7 @@ export default function TradeHistoryTable({ accountId }: TradeHistoryTableProps)
             <Card>
               <CardHeader className="pb-2">
                 <CardDescription>Win Rate</CardDescription>
-                <CardTitle className="text-2xl">{data.win_rate.toFixed(1)}%</CardTitle>
+                <CardTitle className={`text-2xl ${data.win_rate >= 50 ? 'text-green-600' : 'text-red-600'}`}>{data.win_rate.toFixed(1)}%</CardTitle>
               </CardHeader>
             </Card>
 
