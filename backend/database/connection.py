@@ -47,12 +47,11 @@ def create_engine() -> AsyncEngine:
             "timeout": 30.0,  # Increased timeout for concurrent access (default is 5.0)
         }
     else:
-        # PostgreSQL configuration (asyncpg uses its own async pool)
-        # Do NOT set poolclass for async engines - let SQLAlchemy use AsyncAdaptedQueuePool
-        engine_kwargs["pool_size"] = settings.db_pool_size
-        engine_kwargs["max_overflow"] = settings.db_max_overflow
-        engine_kwargs["pool_timeout"] = settings.db_pool_timeout
-        engine_kwargs["pool_pre_ping"] = True  # Verify connections before using
+        # PostgreSQL configuration (asyncpg)
+        # Use NullPool to avoid "Task got Future attached to a different loop" errors
+        # when connections are used from different event loops (e.g., background tasks)
+        # This is the SQLAlchemy recommended approach for async engines with multiple loops
+        engine_kwargs["poolclass"] = NullPool
 
     engine = create_async_engine(settings.database_url, **engine_kwargs)
 
