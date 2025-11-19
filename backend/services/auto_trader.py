@@ -1025,12 +1025,20 @@ def _validate_decision(
     if operation == "buy":
         # Buy: use portion of available cash
         cash_available = portfolio["cash"]
+
+        # CRITICAL: Check if there's enough cash for minimum order ($10)
+        MIN_ORDER_USD = 10.0
+        if cash_available < MIN_ORDER_USD:
+            return {
+                "valid": False,
+                "reason": f"Insufficient cash: ${cash_available:.2f} < ${MIN_ORDER_USD:.2f} minimum",
+            }
+
         order_value_usd = cash_available * target_portion
         price = prices[symbol]
 
         # Hyperliquid minimum is $10 per order
         # If AI suggests less but we have enough, bump to $10
-        MIN_ORDER_USD = 10.0
         if order_value_usd < MIN_ORDER_USD and cash_available >= MIN_ORDER_USD:
             order_value_usd = MIN_ORDER_USD
             logger.info(f"Bumped order value from ${cash_available * target_portion:.2f} to ${MIN_ORDER_USD:.2f} (Hyperliquid minimum)")
@@ -1042,11 +1050,19 @@ def _validate_decision(
     elif operation == "short":
         # Short: open short position (similar to buy, but is_buy=False)
         cash_available = portfolio["cash"]
+
+        # CRITICAL: Check if there's enough cash for minimum order ($10)
+        MIN_ORDER_USD = 10.0
+        if cash_available < MIN_ORDER_USD:
+            return {
+                "valid": False,
+                "reason": f"Insufficient cash: ${cash_available:.2f} < ${MIN_ORDER_USD:.2f} minimum",
+            }
+
         order_value_usd = cash_available * target_portion
         price = prices[symbol]
 
         # Hyperliquid minimum is $10 per order
-        MIN_ORDER_USD = 10.0
         if order_value_usd < MIN_ORDER_USD and cash_available >= MIN_ORDER_USD:
             order_value_usd = MIN_ORDER_USD
             logger.info(f"Bumped SHORT order value from ${cash_available * target_portion:.2f} to ${MIN_ORDER_USD:.2f} (Hyperliquid minimum)")
