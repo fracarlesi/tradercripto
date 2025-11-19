@@ -39,7 +39,10 @@ interface Position {
   avg_cost: number
   last_price?: number | null
   market_value?: number | null
-  unrealized_pnl?: number | null  // P&L from Hyperliquid
+  unrealized_pnl?: number | null  // Gross P&L from Hyperliquid (no commissions)
+  unrealized_pnl_net?: number | null  // Net P&L (after commissions)
+  entry_commission?: number | null  // Entry commission from database
+  estimated_exit_commission?: number | null  // Estimated exit commission
   return_on_equity?: number | null  // ROE % from Hyperliquid
   margin_used?: number | null  // Margin used from Hyperliquid
 }
@@ -291,13 +294,14 @@ function PositionList({ positions }: { positions: Position[] }) {
             <TableHead>Avg Cost</TableHead>
             <TableHead>Last Price</TableHead>
             <TableHead>Market Value</TableHead>
-            <TableHead>P&L</TableHead>
+            <TableHead>P&L (Gross/Net)</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {positions.map(p => {
             // Use Hyperliquid data directly - NO REDUNDANT CALCULATIONS!
-            const pnl = p.unrealized_pnl ?? 0
+            const grossPnl = p.unrealized_pnl ?? 0
+            const netPnl = p.unrealized_pnl_net ?? grossPnl  // Fallback to gross if net not available
             const roe = p.return_on_equity ?? 0
             const roePercent = roe * 100  // ROE is already in decimal form (e.g., -0.37 = -37%)
 
@@ -309,11 +313,16 @@ function PositionList({ positions }: { positions: Position[] }) {
                 <TableCell>${p.avg_cost.toFixed(4)}</TableCell>
                 <TableCell>${p.last_price?.toFixed(4) ?? '-'}</TableCell>
                 <TableCell>${p.market_value?.toFixed(2) ?? '-'}</TableCell>
-                <TableCell className={pnl >= 0 ? 'text-green-600' : 'text-red-600'}>
+                <TableCell>
                   {p.unrealized_pnl !== null && p.unrealized_pnl !== undefined ? (
-                    <>
-                      ${pnl.toFixed(2)} ({roePercent.toFixed(2)}%)
-                    </>
+                    <div className="flex flex-col text-xs">
+                      <span className={grossPnl >= 0 ? 'text-green-600' : 'text-red-600'}>
+                        ${grossPnl.toFixed(2)} ({roePercent.toFixed(2)}%)
+                      </span>
+                      <span className={`${netPnl >= 0 ? 'text-green-600' : 'text-red-600'} opacity-70`} title={`Entry: $${(p.entry_commission ?? 0).toFixed(4)} | Est. Exit: $${(p.estimated_exit_commission ?? 0).toFixed(4)}`}>
+                        Net: ${netPnl.toFixed(2)}
+                      </span>
+                    </div>
                   ) : (
                     '-'
                   )}

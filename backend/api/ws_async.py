@@ -255,6 +255,42 @@ async def _send_snapshot_async_impl(db: AsyncSession, account_id: int):
         logger.error(f"Failed to fetch market prices from Hyperliquid: {e}", exc_info=True)
         all_mids = {}
 
+    # Get entry commissions for open positions from database
+    # Query recent trades that opened current positions
+    from sqlalchemy import func
+    entry_commissions = {}
+    if hl_positions:
+        # Get coins that have open positions
+        open_coins = [asset_pos.get('position', {}).get('coin', '') for asset_pos in hl_positions]
+        open_coins = [c for c in open_coins if c]  # Filter empty
+
+        if open_coins:
+            # For each coin, find the most recent entry trade (buy for LONG, sell for SHORT)
+            # This is an approximation - we look for the most recent trade that matches the position direction
+            for asset_pos in hl_positions:
+                pos = asset_pos.get('position', {})
+                coin = pos.get('coin', '')
+                size = float(pos.get('szi', '0'))
+                if not coin or size == 0:
+                    continue
+
+                # Determine entry side based on position direction
+                entry_side = 'buy' if size > 0 else 'sell'
+
+                # Find entry commission from recent trades
+                result = await db.execute(
+                    select(func.sum(Trade.commission))
+                    .where(
+                        Trade.account_id == account_id,
+                        Trade.symbol == coin,
+                        Trade.side == entry_side
+                    )
+                    .order_by(Trade.trade_time.desc())
+                    .limit(5)  # Sum last 5 entries (handles partial fills)
+                )
+                total_commission = result.scalar()
+                entry_commissions[coin] = float(total_commission) if total_commission else 0.0
+
     # Build positions list DIRECTLY from Hyperliquid (NO DATABASE!)
     # Single source of truth: only positions that exist on Hyperliquid are shown
     enriched_positions = []
@@ -279,6 +315,14 @@ async def _send_snapshot_async_impl(db: AsyncSession, account_id: int):
         else:
             current_price = float(current_price)
 
+        # Calculate net P&L with commissions
+        # Entry commission from database, exit commission estimated at 0.025% of current value
+        entry_commission = entry_commissions.get(coin, 0.0)
+        current_value = abs(size) * current_price
+        estimated_exit_commission = current_value * 0.00025  # 0.025% taker fee
+        total_commissions = entry_commission + estimated_exit_commission
+        net_pnl = unrealized_pnl - total_commissions
+
         enriched_positions.append({
             "id": 0,  # No database ID - this is real-time from Hyperliquid
             "account_id": account_id,
@@ -290,7 +334,10 @@ async def _send_snapshot_async_impl(db: AsyncSession, account_id: int):
             "avg_cost": entry_px,
             "last_price": current_price,
             "market_value": abs(position_value),
-            "unrealized_pnl": unrealized_pnl,
+            "unrealized_pnl": unrealized_pnl,  # Gross P&L (from Hyperliquid)
+            "unrealized_pnl_net": round(net_pnl, 4),  # Net P&L (after commissions)
+            "entry_commission": round(entry_commission, 4),
+            "estimated_exit_commission": round(estimated_exit_commission, 4),
             "return_on_equity": return_on_equity,
             "margin_used": margin_used,
         })
