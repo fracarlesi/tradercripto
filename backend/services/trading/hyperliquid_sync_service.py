@@ -214,8 +214,6 @@ class HyperliquidSyncService:
             from sqlalchemy import delete
             await db.execute(delete(Position).where(Position.account_id == account.id))
             await db.flush()  # Flush the delete (stays in same transaction)
-            # Expire all to clear session cache and avoid stale identity map
-            db.expire_all()
 
             # Create fresh positions from Hyperliquid
             positions_to_create = []
