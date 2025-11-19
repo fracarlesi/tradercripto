@@ -1262,51 +1262,71 @@ async def check_stop_loss_async() -> None:
             logger.warning(f"Failed to get technical analysis: {e}")
             technical_factors = {'recommendations': []}
 
-        logger.info(f"AI Stop Loss Agent checking {len(positions)} positions")
+        # Filter valid positions (non-zero size)
+        valid_positions = [
+            pos for pos in positions
+            if float(pos['position'].get('szi', 0)) != 0
+        ]
 
-        for pos in positions:
+        if not valid_positions:
+            logger.debug("No valid positions to check for stop-loss")
+            return
+
+        logger.info(f"AI Stop Loss Agent checking {len(valid_positions)} positions in PARALLEL")
+
+        # Create tasks for all positions (parallel execution)
+        async def check_single_position(pos):
+            """Check single position and return (position_data, decision)."""
+            position_data = pos['position']
             try:
-                position_data = pos['position']
-                coin = position_data['coin']
-                szi = float(position_data.get('szi', 0))
-
-                if szi == 0:
-                    continue  # Skip empty positions
-
-                # Call AI Stop Loss agent
                 decision = await call_exit_agent(
                     account=account,
                     position_data=position_data,
                     technical_factors=technical_factors,
                     agent_type="STOP_LOSS"
                 )
-
-                if decision and decision.should_exit and decision.confidence >= 0.6:
-                    logger.warning(
-                        f"🛑 AI STOP-LOSS for {coin}: "
-                        f"P&L={decision.pnl_pct:.2%}, Confidence={decision.confidence:.0%}\n"
-                        f"   Reasoning: {decision.reasoning}"
-                    )
-
-                    # Close position
-                    await _close_position_async(
-                        coin=coin,
-                        size=abs(szi),
-                        is_long=(szi > 0),
-                        reason="ai_stop_loss"
-                    )
-
-                    logger.info(f"✅ AI Stop-loss executed: Closed {coin} position")
-
-                elif decision:
-                    logger.debug(
-                        f"{coin}: AI recommends HOLD (P&L={decision.pnl_pct:.2%}, "
-                        f"Confidence={decision.confidence:.0%})"
-                    )
-
+                return (position_data, decision)
             except Exception as e:
-                logger.error(f"Error in AI stop-loss for position: {e}", exc_info=True)
+                logger.error(f"Error in AI stop-loss for {position_data.get('coin')}: {e}", exc_info=True)
+                return (position_data, None)
+
+        # Execute ALL AI calls in parallel using asyncio.gather()
+        import asyncio
+        tasks = [check_single_position(pos) for pos in valid_positions]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Process results
+        for result in results:
+            if isinstance(result, Exception):
+                logger.error(f"Parallel task failed: {result}", exc_info=True)
                 continue
+
+            position_data, decision = result
+            coin = position_data['coin']
+            szi = float(position_data.get('szi', 0))
+
+            if decision and decision.should_exit and decision.confidence >= 0.6:
+                logger.warning(
+                    f"🛑 AI STOP-LOSS for {coin}: "
+                    f"P&L={decision.pnl_pct:.2%}, Confidence={decision.confidence:.0%}\n"
+                    f"   Reasoning: {decision.reasoning}"
+                )
+
+                # Close position
+                await _close_position_async(
+                    coin=coin,
+                    size=abs(szi),
+                    is_long=(szi > 0),
+                    reason="ai_stop_loss"
+                )
+
+                logger.info(f"✅ AI Stop-loss executed: Closed {coin} position")
+
+            elif decision:
+                logger.debug(
+                    f"{coin}: AI recommends HOLD (P&L={decision.pnl_pct:.2%}, "
+                    f"Confidence={decision.confidence:.0%})"
+                )
 
     except Exception as e:
         logger.error(f"AI Stop-loss check failed: {e}", exc_info=True)
@@ -1367,51 +1387,71 @@ async def check_take_profit_async() -> None:
             logger.warning(f"Failed to get technical analysis: {e}")
             technical_factors = {'recommendations': []}
 
-        logger.info(f"AI Take Profit Agent checking {len(positions)} positions")
+        # Filter valid positions (non-zero size)
+        valid_positions = [
+            pos for pos in positions
+            if float(pos['position'].get('szi', 0)) != 0
+        ]
 
-        for pos in positions:
+        if not valid_positions:
+            logger.debug("No valid positions to check for take-profit")
+            return
+
+        logger.info(f"AI Take Profit Agent checking {len(valid_positions)} positions in PARALLEL")
+
+        # Create tasks for all positions (parallel execution)
+        async def check_single_position(pos):
+            """Check single position and return (position_data, decision)."""
+            position_data = pos['position']
             try:
-                position_data = pos['position']
-                coin = position_data['coin']
-                szi = float(position_data.get('szi', 0))
-
-                if szi == 0:
-                    continue  # Skip empty positions
-
-                # Call AI Take Profit agent
                 decision = await call_exit_agent(
                     account=account,
                     position_data=position_data,
                     technical_factors=technical_factors,
                     agent_type="TAKE_PROFIT"
                 )
-
-                if decision and decision.should_exit and decision.confidence >= 0.6:
-                    logger.warning(
-                        f"💰 AI TAKE-PROFIT for {coin}: "
-                        f"P&L={decision.pnl_pct:.2%}, Confidence={decision.confidence:.0%}\n"
-                        f"   Reasoning: {decision.reasoning}"
-                    )
-
-                    # Close position to lock in profit
-                    await _close_position_async(
-                        coin=coin,
-                        size=abs(szi),
-                        is_long=(szi > 0),
-                        reason="ai_take_profit"
-                    )
-
-                    logger.info(f"✅ AI Take-profit executed: Closed {coin} with {decision.pnl_pct:.2%} profit")
-
-                elif decision:
-                    logger.debug(
-                        f"{coin}: AI recommends HOLD (P&L={decision.pnl_pct:.2%}, "
-                        f"Confidence={decision.confidence:.0%})"
-                    )
-
+                return (position_data, decision)
             except Exception as e:
-                logger.error(f"Error in AI take-profit for position: {e}", exc_info=True)
+                logger.error(f"Error in AI take-profit for {position_data.get('coin')}: {e}", exc_info=True)
+                return (position_data, None)
+
+        # Execute ALL AI calls in parallel using asyncio.gather()
+        import asyncio
+        tasks = [check_single_position(pos) for pos in valid_positions]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Process results
+        for result in results:
+            if isinstance(result, Exception):
+                logger.error(f"Parallel task failed: {result}", exc_info=True)
                 continue
+
+            position_data, decision = result
+            coin = position_data['coin']
+            szi = float(position_data.get('szi', 0))
+
+            if decision and decision.should_exit and decision.confidence >= 0.6:
+                logger.warning(
+                    f"💰 AI TAKE-PROFIT for {coin}: "
+                    f"P&L={decision.pnl_pct:.2%}, Confidence={decision.confidence:.0%}\n"
+                    f"   Reasoning: {decision.reasoning}"
+                )
+
+                # Close position to lock in profit
+                await _close_position_async(
+                    coin=coin,
+                    size=abs(szi),
+                    is_long=(szi > 0),
+                    reason="ai_take_profit"
+                )
+
+                logger.info(f"✅ AI Take-profit executed: Closed {coin} with {decision.pnl_pct:.2%} profit")
+
+            elif decision:
+                logger.debug(
+                    f"{coin}: AI recommends HOLD (P&L={decision.pnl_pct:.2%}, "
+                    f"Confidence={decision.confidence:.0%})"
+                )
 
     except Exception as e:
         logger.error(f"AI Take-profit check failed: {e}", exc_info=True)
