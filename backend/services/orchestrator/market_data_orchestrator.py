@@ -412,14 +412,14 @@ async def _fetch_news() -> List[dict]:
 
 async def _fetch_portfolio(account_id: int) -> dict:
     """Fetch portfolio state for account."""
-    from database.connection import async_session_factory
+    from database.connection import get_async_session_factory
     from database.models import Account
     from sqlalchemy import select
     from services.trading.hyperliquid_trading_service import hyperliquid_trading_service
 
     try:
         # Get account from database
-        async with async_session_factory() as db:
+        async with get_async_session_factory()() as db:
             stmt = select(Account).where(Account.id == account_id)
             result = await db.execute(stmt)
             account = result.scalar_one_or_none()

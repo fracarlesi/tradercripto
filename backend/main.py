@@ -27,6 +27,14 @@ async def lifespan(app: FastAPI):
     This replaces the deprecated @app.on_event("startup") and @app.on_event("shutdown") decorators.
     """
     # STARTUP: Code before yield runs on application startup
+
+    # Initialize async database engine in the correct event loop
+    # This MUST be done first to avoid "Task got Future attached to a different loop" errors
+    from database.connection import init_async_engine
+
+    init_async_engine()
+    logger.info("Async database engine initialized in lifespan")
+
     # Create tables
     Base.metadata.create_all(bind=sync_engine)
     # Seed trading configs if empty (DISABLED - TODO: Restore after settings refactor)

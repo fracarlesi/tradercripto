@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 
 from config.logging import get_logger
-from database.connection import async_session_factory
+from database.connection import get_async_session_factory
 from repositories.account_repo import AccountRepository
 from services.exceptions import CircuitBreakerOpenException, SyncException
 from services.infrastructure.sync_state_tracker import sync_state_tracker
@@ -22,7 +22,7 @@ async def periodic_sync_job() -> None:
     """
     logger.debug("Starting periodic sync job")
 
-    async with async_session_factory() as db:
+    async with get_async_session_factory()() as db:
         try:
             # Get all active accounts
             accounts = await AccountRepository.get_all_active(db)

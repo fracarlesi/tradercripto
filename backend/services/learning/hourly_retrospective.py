@@ -21,7 +21,7 @@ from services.learning.weight_adjustments import (
     apply_adjustment,
     clear_expired_adjustments
 )
-from database.connection import async_session_factory
+from database.connection import get_async_session_factory
 from database.models import DecisionSnapshot
 
 logger = logging.getLogger(__name__)
@@ -172,7 +172,7 @@ async def get_decision_from_1h_ago() -> Dict[str, Any] | None:
     window_start = one_hour_ago - timedelta(minutes=15)
     window_end = one_hour_ago + timedelta(minutes=15)
 
-    async with async_session_factory() as session:
+    async with get_async_session_factory()() as session:
         from sqlalchemy import select
 
         stmt = select(DecisionSnapshot).where(

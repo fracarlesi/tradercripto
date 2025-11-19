@@ -1222,7 +1222,7 @@ async def check_stop_loss_async() -> None:
     Returns:
         None
     """
-    from database.connection import async_session_factory
+    from database.connection import get_async_session_factory
     from database.models import Account
     from services.agents.exit_agents import call_exit_agent
     from services.technical_analysis_service import get_technical_analysis_structured
@@ -1238,7 +1238,7 @@ async def check_stop_loss_async() -> None:
             return
 
         # Get active account for AI calls
-        async with async_session_factory() as db:
+        async with get_async_session_factory()() as db:
             result = await db.execute(
                 select(Account).where(Account.is_active == True)
             )
@@ -1347,7 +1347,7 @@ async def check_take_profit_async() -> None:
     Returns:
         None
     """
-    from database.connection import async_session_factory
+    from database.connection import get_async_session_factory
     from database.models import Account
     from services.agents.exit_agents import call_exit_agent
     from services.technical_analysis_service import get_technical_analysis_structured
@@ -1363,7 +1363,7 @@ async def check_take_profit_async() -> None:
             return
 
         # Get active account for AI calls
-        async with async_session_factory() as db:
+        async with get_async_session_factory()() as db:
             result = await db.execute(
                 select(Account).where(Account.is_active == True)
             )

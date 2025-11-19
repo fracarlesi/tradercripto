@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import and_, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database.connection import async_session_factory
+from database.connection import get_async_session_factory
 from database.models import DecisionSnapshot
 from services.infrastructure.async_wrapper import run_in_thread
 from services.market_data.hyperliquid_market_data import hyperliquid_client
@@ -69,7 +69,7 @@ async def save_decision_snapshot(
         ...     entry_price=103500.0,
         ... )
     """
-    async with async_session_factory() as db:
+    async with get_async_session_factory()() as db:
         try:
             snapshot = DecisionSnapshot(
                 timestamp=datetime.utcnow(),
@@ -215,7 +215,7 @@ async def calculate_counterfactuals_batch(limit: int = 100) -> int:
         >>> processed = await calculate_counterfactuals_batch(limit=100)
         >>> logger.info(f"Processed {processed} snapshots")
     """
-    async with async_session_factory() as db:
+    async with get_async_session_factory()() as db:
         try:
             # Find snapshots older than 24h without counterfactuals
             cutoff_time = datetime.utcnow() - timedelta(hours=24)
@@ -346,7 +346,7 @@ async def get_snapshots_for_analysis(
         >>> snapshots = await get_snapshots_for_analysis(account_id=1, limit=50)
         >>> # Pass to DeepSeek for self-analysis
     """
-    async with async_session_factory() as db:
+    async with get_async_session_factory()() as db:
         try:
             # Base query: get all snapshots for account
             stmt = (

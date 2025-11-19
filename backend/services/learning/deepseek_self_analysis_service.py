@@ -71,9 +71,9 @@ async def run_self_analysis(
 
         # Call DeepSeek with self-analysis prompt
         from database.models import Account
-        from database.connection import async_session_factory
+        from database.connection import get_async_session_factory
 
-        async with async_session_factory() as db:
+        async with get_async_session_factory()() as db:
             from sqlalchemy import select
 
             stmt = select(Account).where(Account.id == account_id)

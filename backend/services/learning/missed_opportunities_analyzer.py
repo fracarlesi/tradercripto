@@ -15,7 +15,7 @@ from typing import Dict, List, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database.connection import async_session_factory
+from database.connection import get_async_session_factory
 from database.models import Account, DecisionSnapshot, MissedOpportunitiesReport
 from services.trading.hyperliquid_trading_service import hyperliquid_trading_service
 
@@ -51,7 +51,7 @@ async def analyze_missed_opportunities(
             logger.info(f"   {mover['symbol']:10s}: {mover['change_pct']:+6.2f}%  (price: ${mover['current_price']:.4f})")
         
         # 2. Get AI decisions from last hour
-        async with async_session_factory() as db:
+        async with get_async_session_factory()() as db:
             cutoff_time = datetime.now(UTC) - timedelta(hours=lookback_hours)
             
             result = await db.execute(
@@ -76,7 +76,7 @@ async def analyze_missed_opportunities(
         logger.info(f"\n{'='*80}\n{report_text}\n{'='*80}")
 
         # 5. Save report to database
-        async with async_session_factory() as db:
+        async with get_async_session_factory()() as db:
             report_entry = MissedOpportunitiesReport(
                 analyzed_at=datetime.now(UTC),
                 lookback_hours=lookback_hours,

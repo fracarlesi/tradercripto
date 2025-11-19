@@ -298,11 +298,11 @@ async def _send_snapshot_async_impl(db: AsyncSession, account_id: int):
     # Get asset curve data for the chart (default timeframe: 1h)
     # Call async function directly with the current async session
     from services.asset_curve_calculator import get_all_asset_curves_data_new_async
-    from database.connection import async_session_factory
+    from database.connection import get_async_session_factory
 
     try:
         # Create a new async session for the curve calculation
-        async with async_session_factory() as curve_db:
+        async with get_async_session_factory()() as curve_db:
             all_asset_curves = await get_all_asset_curves_data_new_async(curve_db, "1h")
             logger.info(f"Asset curves calculated: {len(all_asset_curves)} points")
     except Exception as e:
@@ -522,10 +522,10 @@ async def websocket_endpoint_async(websocket: WebSocket):
 
                         # Call async function directly with async session
                         from services.asset_curve_calculator import get_all_asset_curves_data_new_async
-                        from database.connection import async_session_factory
+                        from database.connection import get_async_session_factory
 
                         try:
-                            async with async_session_factory() as curve_db:
+                            async with get_async_session_factory()() as curve_db:
                                 asset_curves = await get_all_asset_curves_data_new_async(curve_db, timeframe)
                         except Exception as e:
                             logger.error(f"Failed to get asset curves: {e}", exc_info=True)

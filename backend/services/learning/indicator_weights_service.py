@@ -15,7 +15,7 @@ from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config.settings import settings
-from database.connection import async_session_factory
+from database.connection import get_async_session_factory
 from database.models import Account, IndicatorWeightsHistory
 
 logger = logging.getLogger(__name__)
@@ -138,7 +138,7 @@ async def should_auto_apply_today(account_id: int) -> bool:
         )
         return False
 
-    async with async_session_factory() as session:
+    async with get_async_session_factory()() as session:
         # Get last auto-apply from history
         result = await session.execute(
             select(IndicatorWeightsHistory)
@@ -189,7 +189,7 @@ async def get_weight_history(
     Returns:
         List of IndicatorWeightsHistory entries, newest first
     """
-    async with async_session_factory() as session:
+    async with get_async_session_factory()() as session:
         result = await session.execute(
             select(IndicatorWeightsHistory)
             .where(IndicatorWeightsHistory.account_id == account_id)
@@ -209,7 +209,7 @@ async def get_current_weights(account_id: int) -> Optional[Dict[str, float]]:
     Returns:
         Dictionary of indicator weights, or None if not set
     """
-    async with async_session_factory() as session:
+    async with get_async_session_factory()() as session:
         result = await session.execute(
             select(Account.indicator_weights).where(Account.id == account_id)
         )

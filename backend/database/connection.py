@@ -63,17 +63,45 @@ def create_engine() -> AsyncEngine:
     return engine
 
 
-# Global async engine instance
-engine = create_engine()
+# Global async engine instance - initialized in lifespan, NOT at import time
+# This prevents "Task got Future attached to a different loop" errors
+engine: AsyncEngine | None = None
+async_session_factory: async_sessionmaker | None = None
 
-# Async session factory
-async_session_factory = async_sessionmaker(
-    engine,
-    class_=AsyncSession,
-    expire_on_commit=False,
-    autocommit=False,
-    autoflush=False,
-)
+
+def init_async_engine() -> tuple[AsyncEngine, async_sessionmaker]:
+    """Initialize async engine and session factory.
+
+    Must be called inside FastAPI lifespan to bind to correct event loop.
+
+    Returns:
+        Tuple of (engine, async_session_factory)
+    """
+    global engine, async_session_factory
+
+    engine = create_engine()
+    async_session_factory = async_sessionmaker(
+        engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+        autocommit=False,
+        autoflush=False,
+    )
+
+    return engine, async_session_factory
+
+
+def get_async_session_factory() -> async_sessionmaker:
+    """Get the async session factory.
+
+    Raises:
+        RuntimeError: If engine not initialized (lifespan not started)
+    """
+    if async_session_factory is None:
+        raise RuntimeError(
+            "Database not initialized. Ensure FastAPI lifespan has started."
+        )
+    return async_session_factory
 
 # Legacy sync engine and session for compatibility (used in main.py startup)
 # Convert sync database URL for sync engine
@@ -90,6 +118,7 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
     Raises:
         PoolExhaustedException: When connection pool is exhausted
+        RuntimeError: If database not initialized
 
     Example:
         @app.get("/accounts")
@@ -100,8 +129,10 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     from services.exceptions import PoolExhaustedException
     from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
+    session_factory = get_async_session_factory()
+
     try:
-        async with async_session_factory() as session:
+        async with session_factory() as session:
             try:
                 yield session
                 await session.commit()
@@ -131,4 +162,9 @@ async def init_db() -> None:
 
 async def dispose_engine() -> None:
     """Dispose database engine on application shutdown."""
-    await engine.dispose()
+    global engine, async_session_factory
+
+    if engine is not None:
+        await engine.dispose()
+        engine = None
+        async_session_factory = None
