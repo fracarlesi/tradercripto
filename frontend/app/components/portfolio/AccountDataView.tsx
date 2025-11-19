@@ -138,7 +138,7 @@ export default function AccountDataView({
   return (
     <div className="h-full flex flex-col space-y-6">
       {/* Main Content */}
-      <div className={`grid gap-6 overflow-hidden ${showAssetCurves ? 'grid-cols-5' : 'grid-cols-1'} h-full`}>
+      <div className={`grid gap-6 ${showAssetCurves ? 'grid-cols-5' : 'grid-cols-1'}`}>
         {/* Asset Curves */}
         {showAssetCurves && (
           <div className="col-span-3">

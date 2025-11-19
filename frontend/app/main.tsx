@@ -281,7 +281,7 @@ function App() {
     }
 
     return (
-      <main className="flex-1 p-4 overflow-hidden">
+      <main className="flex-1 p-4 overflow-y-auto">
         {currentPage === 'comprehensive' && (
           <ComprehensiveView
             overview={overview}
