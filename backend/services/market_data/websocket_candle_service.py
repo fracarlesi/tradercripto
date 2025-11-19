@@ -57,7 +57,7 @@ class WebsocketCandleService:
 
     def __init__(
         self,
-        cache_dir: str = "/app/data/websocket_cache",
+        cache_dir: str = "./websocket_cache",
         max_candles_per_symbol: int = 70,
         reconnect_delay_base: float = 1.0,
         reconnect_delay_max: float = 60.0,

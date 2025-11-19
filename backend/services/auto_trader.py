@@ -1397,12 +1397,14 @@ async def check_take_profit_async() -> None:
             logger.debug("No valid positions to check for take-profit")
             return
 
-        logger.info(f"AI Take Profit Agent checking {len(valid_positions)} positions in PARALLEL")
+        logger.info(f"AI Take Profit Agent checking {len(valid_positions)} positions SEQUENTIALLY")
 
-        # Create tasks for all positions (parallel execution)
-        async def check_single_position(pos):
-            """Check single position and return (position_data, decision)."""
+        # Execute AI calls SEQUENTIALLY to avoid overlapping and rate limits
+        for pos in valid_positions:
             position_data = pos['position']
+            coin = position_data['coin']
+            szi = float(position_data.get('szi', 0))
+
             try:
                 decision = await call_exit_agent(
                     account=account,
@@ -1410,25 +1412,9 @@ async def check_take_profit_async() -> None:
                     technical_factors=technical_factors,
                     agent_type="TAKE_PROFIT"
                 )
-                return (position_data, decision)
             except Exception as e:
-                logger.error(f"Error in AI take-profit for {position_data.get('coin')}: {e}", exc_info=True)
-                return (position_data, None)
-
-        # Execute ALL AI calls in parallel using asyncio.gather()
-        import asyncio
-        tasks = [check_single_position(pos) for pos in valid_positions]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        # Process results
-        for result in results:
-            if isinstance(result, Exception):
-                logger.error(f"Parallel task failed: {result}", exc_info=True)
+                logger.error(f"Error in AI take-profit for {coin}: {e}", exc_info=True)
                 continue
-
-            position_data, decision = result
-            coin = position_data['coin']
-            szi = float(position_data.get('szi', 0))
 
             if decision and decision.should_exit and decision.confidence >= 0.6:
                 logger.warning(
