@@ -154,8 +154,7 @@ async def lifespan(app: FastAPI):
 
         # Add strategy-based exit checker (every 180 seconds = 3 minutes)
         # This checks positions for dynamic exit criteria based on trading strategy type
-        # DISABLED FOR DEBUGGING - Testing AI agent blocking issue
-        # from services.trading.strategy_exit_checker import check_strategy_exits_sync
+        from services.trading.strategy_exit_checker import check_strategy_exits_sync
 
         scheduler_service.add_sync_job(
             job_func=check_strategy_exits_sync,
