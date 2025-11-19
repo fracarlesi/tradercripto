@@ -517,6 +517,41 @@ class Account:
 
 **Action**: When refactoring or identifying obsolete code, **delete it immediately** - do NOT ask for permission.
 
+## 🚫 NEVER DISABLE SCHEDULED AGENTS FOR DEBUGGING
+
+**CRITICAL RULE**: NEVER comment out or disable scheduled agents in `main.py`.
+
+**Why this is critical**:
+- Disabled agents mean no trading, no stop-loss, no take-profit
+- System appears to work but positions sit idle without management
+- Can result in significant financial losses from unmonitored positions
+
+**What happened (2025-11-20)**:
+- 4 agents were disabled "for debugging" and never re-enabled
+- `strategy_exit_check`, `stop_loss_check`, `ai_crypto_trade`, `take_profit_check`
+- System stopped trading and managing positions for days
+
+**If you need to debug agents**:
+1. **Use environment variables** to conditionally disable (e.g., `DEBUG_DISABLE_TRADING=true`)
+2. **Add logging** instead of commenting out code
+3. **Use separate test account** for debugging
+4. **NEVER commit disabled agents** to main branch
+5. **If you must disable**: Add TODO comment with date and reason, re-enable same session
+
+**Pre-commit checklist** (grep for these patterns):
+```bash
+grep -n "DISABLED" backend/main.py  # Should return 0 results
+grep -n "# scheduler" backend/main.py  # Check for commented schedulers
+```
+
+**Active agents that MUST be running** (in `main.py`):
+- `strategy_exit_check` (3 min)
+- `stop_loss_check` (5 min)
+- `ai_crypto_trade` (3 min)
+- `take_profit_check` (5 min)
+- `periodic_sync_job` (30 sec)
+- `daily_ai_usage_reset` (daily)
+
 ## 🚨 MANDATORY ERROR HANDLING PATTERNS
 
 **CRITICAL RULE**: ALWAYS use `exc_info=True` when logging exceptions.
