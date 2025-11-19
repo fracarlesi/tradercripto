@@ -145,11 +145,13 @@ async def lifespan(app: FastAPI):
         )
 
         # Add daily AI usage reset job at midnight (T101)
-        from services.infrastructure.usage_tracker import reset_ai_usage_daily
+        # DISABLED FOR DEBUGGING - Testing AI agent blocking issue
+        # from services.infrastructure.usage_tracker import reset_ai_usage_daily
 
-        scheduler_service.add_cron_job(
-            job_func=reset_ai_usage_daily, hour=0, minute=0, job_id="ai_usage_daily_reset"
-        )
+        # scheduler_service.add_cron_job(
+        #     job_func=reset_ai_usage_daily, hour=0, minute=0, job_id="ai_usage_daily_reset"
+        # )
+        logger.info("⚠️ ai_usage_daily_reset DISABLED for debugging")
 
         # Add strategy-based exit checker (every 180 seconds = 3 minutes)
         # This checks positions for dynamic exit criteria based on trading strategy type
@@ -165,15 +167,16 @@ async def lifespan(app: FastAPI):
 
         # Add momentum reversal exit checker (every 60 seconds = 1 minute)
         # CRITICAL for momentum surfing: exit quickly when momentum reverses
-        from services.trading.momentum_exit_checker import check_momentum_exit_sync
+        # DISABLED FOR DEBUGGING - Testing AI agent blocking issue
+        # from services.trading.momentum_exit_checker import check_momentum_exit_sync
 
-        scheduler_service.add_sync_job(
-            job_func=check_momentum_exit_sync,
-            interval_seconds=60,  # 1 minute - frequent checks for quick exits
-            job_id="momentum_exit_check",
-            start_delay_seconds=0,  # Starts at :00 each minute
-        )
-        logger.info("Strategy exit checker scheduled (every 3 minutes, dynamic rules)")
+        # scheduler_service.add_sync_job(
+        #     job_func=check_momentum_exit_sync,
+        #     interval_seconds=60,  # 1 minute - frequent checks for quick exits
+        #     job_id="momentum_exit_check",
+        #     start_delay_seconds=0,  # Starts at :00 each minute
+        # )
+        logger.info("⚠️ momentum_exit_check DISABLED for debugging")
 
         # Add stop-loss check job (every 300 seconds = 5 minutes) - Optimized to avoid overlap
         # NOTE: This is now a BACKUP safety check, primary exits handled by strategy_exit_check
