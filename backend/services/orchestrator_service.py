@@ -63,17 +63,20 @@ class OrchestratorService:
         current_positions: List[Dict[str, Any]]
     ) -> List[OrchestratorDecision]:
         """
-        Resolve proposals from both agents and return final decisions.
+        Resolve proposals from both agents and return the SINGLE best decision.
 
-        Conflict Resolution Rules:
-        1. Same symbol conflict: Higher confidence wins
-        2. Capital conflict: Proportional allocation
-        3. Existing position conflict: Can't open opposite on same asset
+        Selection Strategy (momentum surfing optimization):
+        - Only execute ONE trade per cycle (highest technical score wins)
+        - This ensures DeepSeek makes decisions with accurate portfolio state
+        - Avoids conflicting market bets that hedge momentum strategy
+
+        Blocking Rules:
+        - Cannot open opposite position on same asset
 
         Returns:
-            List of decisions to execute (0, 1, or 2)
+            List with 0 or 1 decision (never multiple)
         """
-        decisions = []
+        candidates = []
 
         # Build current positions map
         positions_map = {}
@@ -82,40 +85,6 @@ class OrchestratorService:
             size = float(pos.get("szi", 0) or pos.get("quantity", 0))
             if size != 0:
                 positions_map[symbol] = "LONG" if size > 0 else "SHORT"
-
-        # Check for same-symbol conflict
-        if (long_proposal and short_proposal and
-            long_proposal.symbol == short_proposal.symbol and
-            long_proposal.operation in ["buy"] and
-            short_proposal.operation in ["short"]):
-
-            # Conflict! Choose based on confidence/technical score
-            if long_proposal.confidence >= short_proposal.confidence:
-                winner = long_proposal
-                loser_type = "SHORT"
-            else:
-                winner = short_proposal
-                loser_type = "LONG"
-
-            logger.info(
-                f"Conflict resolved: {winner.agent_type} wins on {winner.symbol} "
-                f"(confidence {winner.confidence:.2f} vs {loser_type})"
-            )
-
-            decisions.append(OrchestratorDecision(
-                execute=True,
-                agent_type=winner.agent_type,
-                operation=winner.operation,
-                symbol=winner.symbol,
-                target_portion=winner.target_portion * (
-                    self.long_capital_ratio if winner.agent_type == "LONG"
-                    else self.short_capital_ratio
-                ),
-                leverage=winner.leverage,
-                reasoning=winner.reasoning,
-                conflict_resolution=f"Won against {loser_type} agent on same symbol"
-            ))
-            return decisions
 
         # Process LONG proposal
         if long_proposal and long_proposal.operation != "hold":
@@ -128,13 +97,9 @@ class OrchestratorService:
                         f"while SHORT position exists"
                     )
                 else:
-                    decisions.append(self._create_decision(
-                        long_proposal, self.long_capital_ratio
-                    ))
+                    candidates.append(("LONG", long_proposal))
             else:
-                decisions.append(self._create_decision(
-                    long_proposal, self.long_capital_ratio
-                ))
+                candidates.append(("LONG", long_proposal))
 
         # Process SHORT proposal
         if short_proposal and short_proposal.operation != "hold":
@@ -147,25 +112,58 @@ class OrchestratorService:
                         f"while LONG position exists"
                     )
                 else:
-                    decisions.append(self._create_decision(
-                        short_proposal, self.short_capital_ratio
-                    ))
+                    candidates.append(("SHORT", short_proposal))
             else:
-                decisions.append(self._create_decision(
-                    short_proposal, self.short_capital_ratio
-                ))
+                candidates.append(("SHORT", short_proposal))
 
-        # Log summary
-        if not decisions:
+        # No valid candidates
+        if not candidates:
             logger.info("Orchestrator: No trades to execute (all HOLD or blocked)")
-        else:
-            for d in decisions:
-                logger.info(
-                    f"Orchestrator decision: {d.agent_type} {d.operation} "
-                    f"{d.symbol} @ {d.target_portion*100:.1f}% capital, {d.leverage}x"
-                )
+            return []
 
-        return decisions
+        # Select BEST candidate by technical score (momentum surfing strategy)
+        if len(candidates) == 1:
+            winner_type, winner = candidates[0]
+            logger.info(
+                f"Single proposal: {winner_type} {winner.operation} {winner.symbol} "
+                f"(score: {winner.technical_score:.4f})"
+            )
+        else:
+            # Compare by technical score
+            long_type, long_prop = candidates[0] if candidates[0][0] == "LONG" else candidates[1]
+            short_type, short_prop = candidates[1] if candidates[1][0] == "SHORT" else candidates[0]
+
+            if long_prop.technical_score >= short_prop.technical_score:
+                winner_type, winner = "LONG", long_prop
+                loser_type, loser = "SHORT", short_prop
+            else:
+                winner_type, winner = "SHORT", short_prop
+                loser_type, loser = "LONG", long_prop
+
+            logger.info(
+                f"Best trade selected: {winner_type} {winner.operation} {winner.symbol} "
+                f"(score: {winner.technical_score:.4f}) beats {loser_type} {loser.symbol} "
+                f"(score: {loser.technical_score:.4f})"
+            )
+
+        # Create single decision with FULL capital allocation (no 50/50 split)
+        decision = OrchestratorDecision(
+            execute=True,
+            agent_type=winner_type,
+            operation=winner.operation,
+            symbol=winner.symbol,
+            target_portion=winner.target_portion,  # Use full requested portion
+            leverage=winner.leverage,
+            reasoning=winner.reasoning,
+            conflict_resolution=f"Selected as best trade (score: {winner.technical_score:.4f})" if len(candidates) > 1 else None
+        )
+
+        logger.info(
+            f"Orchestrator decision: {decision.agent_type} {decision.operation} "
+            f"{decision.symbol} @ {decision.target_portion*100:.1f}% capital, {decision.leverage}x"
+        )
+
+        return [decision]
 
     def _create_decision(
         self,

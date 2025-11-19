@@ -280,6 +280,9 @@ class HyperliquidSyncService:
     ) -> int:
         """Sync orders from Hyperliquid fills with deduplication (T036).
 
+        Groups multiple fills by OID to create orders with correct total quantity
+        and weighted average price.
+
         Args:
             db: Async database session
             account: Account to sync
@@ -294,37 +297,74 @@ class HyperliquidSyncService:
         try:
             created_count = 0
 
+            # Group fills by OID (Order ID from Hyperliquid)
+            orders_by_oid: dict[str, dict[str, Any]] = {}
+
             for fill in fills:
                 coin = fill.get("coin")
-                side_char = fill.get("side")  # 'B' or 'S'
+                side_char = fill.get("side")  # 'B' or 'A' (Ask = Sell)
                 size = Decimal(str(fill.get("sz", "0")))
                 price = Decimal(str(fill.get("px", "0")))
                 time_ms = fill.get("time")
+                oid = str(fill.get("oid", ""))  # Hyperliquid Order ID
 
-                if not all([coin, side_char, time_ms]):
+                if not all([coin, side_char, time_ms, oid]):
                     continue
 
-                # Generate unique order_no from fill data
+                if oid not in orders_by_oid:
+                    # First fill for this order
+                    orders_by_oid[oid] = {
+                        "coin": coin,
+                        "side_char": side_char,
+                        "time_ms": time_ms,
+                        "total_qty": size,
+                        "total_value": size * price,  # For weighted average
+                        "fills": [{"size": size, "price": price}],
+                    }
+                else:
+                    # Additional fill for existing order - aggregate
+                    orders_by_oid[oid]["total_qty"] += size
+                    orders_by_oid[oid]["total_value"] += size * price
+                    orders_by_oid[oid]["fills"].append({"size": size, "price": price})
+
+            # Create orders from aggregated data
+            for oid, order_data in orders_by_oid.items():
+                coin = order_data["coin"]
+                side_char = order_data["side_char"]
+                time_ms = order_data["time_ms"]
+                total_qty = order_data["total_qty"]
+                total_value = order_data["total_value"]
+
+                # Calculate weighted average price
+                avg_price = total_value / total_qty if total_qty > 0 else Decimal("0")
+
+                # Generate unique order_no using OID
                 order_no = f"HL_{time_ms}_{coin}_{side_char}"
 
                 # Check if order already exists (deduplication)
                 existing = await OrderRepository.get_by_order_no(db=db, order_no=order_no)
                 if existing:
+                    # Update existing order if quantity changed (partial fills arrived later)
+                    if existing.quantity != total_qty:
+                        existing.quantity = total_qty
+                        existing.filled_quantity = total_qty
+                        existing.price = avg_price
+                        await db.flush()
                     continue
 
                 # Convert side to standard format
                 side = "BUY" if side_char == "B" else "SELL"
 
-                # Create order
+                # Create order with aggregated data
                 order = Order(
                     account_id=account.id,
                     order_no=order_no,
                     symbol=coin,
                     side=side,
                     order_type="MARKET",
-                    price=price,
-                    quantity=size,
-                    filled_quantity=size,
+                    price=avg_price,
+                    quantity=total_qty,
+                    filled_quantity=total_qty,
                     status="FILLED",
                 )
 
