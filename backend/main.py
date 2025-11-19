@@ -173,15 +173,16 @@ async def lifespan(app: FastAPI):
         )
         logger.info("Strategy exit checker scheduled (every 3 minutes, dynamic rules)")
 
-        # Add stop-loss check job (every 60 seconds) - Optimized to reduce API calls
+        # Add stop-loss check job (every 120 seconds) - Optimized to avoid overlap with other AI jobs
         # NOTE: This is now a BACKUP safety check, primary exits handled by strategy_exit_check
+        # Increased from 60s to 120s because AI calls take ~50s for 7 positions
         from services.auto_trader import check_stop_loss_async, check_take_profit_async, place_multi_agent_order
 
         scheduler_service.add_sync_job(
             job_func=check_stop_loss_async,
-            interval_seconds=60,
+            interval_seconds=120,  # 2 minutes - gives time to complete before next job
             job_id="stop_loss_check",
-            start_delay_seconds=15,  # Starts at :15 each minute
+            start_delay_seconds=0,  # Starts immediately
         )
 
         # Add MULTI-AGENT ORCHESTRATED trading job (every 3 minutes)
@@ -196,14 +197,16 @@ async def lifespan(app: FastAPI):
         )
         logger.info("✅ MULTI-AGENT ORCHESTRATOR trading ENABLED (LONG + SHORT agents every 3 minutes)")
 
-        # Add take-profit check job (every 60 seconds) - Automatically locks in +10% profits
+        # Add take-profit check job (every 120 seconds) - Automatically locks in +10% profits
+        # Increased from 60s to 120s and staggered by 60s after stop_loss to avoid overlap
+        # AI calls take ~50s for 7 positions, so need 60s gap between AI jobs
         scheduler_service.add_sync_job(
             job_func=check_take_profit_async,
-            interval_seconds=60,
+            interval_seconds=120,  # 2 minutes - matches stop_loss interval
             job_id="take_profit_check",
-            start_delay_seconds=30,  # Starts at :30 each minute
+            start_delay_seconds=60,  # Starts 60s after stop_loss
         )
-        logger.info("Take-profit job scheduled (every 60 seconds, +10% threshold)")
+        logger.info("Take-profit job scheduled (every 120 seconds, +10% threshold)")
 
     except Exception as e:
         print(f"Warning: Failed to start scheduler: {e}")
