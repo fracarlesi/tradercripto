@@ -20,10 +20,9 @@ def initialize_services() -> None:
         start_scheduler()
         logger.info("Scheduler service started")
 
-        # AI trading now handled by APScheduler in main.py (non-blocking)
-        # This prevents the custom scheduler thread from blocking during long technical analysis
-        # schedule_auto_trading(interval_seconds=180)
-        # logger.info("Automatic cryptocurrency trading task started (3-minute interval)")
+        # AI trading - 3 minute interval for momentum surfing
+        schedule_auto_trading(interval_seconds=180)
+        logger.info("Automatic cryptocurrency trading task started (3-minute interval)")
 
         # Add price cache cleanup task (every 2 minutes)
         from services.market_data.price_cache import clear_expired_prices
@@ -53,10 +52,10 @@ def initialize_services() -> None:
 
         task_scheduler.add_interval_task(
             task_func=capture_snapshots_wrapper,
-            interval_seconds=60,  # Capture every 1 minute
+            interval_seconds=300,  # Capture every 5 minutes
             task_id="portfolio_snapshot_capture",
         )
-        logger.info("Portfolio snapshot capture task started (1-minute interval)")
+        logger.info("Portfolio snapshot capture task started (5-minute interval)")
 
         # DISABLED: Counterfactual learning (replaced by hourly market retrospective)
         # Old 24h feedback system - too slow for real-time trading

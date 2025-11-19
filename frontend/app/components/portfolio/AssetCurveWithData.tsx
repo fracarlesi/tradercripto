@@ -42,7 +42,7 @@ interface AssetCurveProps {
   wsRef?: React.MutableRefObject<WebSocket | null>
 }
 
-type Timeframe = '5m' | '1h' | '1d' | 'all'
+type Timeframe = '15m' | '1h' | '1d' | 'all'
 
 export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps) {
   const [timeframe, setTimeframe] = useState<Timeframe>('1h')
@@ -64,8 +64,8 @@ export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps
     const now = Date.now()
     let cutoffTime: number
 
-    if (tf === '5m') {
-      cutoffTime = now - (5 * 60 * 1000) // 5 minutes ago
+    if (tf === '15m') {
+      cutoffTime = now - (15 * 60 * 1000) // 15 minutes ago
     } else if (tf === '1h') {
       cutoffTime = now - (60 * 60 * 1000) // 1 hour ago
     } else if (tf === '1d') {
@@ -161,7 +161,7 @@ export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps
           <div className="flex justify-between items-center">
             <Tabs value={timeframe} onValueChange={handleTimeframeChange}>
               <TabsList>
-                <TabsTrigger value="5m">5 Minutes</TabsTrigger>
+                <TabsTrigger value="15m">15 Minutes</TabsTrigger>
                 <TabsTrigger value="1h">1 Hour</TabsTrigger>
                 <TabsTrigger value="1d">1 Day</TabsTrigger>
                 <TabsTrigger value="all">All Time</TabsTrigger>
@@ -206,7 +206,7 @@ export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps
   // Format labels based on timeframe
   const formatLabel = (timestamp: string) => {
     const d = new Date(timestamp)
-    if (timeframe === '5m') {
+    if (timeframe === '15m') {
       return d.toLocaleTimeString('en-US', {
         hour: '2-digit',
         minute: '2-digit'
@@ -302,7 +302,7 @@ export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps
         <div className="flex justify-between items-center">
           <Tabs value={timeframe} onValueChange={handleTimeframeChange}>
             <TabsList>
-              <TabsTrigger value="5m">5 Minutes</TabsTrigger>
+              <TabsTrigger value="15m">15 Minutes</TabsTrigger>
               <TabsTrigger value="1h">1 Hour</TabsTrigger>
               <TabsTrigger value="1d">1 Day</TabsTrigger>
               <TabsTrigger value="all">All Time</TabsTrigger>

@@ -39,9 +39,9 @@ async def get_all_asset_curves_data_new_async(db: AsyncSession, timeframe: str =
         # Calculate time range based on timeframe
         end_time = datetime.now(UTC)
 
-        if timeframe == "5m":
-            # Last 8 hours (96 snapshots at 5-min intervals)
-            start_time = end_time - timedelta(hours=8)
+        if timeframe == "15m":
+            # Last 15 minutes (3 snapshots at 5-min intervals)
+            start_time = end_time - timedelta(minutes=15)
         elif timeframe == "1h":
             # Last 1 hour (12 snapshots at 5-min intervals)
             start_time = end_time - timedelta(hours=1)
