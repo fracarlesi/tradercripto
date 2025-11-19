@@ -291,15 +291,20 @@ async def _send_snapshot_async_impl(db: AsyncSession, account_id: int):
                 entry_side = 'buy' if size > 0 else 'sell'
 
                 # Find entry commission from recent trades
-                result = await db.execute(
-                    select(func.sum(Trade.commission))
+                # Use subquery to get last 5 trades, then sum their commissions
+                subquery = (
+                    select(Trade.commission)
                     .where(
                         Trade.account_id == account_id,
                         Trade.symbol == coin,
                         Trade.side == entry_side
                     )
                     .order_by(Trade.trade_time.desc())
-                    .limit(5)  # Sum last 5 entries (handles partial fills)
+                    .limit(5)
+                    .subquery()
+                )
+                result = await db.execute(
+                    select(func.sum(subquery.c.commission))
                 )
                 total_commission = result.scalar()
                 entry_commissions[coin] = float(total_commission) if total_commission else 0.0
