@@ -1,7 +1,7 @@
 """Trade History API - Complete trade log with P&L and duration"""
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import List, Dict, Any, Optional
 
@@ -27,27 +27,24 @@ async def _calculate_complete_trades(
     Calculate complete trades by pairing entry/exit fills.
 
     Algorithm:
-    1. Fetch all trades for account (filtered by minutes/symbol if provided)
+    1. Fetch ALL trades for account (no time filter on fills)
     2. Group by symbol
     3. For each symbol, sort by time and pair buy→sell or sell→buy (for shorts)
     4. Calculate P&L and duration for each complete trade
+    5. Filter complete trades by exit_time if minutes is provided
 
     Args:
         account_id: Account ID to fetch trades for
         db: Database session
-        minutes: Optional filter for last N minutes
+        minutes: Optional filter - filters by EXIT TIME of complete trades
         symbol_filter: Optional filter for specific symbol
 
     Returns:
         List of complete trade dicts with entry/exit/pnl/duration
     """
     try:
-        # Build query
+        # Build query - fetch ALL trades (no time filter on individual fills)
         query = select(Trade).where(Trade.account_id == account_id)
-
-        if minutes:
-            cutoff = datetime.utcnow() - timedelta(minutes=minutes)
-            query = query.where(Trade.trade_time >= cutoff)
 
         if symbol_filter:
             query = query.where(Trade.symbol == symbol_filter)
@@ -230,6 +227,20 @@ async def _calculate_complete_trades(
                             'entry_commission': commission,
                             'trade_id': trade.id
                         })
+
+        # Filter by exit_time if minutes is provided (using UTC)
+        if minutes:
+            cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+            # Convert cutoff to naive datetime string for comparison with DB timestamps
+            # (DB stores naive UTC timestamps, so we strip timezone info for comparison)
+            cutoff_naive = cutoff.replace(tzinfo=None).isoformat()
+            complete_trades = [
+                t for t in complete_trades
+                if t['exit_time'] >= cutoff_naive
+            ]
+            logger.info(
+                f"Filtered to {len(complete_trades)} trades with exit_time >= {cutoff_naive} UTC"
+            )
 
         logger.info(
             f"Calculated {len(complete_trades)} complete trades for account {account_id} "
