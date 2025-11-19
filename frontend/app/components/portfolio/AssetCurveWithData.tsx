@@ -206,23 +206,21 @@ export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps
   // Format labels based on timeframe
   const formatLabel = (timestamp: string) => {
     const d = new Date(timestamp)
-    if (timeframe === '15m') {
+    if (timeframe === '15m' || timeframe === '1h') {
+      // For short timeframes, show only time (HH:MM)
       return d.toLocaleTimeString('en-US', {
         hour: '2-digit',
         minute: '2-digit'
       })
-    } else if (timeframe === '1h') {
+    } else if (timeframe === '1d') {
+      // For 1 day, show date and hour
       return d.toLocaleString('en-US', {
         month: 'short',
         day: 'numeric',
         hour: '2-digit'
       })
-    } else if (timeframe === '1d' || timeframe === 'all') {
-      return d.toLocaleDateString('en-US', {
-        month: 'short',
-        day: 'numeric'
-      })
     } else {
+      // For all time, show just date
       return d.toLocaleDateString('en-US', {
         month: 'short',
         day: 'numeric'
@@ -273,7 +271,7 @@ export default function AssetCurve({ data: initialData, wsRef }: AssetCurveProps
         display: true,
         title: {
           display: true,
-          text: 'Date',
+          text: timeframe === '15m' || timeframe === '1h' ? 'Time' : 'Date',
         },
       },
       y: {
