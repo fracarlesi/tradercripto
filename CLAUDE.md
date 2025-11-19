@@ -527,8 +527,8 @@ class Account:
 - Can result in significant financial losses from unmonitored positions
 
 **What happened (2025-11-20)**:
-- 4 agents were disabled "for debugging" and never re-enabled
-- `strategy_exit_check`, `stop_loss_check`, `ai_crypto_trade`, `take_profit_check`
+- 3 agents were disabled "for debugging" and never re-enabled
+- `stop_loss_check`, `ai_crypto_trade`, `take_profit_check`
 - System stopped trading and managing positions for days
 
 **If you need to debug agents**:
@@ -545,7 +545,6 @@ grep -n "# scheduler" backend/main.py  # Check for commented schedulers
 ```
 
 **Active agents that MUST be running** (in `main.py`):
-- `strategy_exit_check` (3 min)
 - `stop_loss_check` (5 min)
 - `ai_crypto_trade` (3 min)
 - `take_profit_check` (5 min)

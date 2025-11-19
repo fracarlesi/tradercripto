@@ -152,21 +152,8 @@ async def lifespan(app: FastAPI):
             start_delay_seconds=45,  # Starts at :45 each minute
         )
 
-        # Add strategy-based exit checker (every 180 seconds = 3 minutes)
-        # This checks positions for dynamic exit criteria based on trading strategy type
-        from services.trading.strategy_exit_checker import check_strategy_exits_sync
-
-        scheduler_service.add_sync_job(
-            job_func=check_strategy_exits_sync,
-            interval_seconds=180,  # 3 minutes
-            job_id="strategy_exit_check"
-        )
-        logger.info("✅ strategy_exit_check enabled (3-min interval)")
-
-        # Add stop-loss check job (every 300 seconds = 5 minutes) - Optimized to avoid overlap
-        # NOTE: This is now a BACKUP safety check, primary exits handled by strategy_exit_check
-        # Increased to 5 minutes because AI calls take ~50s for 7 positions
-        # DISABLED FOR DEBUGGING - Testing AI agent blocking issue
+        # Add stop-loss check job (every 300 seconds = 5 minutes)
+        # AI calls take ~50s for 7 positions
         from services.auto_trader import check_stop_loss_async, check_take_profit_async, place_multi_agent_order
 
         scheduler_service.add_sync_job(
