@@ -545,8 +545,8 @@ class HyperliquidSyncService:
                 # 1. Sync positions (clear-recreate - commits internally)
                 positions_synced = await self.sync_positions(db=db, account=account)
 
-                # 2. Get fills from Hyperliquid
-                fills = await hyperliquid_trading_service.get_user_fills_async(limit=100)
+                # 2. Get fills from Hyperliquid (500 to capture more history)
+                fills = await hyperliquid_trading_service.get_user_fills_async(limit=500)
 
                 # 3. Sync orders from fills
                 orders_synced = await self.sync_orders_from_fills(
