@@ -144,15 +144,6 @@ async def lifespan(app: FastAPI):
             start_delay_seconds=45,  # Starts at :45 each minute
         )
 
-        # Add daily AI usage reset job at midnight (T101)
-        # DISABLED FOR DEBUGGING - Testing AI agent blocking issue
-        # from services.infrastructure.usage_tracker import reset_ai_usage_daily
-
-        # scheduler_service.add_cron_job(
-        #     job_func=reset_ai_usage_daily, hour=0, minute=0, job_id="ai_usage_daily_reset"
-        # )
-        logger.info("⚠️ ai_usage_daily_reset DISABLED for debugging")
-
         # Add strategy-based exit checker (every 180 seconds = 3 minutes)
         # This checks positions for dynamic exit criteria based on trading strategy type
         # DISABLED FOR DEBUGGING - Testing AI agent blocking issue
@@ -164,19 +155,6 @@ async def lifespan(app: FastAPI):
         #     job_id="strategy_exit_check"
         # )
         logger.info("⚠️ strategy_exit_check DISABLED for debugging")
-
-        # Add momentum reversal exit checker (every 60 seconds = 1 minute)
-        # CRITICAL for momentum surfing: exit quickly when momentum reverses
-        # DISABLED FOR DEBUGGING - Testing AI agent blocking issue
-        # from services.trading.momentum_exit_checker import check_momentum_exit_sync
-
-        # scheduler_service.add_sync_job(
-        #     job_func=check_momentum_exit_sync,
-        #     interval_seconds=60,  # 1 minute - frequent checks for quick exits
-        #     job_id="momentum_exit_check",
-        #     start_delay_seconds=0,  # Starts at :00 each minute
-        # )
-        logger.info("⚠️ momentum_exit_check DISABLED for debugging")
 
         # Add stop-loss check job (every 300 seconds = 5 minutes) - Optimized to avoid overlap
         # NOTE: This is now a BACKUP safety check, primary exits handled by strategy_exit_check
@@ -470,7 +448,6 @@ from api.ranking_routes import router as ranking_router
 # API routes (new async)
 try:
     from api.accounts_async import router as accounts_async_router
-    from api.ai_routes import router as ai_router  # AI usage tracking (T100)
     from api.health_routes import router as health_router
     from api.learning_routes import router as learning_router  # Counterfactual learning
     from api.market_data_async import router as market_data_async_router
@@ -483,7 +460,6 @@ try:
     app.include_router(accounts_async_router)
     app.include_router(market_data_async_router)
     app.include_router(orders_async_router)
-    app.include_router(ai_router)  # AI usage tracking endpoint (T100)
     app.include_router(learning_router)  # Counterfactual learning & self-analysis
     app.include_router(trade_history_router)  # Trade history with P&L and duration
 
