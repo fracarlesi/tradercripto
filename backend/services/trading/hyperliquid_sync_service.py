@@ -442,7 +442,18 @@ class HyperliquidSyncService:
                     db=db, account_id=account.id, trade_time=trade_time, symbol=coin, quantity=size, price=price
                 )
                 if existing:
+                    # Debug logging for TAO to diagnose missing trades
+                    if coin == "TAO":
+                        logger.debug(
+                            f"TAO duplicate found: {trade_time} ${price} qty={size} -> matches id={existing.id}"
+                        )
                     continue
+                else:
+                    # Debug logging for new TAO trades
+                    if coin == "TAO":
+                        logger.info(
+                            f"TAO new trade: {trade_time} ${price} qty={size}"
+                        )
 
                 # Convert side to standard format
                 side = "BUY" if side_char == "B" else "SELL"
