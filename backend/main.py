@@ -169,7 +169,7 @@ async def lifespan(app: FastAPI):
         # DISABLED FOR DEBUGGING - Testing AI agent blocking issue
         from services.auto_trader import check_stop_loss_async, check_take_profit_async, place_multi_agent_order
 
-        scheduler_service.add_async_job(
+        scheduler_service.add_sync_job(
             job_func=check_stop_loss_async,
             interval_seconds=300,  # 5 minutes - plenty of time between AI jobs
             job_id="stop_loss_check",
@@ -192,7 +192,7 @@ async def lifespan(app: FastAPI):
         # Add take-profit check job (every 300 seconds = 5 minutes) - Automatically locks in +10% profits
         # Staggered by 150s (2.5 min) after stop_loss to ensure no overlap
         # AI calls take ~50s for 7 positions
-        scheduler_service.add_async_job(
+        scheduler_service.add_sync_job(
             job_func=check_take_profit_async,
             interval_seconds=300,  # 5 minutes - matches stop_loss interval
             job_id="take_profit_check",
