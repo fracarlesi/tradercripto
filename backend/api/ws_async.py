@@ -255,16 +255,29 @@ async def _send_snapshot_async_impl(db: AsyncSession, account_id: int):
         logger.error(f"Failed to fetch market prices from Hyperliquid: {e}", exc_info=True)
         all_mids = {}
 
-    # Get entry commissions for open positions from database
+    # Get entry commissions and strategy types for open positions from database
     # Query recent trades that opened current positions
     from sqlalchemy import func
+    from database.models import Position
     entry_commissions = {}
+    strategy_types = {}
     if hl_positions:
         # Get coins that have open positions
         open_coins = [asset_pos.get('position', {}).get('coin', '') for asset_pos in hl_positions]
         open_coins = [c for c in open_coins if c]  # Filter empty
 
         if open_coins:
+            # Query strategy_type from Position table for all open coins
+            result = await db.execute(
+                select(Position.symbol, Position.strategy_type)
+                .where(
+                    Position.account_id == account_id,
+                    Position.symbol.in_(open_coins)
+                )
+            )
+            for row in result.fetchall():
+                strategy_types[row[0]] = row[1]
+
             # For each coin, find the most recent entry trade (buy for LONG, sell for SHORT)
             # This is an approximation - we look for the most recent trade that matches the position direction
             for asset_pos in hl_positions:
@@ -340,6 +353,7 @@ async def _send_snapshot_async_impl(db: AsyncSession, account_id: int):
             "estimated_exit_commission": round(estimated_exit_commission, 4),
             "return_on_equity": return_on_equity,
             "margin_used": margin_used,
+            "strategy_type": strategy_types.get(coin),  # Trading strategy from database
         })
 
     # Get asset curve data for the chart (default timeframe: 1h)

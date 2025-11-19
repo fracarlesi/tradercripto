@@ -45,6 +45,7 @@ interface Position {
   estimated_exit_commission?: number | null  // Estimated exit commission
   return_on_equity?: number | null  // ROE % from Hyperliquid
   margin_used?: number | null  // Margin used from Hyperliquid
+  strategy_type?: string | null  // Trading strategy (e.g., MOMENTUM_BREAKOUT)
 }
 
 interface Order {
@@ -289,7 +290,7 @@ function PositionList({ positions }: { positions: Position[] }) {
         <TableHeader>
           <TableRow>
             <TableHead>Symbol</TableHead>
-            <TableHead>Name</TableHead>
+            <TableHead>Strategy</TableHead>
             <TableHead>Qty</TableHead>
             <TableHead>Avg Cost</TableHead>
             <TableHead>Last Price</TableHead>
@@ -308,7 +309,15 @@ function PositionList({ positions }: { positions: Position[] }) {
             return (
               <TableRow key={p.id}>
                 <TableCell>{p.symbol}.{p.market}</TableCell>
-                <TableCell>{p.name}</TableCell>
+                <TableCell>
+                  {p.strategy_type ? (
+                    <span className="px-2 py-1 rounded text-xs font-medium bg-blue-100 text-blue-800">
+                      {p.strategy_type}
+                    </span>
+                  ) : (
+                    <span className="text-gray-400 text-xs">-</span>
+                  )}
+                </TableCell>
                 <TableCell>{p.quantity.toLocaleString()}</TableCell>
                 <TableCell>${p.avg_cost.toFixed(4)}</TableCell>
                 <TableCell>${p.last_price?.toFixed(4) ?? '-'}</TableCell>
