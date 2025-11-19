@@ -153,13 +153,15 @@ async def lifespan(app: FastAPI):
 
         # Add strategy-based exit checker (every 180 seconds = 3 minutes)
         # This checks positions for dynamic exit criteria based on trading strategy type
-        from services.trading.strategy_exit_checker import check_strategy_exits_sync
+        # DISABLED FOR DEBUGGING - Testing AI agent blocking issue
+        # from services.trading.strategy_exit_checker import check_strategy_exits_sync
 
-        scheduler_service.add_sync_job(
-            job_func=check_strategy_exits_sync,
-            interval_seconds=180,  # 3 minutes
-            job_id="strategy_exit_check"
-        )
+        # scheduler_service.add_sync_job(
+        #     job_func=check_strategy_exits_sync,
+        #     interval_seconds=180,  # 3 minutes
+        #     job_id="strategy_exit_check"
+        # )
+        logger.info("⚠️ strategy_exit_check DISABLED for debugging")
 
         # Add momentum reversal exit checker (every 60 seconds = 1 minute)
         # CRITICAL for momentum surfing: exit quickly when momentum reverses
@@ -176,37 +178,41 @@ async def lifespan(app: FastAPI):
         # Add stop-loss check job (every 300 seconds = 5 minutes) - Optimized to avoid overlap
         # NOTE: This is now a BACKUP safety check, primary exits handled by strategy_exit_check
         # Increased to 5 minutes because AI calls take ~50s for 7 positions
+        # DISABLED FOR DEBUGGING - Testing AI agent blocking issue
         from services.auto_trader import check_stop_loss_async, check_take_profit_async, place_multi_agent_order
 
-        scheduler_service.add_sync_job(
-            job_func=check_stop_loss_async,
-            interval_seconds=300,  # 5 minutes - plenty of time between AI jobs
-            job_id="stop_loss_check",
-            start_delay_seconds=0,  # Starts immediately
-        )
+        # scheduler_service.add_sync_job(
+        #     job_func=check_stop_loss_async,
+        #     interval_seconds=300,  # 5 minutes - plenty of time between AI jobs
+        #     job_id="stop_loss_check",
+        #     start_delay_seconds=0,  # Starts immediately
+        # )
+        logger.info("⚠️ stop_loss_check DISABLED for debugging")
 
         # Add MULTI-AGENT ORCHESTRATED trading job (every 3 minutes)
         # Uses LONG and SHORT specialized agents with orchestrator for conflict resolution
         # APScheduler runs each job in a separate thread, so long-running technical analysis
         # (analyzing 220+ symbols) won't block other jobs from executing
         # 3-minute interval for fast momentum capture (now zero API calls via WebSocket)
-        scheduler_service.add_sync_job(
-            job_func=lambda: place_multi_agent_order(max_ratio=0.2),
-            interval_seconds=180,  # 3 minutes - Fast momentum surfing
-            job_id="ai_crypto_trade"
-        )
-        logger.info("✅ MULTI-AGENT ORCHESTRATOR trading ENABLED (LONG + SHORT agents every 3 minutes)")
+        # DISABLED FOR DEBUGGING - Testing AI agent blocking issue
+        # scheduler_service.add_sync_job(
+        #     job_func=lambda: place_multi_agent_order(max_ratio=0.2),
+        #     interval_seconds=180,  # 3 minutes - Fast momentum surfing
+        #     job_id="ai_crypto_trade"
+        # )
+        logger.info("⚠️ ai_crypto_trade (multi-agent) DISABLED for debugging")
 
         # Add take-profit check job (every 300 seconds = 5 minutes) - Automatically locks in +10% profits
         # Staggered by 150s (2.5 min) after stop_loss to ensure no overlap
         # AI calls take ~50s for 7 positions
-        scheduler_service.add_sync_job(
-            job_func=check_take_profit_async,
-            interval_seconds=300,  # 5 minutes - matches stop_loss interval
-            job_id="take_profit_check",
-            start_delay_seconds=150,  # Starts 2.5 min after stop_loss (halfway through cycle)
-        )
-        logger.info("Take-profit job scheduled (every 300 seconds, +10% threshold)")
+        # DISABLED FOR DEBUGGING - Testing AI agent blocking issue
+        # scheduler_service.add_sync_job(
+        #     job_func=check_take_profit_async,
+        #     interval_seconds=300,  # 5 minutes - matches stop_loss interval
+        #     job_id="take_profit_check",
+        #     start_delay_seconds=150,  # Starts 2.5 min after stop_loss (halfway through cycle)
+        # )
+        logger.info("⚠️ take_profit_check DISABLED for debugging")
 
     except Exception as e:
         print(f"Warning: Failed to start scheduler: {e}")
