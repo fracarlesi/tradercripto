@@ -95,6 +95,11 @@ class DeepSeekClient:
                 "Authorization": f"Bearer {self.api_key}",
             }
 
+            # Add OpenRouter-specific headers if using OpenRouter
+            if "openrouter.ai" in self.base_url:
+                headers["HTTP-Referer"] = "https://github.com/trader-bitcoin"
+                headers["X-Title"] = "Trader Bitcoin AI"
+
             payload = {
                 "model": self.model,  # Use account's configured model
                 "messages": messages,
@@ -166,6 +171,11 @@ class DeepSeekClient:
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {self.api_key}",
             }
+
+            # Add OpenRouter-specific headers if using OpenRouter
+            if "openrouter.ai" in self.base_url:
+                headers["HTTP-Referer"] = "https://github.com/trader-bitcoin"
+                headers["X-Title"] = "Trader Bitcoin AI"
 
             payload = {
                 "model": self.model,
@@ -416,14 +426,8 @@ NEVER take trades with Risk:Reward < 1:2. Check risk_reward data:
 
 **STEP 5: OUTPUT DECISION**
 
-**IMPORTANT - SHORT ONLY MODE ENABLED**:
-Currently ONLY SHORT positions are allowed. DO NOT output "buy" operations.
-- If you see a bullish opportunity → output "hold" (we are not taking LONG positions)
-- Only output "short" when you see clear bearish signals
-- This is temporary until we improve the LONG strategy
-
 Return JSON with:
-- operation: "sell", "short", or "hold" (NO "buy" allowed!)
+- operation: "buy", "sell", "short", or "hold"
 - symbol: Symbol to trade (if not "hold")
 - target_portion_of_balance: 0.0-1.0
 - leverage: 1-10
