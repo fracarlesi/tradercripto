@@ -942,16 +942,9 @@ The thresholds below are EVALUATION TRIGGERS, not automatic commands.
 
 Analyze ALL available cryptocurrencies, identify the BEST opportunity based on PROFIT/LOSS TRIGGERS FIRST, then TECHNICAL ANALYSIS, news, and market data.
 
-**IMPORTANT - SHORT ONLY MODE ENABLED**:
-Currently ONLY SHORT positions are allowed. DO NOT output "buy" operations.
-- If you see a bullish opportunity → output "hold" (we are not taking LONG positions)
-- Only output "short" when you see clear bearish signals (technical score < 0.3)
-- You can "sell" to close existing positions
-- This is temporary until we improve the LONG strategy
-
 Then respond with ONLY a JSON object in this exact format:
 {{
-  "operation": "sell" or "short" or "hold",
+  "operation": "buy" or "sell" or "short" or "hold",
   "symbol": one of the available symbols above,
   "target_portion_of_balance": 1.0,
   "leverage": 1,

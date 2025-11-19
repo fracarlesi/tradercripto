@@ -87,13 +87,55 @@ Auto-generated from all feature plans. Last updated: 2025-11-14
    - Indicatori: RSI, MACD, Pivot Points, Support/Resistance
    - Score composito 0-1 per ogni coin
 
-4. **AI Decision** (`deepseek_client.py`): Top 20 + indicatori
-   - Sceglie MIGLIORE opportunità tra i 20
-   - Esegue LONG/SHORT con 20% capitale (configurable)
+4. **Multi-Agent AI Decision** (UNICA MODALITÀ DI FUNZIONAMENTO):
+   - **Architettura**: Sistema multi-agent con orchestratore
+   - **Sub-agents specializzati** (ciascuno analizza indipendentemente):
+     - Technical Agent: Analisi tecnica (RSI, MACD, Pivot Points)
+     - News Agent: Sentiment news e catalisti
+     - Risk Agent: Risk management e position sizing
+   - **Orchestrator** (`orchestrator_service.py`): Raccoglie proposte e risolve conflitti
+   - **Entry Point**: `place_multi_agent_order()` in `auto_trader.py:523`
+   - **Scheduler**: `startup.py:127-132` usa SOLO `place_multi_agent_order`
 
 5. **Execution** (`auto_trader.py`): Ordine su Hyperliquid
    - Intervallo: **3 minuti**
    - Post-trade: Sync positions + assign trading strategy
+
+### Multi-Agent System Architecture (CRITICAL)
+
+**IMPORTANTE**: Il sistema usa ESCLUSIVAMENTE `place_multi_agent_order`, NON `place_ai_driven_crypto_order`.
+
+```
+┌─────────────────────────────────────────────────┐
+│ Scheduler (every 3 min)                         │
+│ startup.py → place_multi_agent_order()          │
+└─────────────────────────────────────────────────┘
+                    ↓
+┌─────────────────────────────────────────────────┐
+│ Sub-Agents (parallel analysis via deepseek_client.py) │
+│ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ │
+│ │ Technical   │ │ News        │ │ Risk        │ │
+│ │ Agent       │ │ Agent       │ │ Agent       │ │
+│ └─────────────┘ └─────────────┘ └─────────────┘ │
+└─────────────────────────────────────────────────┘
+                    ↓ (proposals)
+┌─────────────────────────────────────────────────┐
+│ Orchestrator (orchestrator_service.py)          │
+│ - Collects all agent proposals                  │
+│ - Resolves conflicts (voting/weighted average)  │
+│ - Returns final decision                        │
+└─────────────────────────────────────────────────┘
+                    ↓
+┌─────────────────────────────────────────────────┐
+│ Execution on Hyperliquid                        │
+└─────────────────────────────────────────────────┘
+```
+
+**Key Files**:
+- `backend/services/auto_trader.py:523-700`: `place_multi_agent_order()` implementation
+- `backend/services/orchestrator_service.py`: Orchestrator logic
+- `backend/services/ai/deepseek_client.py`: Sub-agent prompts
+- `backend/services/startup.py:127-132`: Scheduler configuration
 
 ### Performance Evolution
 

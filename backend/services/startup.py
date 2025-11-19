@@ -4,7 +4,7 @@ import asyncio
 import logging
 import threading
 
-from services.auto_trader import AI_TRADE_JOB_ID, place_ai_driven_crypto_order, place_multi_agent_order
+from services.auto_trader import AI_TRADE_JOB_ID, place_multi_agent_order
 from services.scheduler import setup_market_tasks, start_scheduler, task_scheduler
 
 logger = logging.getLogger(__name__)
@@ -116,16 +116,16 @@ def schedule_auto_trading(interval_seconds: int = 300, max_ratio: float = 0.2) -
 
     def execute_trade():
         try:
-            place_ai_driven_crypto_order(max_ratio)
-            logger.info("Initial AI-driven trading execution completed")
+            place_multi_agent_order(max_ratio)
+            logger.info("Initial multi-agent trading execution completed")
         except Exception as e:
-            logger.error(f"Error during initial AI-driven trading execution: {e}", exc_info=True)
+            logger.error(f"Error during initial multi-agent trading execution: {e}", exc_info=True)
 
-    logger.info("Scheduling AI-driven crypto trading (real trading on Hyperliquid)")
+    logger.info("Scheduling multi-agent crypto trading with orchestrator (real trading on Hyperliquid)")
 
-    # Schedule the recurring AI-driven task
+    # Schedule the recurring multi-agent task
     task_scheduler.add_interval_task(
-        task_func=place_ai_driven_crypto_order,
+        task_func=place_multi_agent_order,
         interval_seconds=interval_seconds,
         task_id=AI_TRADE_JOB_ID,
         max_ratio=max_ratio,

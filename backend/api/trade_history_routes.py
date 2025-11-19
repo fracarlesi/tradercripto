@@ -124,11 +124,19 @@ async def _calculate_complete_trades(
                             duration = trade.trade_time - matched['entry_time']
                             duration_minutes = duration.total_seconds() / 60
 
+                            # Format times with Z suffix to indicate UTC
+                            entry_time_str = matched['entry_time'].isoformat()
+                            if not entry_time_str.endswith('Z') and '+' not in entry_time_str:
+                                entry_time_str += 'Z'
+                            exit_time_str = trade.trade_time.isoformat()
+                            if not exit_time_str.endswith('Z') and '+' not in exit_time_str:
+                                exit_time_str += 'Z'
+
                             complete_trades.append({
                                 'symbol': symbol,
                                 'side': 'SHORT',
-                                'entry_time': matched['entry_time'].isoformat(),
-                                'exit_time': trade.trade_time.isoformat(),
+                                'entry_time': entry_time_str,
+                                'exit_time': exit_time_str,
                                 'entry_price': matched['entry_price'],
                                 'exit_price': price,
                                 'quantity': matched_qty,
@@ -200,11 +208,19 @@ async def _calculate_complete_trades(
                             duration = trade.trade_time - matched['entry_time']
                             duration_minutes = duration.total_seconds() / 60
 
+                            # Format times with Z suffix to indicate UTC
+                            entry_time_str = matched['entry_time'].isoformat()
+                            if not entry_time_str.endswith('Z') and '+' not in entry_time_str:
+                                entry_time_str += 'Z'
+                            exit_time_str = trade.trade_time.isoformat()
+                            if not exit_time_str.endswith('Z') and '+' not in exit_time_str:
+                                exit_time_str += 'Z'
+
                             complete_trades.append({
                                 'symbol': symbol,
                                 'side': 'LONG',
-                                'entry_time': matched['entry_time'].isoformat(),
-                                'exit_time': trade.trade_time.isoformat(),
+                                'entry_time': entry_time_str,
+                                'exit_time': exit_time_str,
                                 'entry_price': matched['entry_price'],
                                 'exit_price': price,
                                 'quantity': matched_qty,
@@ -231,15 +247,14 @@ async def _calculate_complete_trades(
         # Filter by exit_time if minutes is provided (using UTC)
         if minutes:
             cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
-            # Convert cutoff to naive datetime string for comparison with DB timestamps
-            # (DB stores naive UTC timestamps, so we strip timezone info for comparison)
-            cutoff_naive = cutoff.replace(tzinfo=None).isoformat()
+            # Format cutoff with Z suffix for consistent comparison with trade timestamps
+            cutoff_str = cutoff.replace(tzinfo=None).isoformat() + 'Z'
             complete_trades = [
                 t for t in complete_trades
-                if t['exit_time'] >= cutoff_naive
+                if t['exit_time'] >= cutoff_str
             ]
             logger.info(
-                f"Filtered to {len(complete_trades)} trades with exit_time >= {cutoff_naive} UTC"
+                f"Filtered to {len(complete_trades)} trades with exit_time >= {cutoff_str}"
             )
 
         logger.info(
