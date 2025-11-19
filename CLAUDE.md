@@ -89,13 +89,15 @@ Auto-generated from all feature plans. Last updated: 2025-11-14
 
 4. **Multi-Agent AI Decision** (UNICA MODALITÀ DI FUNZIONAMENTO):
    - **Architettura**: Sistema multi-agent con orchestratore
-   - **Sub-agents specializzati** (ciascuno analizza indipendentemente):
-     - Technical Agent: Analisi tecnica (RSI, MACD, Pivot Points)
-     - News Agent: Sentiment news e catalisti
-     - Risk Agent: Risk management e position sizing
-   - **Orchestrator** (`orchestrator_service.py`): Raccoglie proposte e risolve conflitti
-   - **Entry Point**: `place_multi_agent_order()` in `auto_trader.py:523`
-   - **Scheduler**: `startup.py:127-132` usa SOLO `place_multi_agent_order`
+   - **Agenti specializzati** (LONG e SHORT):
+     - LONG Agent: Specializzato in posizioni long (buy)
+     - SHORT Agent: Specializzato in posizioni short
+   - **Orchestrator** (`orchestrator_service.py`):
+     - Raccoglie proposte da entrambi gli agenti
+     - Seleziona la MIGLIORE proposta per technical_score
+     - Esegue SOLO UN trade per ciclo (non entrambi)
+   - **Entry Point**: `place_multi_agent_order()` in `auto_trader.py`
+   - **Scheduler**: `main.py` (APScheduler) usa `place_multi_agent_order`
 
 5. **Execution** (`auto_trader.py`): Ordine su Hyperliquid
    - Intervallo: **3 minuti**
@@ -107,23 +109,23 @@ Auto-generated from all feature plans. Last updated: 2025-11-14
 
 ```
 ┌─────────────────────────────────────────────────┐
-│ Scheduler (every 3 min)                         │
-│ startup.py → place_multi_agent_order()          │
+│ APScheduler (every 3 min)                       │
+│ main.py → place_multi_agent_order()             │
 └─────────────────────────────────────────────────┘
                     ↓
 ┌─────────────────────────────────────────────────┐
-│ Sub-Agents (parallel analysis via deepseek_client.py) │
-│ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ │
-│ │ Technical   │ │ News        │ │ Risk        │ │
-│ │ Agent       │ │ Agent       │ │ Agent       │ │
-│ └─────────────┘ └─────────────┘ └─────────────┘ │
+│ Specialized Agents (parallel analysis)          │
+│ ┌─────────────────┐  ┌─────────────────┐        │
+│ │ LONG Agent      │  │ SHORT Agent     │        │
+│ │ (buy proposals) │  │ (short props)   │        │
+│ └─────────────────┘  └─────────────────┘        │
 └─────────────────────────────────────────────────┘
-                    ↓ (proposals)
+                    ↓ (AgentProposal with technical_score)
 ┌─────────────────────────────────────────────────┐
 │ Orchestrator (orchestrator_service.py)          │
-│ - Collects all agent proposals                  │
-│ - Resolves conflicts (voting/weighted average)  │
-│ - Returns final decision                        │
+│ - Collects proposals from LONG and SHORT agents │
+│ - Selects BEST proposal by technical_score      │
+│ - Returns SINGLE decision (only 1 trade/cycle)  │
 └─────────────────────────────────────────────────┘
                     ↓
 ┌─────────────────────────────────────────────────┐
@@ -132,10 +134,10 @@ Auto-generated from all feature plans. Last updated: 2025-11-14
 ```
 
 **Key Files**:
-- `backend/services/auto_trader.py:523-700`: `place_multi_agent_order()` implementation
-- `backend/services/orchestrator_service.py`: Orchestrator logic
-- `backend/services/ai/deepseek_client.py`: Sub-agent prompts
-- `backend/services/startup.py:127-132`: Scheduler configuration
+- `backend/services/auto_trader.py`: `place_multi_agent_order()` implementation
+- `backend/services/orchestrator_service.py`: Orchestrator logic (LONG/SHORT agent selection)
+- `backend/services/ai/deepseek_client.py`: Agent prompts
+- `backend/main.py`: APScheduler job configuration
 
 ### Performance Evolution
 
@@ -350,14 +352,15 @@ mcp__claude-context__search_code(
 
 **How to get real data**:
 ```python
-# Get real balance from Hyperliquid
+# Get real balance from Hyperliquid (ALWAYS use API, not database)
 from services.trading.hyperliquid_trading_service import hyperliquid_trading_service
 user_state = await hyperliquid_trading_service.get_user_state_async()
 real_balance = float(user_state['marginSummary']['accountValue'])
+total_margin = float(user_state['marginSummary']['totalMarginUsed'])
+withdrawable = float(user_state['marginSummary']['withdrawable'])
 
-# Update database with real balance
-account.current_cash = real_balance
-db.commit()
+# NOTE: Balance is NOT stored in database - always fetch from Hyperliquid API
+# Database Account table only stores metadata (name, AI config, active status)
 ```
 
 **Trading Constraints**:
@@ -800,10 +803,13 @@ grep "portfolio_snapshot_capture\|hyperliquid_sync\|price_cache_cleanup" logs.js
 ```
 
 **Expected job frequency**:
-- `price_cache_cleanup`: Every 2 minutes
-- `hyperliquid_account_sync`: Every 60 seconds
-- `portfolio_snapshot_capture`: Every 5 minutes
-- `auto_trading`: Every 3 minutes (180 seconds)
+- `price_cache_cleanup`: Every 2 minutes (startup.py)
+- `hyperliquid_sync`: Every 30 seconds (main.py)
+- `portfolio_snapshot_capture`: Every 5 minutes (startup.py)
+- `ai_crypto_trade`: Every 3 minutes (main.py)
+- `stop_loss_check`: Every 5 minutes (main.py)
+- `take_profit_check`: Every 5 minutes (main.py)
+- `hourly_market_retrospective`: Every 1 hour (startup.py)
 
 ## 📂 QUICK REFERENCE - Critical Files & Documentation
 
@@ -849,34 +855,35 @@ grep "portfolio_snapshot_capture\|hyperliquid_sync\|price_cache_cleanup" logs.js
 
 ### 🔧 SERVICE INITIALIZATION ORDER (CRITICAL - DO NOT CHANGE!)
 
-**From `backend/services/startup.py:12-71`**
+**Two-phase initialization**: `startup.py` (task_scheduler) + `main.py` (APScheduler)
 
+**Phase 1: `backend/services/startup.py` (task_scheduler)**
 ```python
 def initialize_services():
     # 1. MUST be first - other services depend on scheduler
     start_scheduler()
 
-    # 2. Registers market data fetch jobs
-    setup_market_tasks()
+    # 2. Schedule AI trading (uses place_multi_agent_order)
+    schedule_auto_trading(interval_seconds=180)
 
-    # 3. Depends on market data being available
-    schedule_auto_trading()
-
-    # 4-6. Independent interval tasks (order doesn't matter)
-    task_scheduler.add_interval_task(clear_expired_prices)       # Every 2 min
-    task_scheduler.add_interval_task(sync_all_active_accounts)   # Every 60 sec
-    task_scheduler.add_interval_task(capture_snapshots_wrapper)  # Every 5 min
+    # 3. Independent interval tasks (order doesn't matter)
+    task_scheduler.add_interval_task(clear_expired_prices)          # Every 2 min
+    task_scheduler.add_interval_task(capture_snapshots_wrapper)     # Every 5 min
+    task_scheduler.add_interval_task(analyze_hourly_market_sync)    # Every 1 hour
 ```
 
-**Why this order matters**:
-- Scheduler MUST start first (all jobs registered to it)
-- Auto trading needs market data → setup_market_tasks() first
-- Interval tasks are independent → can be registered in any order
+**Phase 2: `backend/main.py` (APScheduler)**
+```python
+# Trading-critical jobs in main.py lifespan
+scheduler_service.add_sync_job(periodic_sync_job, interval_seconds=30)      # hyperliquid_sync
+scheduler_service.add_sync_job(check_stop_loss_async, interval_seconds=300) # stop_loss_check
+scheduler_service.add_sync_job(check_take_profit_async, interval_seconds=300) # take_profit_check
+```
 
-**DO NOT**:
-- Change initialization order without understanding dependencies
-- Start auto trading before market tasks
-- Skip scheduler initialization
+**Why this split matters**:
+- task_scheduler: Threading-based (works for learning/analysis jobs)
+- APScheduler: Async-friendly (works for trading/sync jobs)
+- Both run independently without conflicts
 
 ## ⏰ SCHEDULED JOBS & API RATE LIMITING
 
@@ -886,15 +893,15 @@ def initialize_services():
 
 | Job | Interval | File | Purpose | API Calls |
 |-----|----------|------|---------|-----------|
-| AI Trading | 180s (3min) | `startup.py:21` | DeepSeek AI decisions + order execution | 2-3/cycle |
-| Price Cache Cleanup | 120s (2min) | `startup.py:27` | Clear expired price cache | 0 (local) |
-| Portfolio Snapshot | 300s (5min) | `startup.py:51` | Historical chart data | 1/cycle |
-| Counterfactual Learning | 3600s (1h) | `startup.py:85` | Calculate P&L for past decisions | 0.1/cycle |
-| **Hyperliquid Sync** | **30s** | `main.py:131` | **Sync balance/positions/orders** | **1/cycle** |
-| **Stop Loss Check** | **60s** | `main.py:147` | **Check -5% loss threshold** | **1/cycle** |
-| AI Usage Reset | Daily 00:00 | `main.py:140` | Reset AI usage counters | 0 (local) |
+| AI Trading | 180s (3min) | `main.py` | DeepSeek LONG/SHORT agent decisions + execution | 2-3/cycle |
+| Price Cache Cleanup | 120s (2min) | `startup.py` | Clear expired price cache | 0 (local) |
+| Portfolio Snapshot | 300s (5min) | `startup.py` | Historical chart data | 1/cycle |
+| Hourly Retrospective | 3600s (1h) | `startup.py` | Market analysis + dynamic corrections | 0.1/cycle |
+| **Hyperliquid Sync** | **30s** | `main.py` | **Sync balance/positions/orders** | **1/cycle** |
+| **Stop Loss Check** | **300s (5min)** | `main.py` | **Check -5% loss threshold** | **1/cycle** |
+| **Take Profit Check** | **300s (5min)** | `main.py` | **Check take profit targets** | **1/cycle** |
 
-**Total API Load**: ~3.5 calls/min = ~210 calls/hour (optimized from 5.5/min = 330/hour)
+**Total API Load**: ~3 calls/min = ~180 calls/hour
 
 ###**Optimization History (2025-11-09)**
 
@@ -931,304 +938,26 @@ Quick reference for 4 active MCP servers:
 
 **Critical Rule**: ALWAYS re-index claude-context with `force=true` and wait 15 seconds before searching.
 
-## 🧠 COUNTERFACTUAL LEARNING SYSTEM
+## 🧠 LEARNING SYSTEM
 
-**Status**: ✅ Fully implemented, tested, and verified in production (2025-11-08)
+**Status**: Hourly Market Retrospective (replaced Counterfactual Learning)
 
-The system enables DeepSeek AI to learn from its past decisions (both executed trades AND missed opportunities) and improve trading strategy over time.
+The original counterfactual learning system (24h feedback loop) was too slow for real-time trading optimization. It has been replaced by the **Hourly Market Retrospective** which provides faster feedback with dynamic corrections.
 
-### How It Works:
+### Current: Hourly Market Retrospective
 
-1. **Every AI Decision** (`auto_trader.py:122-163`) → Snapshot Saved:
-   - Complete reasoning from DeepSeek
-   - All technical factors (Prophet, Pivot, RSI, etc.)
-   - Decision made (LONG/SHORT/HOLD)
-   - Entry price and portfolio state
-   - Saves to `decision_snapshots` table
+- **Interval**: Every 1 hour (`startup.py`)
+- **Function**: `analyze_hourly_market_sync()` from `backend/services/learning/hourly_retrospective.py`
+- **Purpose**: Analyzes market conditions and trading decisions from the past hour
+- **Output**: Dynamic weight adjustments and pattern recognition
 
-2. **Hourly Batch Job** (`startup.py:141-147`) → Counterfactuals Calculated:
-   - Processes snapshots older than 24h
-   - Fetches price 24h after decision
-   - Calculates P&L for ALL 3 actions (LONG, SHORT, HOLD)
-   - Determines optimal decision (max P&L)
-   - Calculates REGRET = optimal_pnl - actual_pnl
+### Disabled: Original Counterfactual Learning
 
-3. **Every 3 Hours** (`startup.py:149-155`) → Self-Analysis Runs:
-   - Analyzes patterns in 50+ decisions with counterfactuals
-   - Identifies systematic errors:
-     - "Ignored Prophet 12 times when RSI >70 → lost $145"
-     - "HOLD when Sentiment >80 + Whale sell → avoided -$230"
-   - Calculates win rate per indicator
-   - Suggests optimal weights based on actual performance
-   - Logs insights (NOT auto-applied for safety)
+The original system (`decision_snapshot_service.py`, `deepseek_self_analysis_service.py`) is disabled.
+- Too slow: Required 24h wait for exit price
+- Decision snapshots table still exists but not actively used
+- Code remains for potential future use but not scheduled
 
-### Key Files:
-
-- `backend/services/learning/decision_snapshot_service.py` - Snapshot storage & counterfactual calc
-  - `_fetch_historical_price_async()`: Fetches CCXT 1h candles for accurate exit price
-  - `calculate_counterfactuals_batch()`: Main batch processing with rate limiting
-- `backend/services/learning/deepseek_self_analysis_service.py` - Pattern analysis & weight suggestions
-- `backend/api/learning_routes.py` - Manual trigger endpoints (optional)
-- `backend/database/models.py:DecisionSnapshot` - Data model
-- `backend/database/migrations/005_add_decision_snapshots.sql` - Schema
-- `backend/services/startup.py:72-89` - Scheduler integration with task_scheduler
-
-### Monitoring:
-
-Check system activity in logs:
-```bash
-# Verify snapshots being saved
-grep "Decision snapshot saved" logs.json
-
-# Check counterfactual calculations
-grep "Calculated counterfactuals" logs.json
-
-# View self-analysis results
-grep "Self-analysis complete" logs.json
-```
-
-### Manual Triggers (Optional):
-
-API endpoints available for debugging/testing:
-```bash
-# View recent snapshots
-curl "http://localhost:8000/api/learning/snapshots/1?limit=20"
-
-# Force counterfactual calculation
-curl -X POST "http://localhost:8000/api/learning/counterfactuals/calculate?limit=100"
-
-# Trigger self-analysis manually
-curl -X POST "http://localhost:8000/api/learning/analyze/1?limit=100"
-```
-
-### Timeline:
-
-- **Immediate**: Snapshots saved with each AI decision
-- **After 24h**: First counterfactuals calculated (need exit price)
-- **Every 1h**: Counterfactual batch job processes pending snapshots
-- **After 50+ decisions with counterfactuals**: First self-analysis can run
-- **Every 3h** (planned): Ongoing analysis with updated insights
-
-### Scheduler Architecture:
-
-**Decision: Use task_scheduler (custom) for learning jobs, NOT APScheduler**
-
-- **Attempted Migration**: Initially tried APScheduler's `add_sync_job()` for learning jobs
-- **Problem Encountered**: Greenlet/event loop errors (`MissingGreenlet`, `cannot schedule new futures after interpreter shutdown`)
-- **Root Cause**: Unclear - errors also affected unrelated `portfolio_snapshot_service`
-- **Solution**: Reverted to original `task_scheduler` (threading-based)
-- **Current Setup**:
-  - Trading jobs (sync, take_profit, stop_loss): APScheduler ✅
-  - Learning jobs (counterfactuals): task_scheduler ✅
-  - Both work independently without conflicts
-
-**File**: `backend/services/startup.py:72-89`
-```python
-def calculate_counterfactuals_wrapper():
-    try:
-        processed = asyncio.run(calculate_counterfactuals_batch(limit=100))
-        if processed > 0:
-            logger.info(f"✅ Calculated counterfactuals for {processed} snapshots")
-    except Exception as e:
-        logger.error(f"Counterfactual calculation failed: {e}", exc_info=True)
-
-task_scheduler.add_interval_task(
-    task_func=calculate_counterfactuals_wrapper,
-    interval_seconds=3600,  # Every 1 hour
-    task_id="counterfactual_calculation",
-)
-```
-
-### Safety Features:
-
-- Snapshot saves don't block trades (errors logged, not raised)
-- Weight suggestions logged but NOT auto-applied
-- System fully automatic - no manual intervention required
-- Detailed logging for troubleshooting
-
-### Example Output:
-
-After 50+ decisions, logs will show:
-```
-[INFO] Running auto self-analysis for account 1 (67 snapshots)
-[INFO] ✅ Self-analysis complete for account 1: Regret=$145.50, Accuracy=58.0%
-[INFO] 💡 Suggested weights: {'prophet': 0.65, 'pivot_points': 0.75, 'rsi_macd': 0.40}
-```
-
-### 🐛 Critical Bug Fixes (2025-11-08)
-
-**Fixed during production verification and implementation:**
-
-1. **SessionLocal Async Context Manager Bug** (`decision_snapshot_service.py`, `deepseek_self_analysis_service.py`)
-   - **Problem**: Used sync `SessionLocal` in `async with` context → crashed with `'Session' object does not support the asynchronous context manager protocol`
-   - **Fix**: Changed to `async_session_factory` in all 4 functions
-   - **Impact**: System was NOT saving any snapshots before fix (0 snapshots)
-   - **Status**: ✅ Fixed and deployed
-
-2. **Float/Decimal Type Error** (`decision_snapshot_service.py:180`)
-   - **Problem**: `snapshot.entry_price` is Decimal, compared to float → `TypeError: unsupported operand type(s) for -: 'float' and 'decimal.Decimal'`
-   - **Fix**: Explicit `float()` conversion before calculations
-   - **Impact**: Counterfactual calculations failed silently
-   - **Status**: ✅ Fixed and deployed
-
-3. **Historical Price Bug - Using Current Price Instead of 24h Exit Price** (`decision_snapshot_service.py:169`)
-   - **Problem**:
-     - Calculated `exit_time = snapshot.timestamp + timedelta(hours=24)` but didn't use it
-     - Called `get_all_mids_async()` which returns CURRENT prices, not historical
-     - Counterfactuals compared entry price (24-48h ago) with price NOW → completely inaccurate
-   - **Fix**:
-     - Implemented `_fetch_historical_price_async()` using CCXT `fetch_ohlcv()`
-     - Fetches 3 hours of 1h candles centered on exit_time
-     - Finds candle closest to target timestamp (±5 min precision)
-     - Rate limiting: 2s delay between requests to avoid 429 errors
-     - Retry logic: exponential backoff (1s, 2s, 4s) for rate limit errors
-   - **Impact**:
-     - Counterfactuals now historically accurate
-     - No more rate limiting errors (429)
-     - 69 pending snapshots will be processed with correct prices
-   - **Status**: ✅ Fixed and deployed (commit 3e39a65, 4286596)
-
-### 🔍 Verification & Health Check
-
-**Automated Health Check Script**: `check_learning_system.sh`
-
-```bash
-# Run health check on production VPS
-./check_learning_system.sh 46.224.45.196
-```
-
-**What it checks**:
-1. Container status (healthy/unhealthy)
-2. Decision snapshots (count, breakdown, latest)
-3. Learning system errors in logs
-4. Scheduled jobs registration
-5. Data integrity (JSON validity, reasoning presence)
-6. Timeline and next steps
-
-**Manual verification commands**:
-```bash
-# Count snapshots in database
-ssh root@46.224.45.196 'cd /opt/trader_bitcoin && docker compose -f docker-compose.simple.yml exec -T app python3 -c "
-import sqlite3
-conn = sqlite3.connect(\"/app/data/data.db\")
-cursor = conn.cursor()
-cursor.execute(\"SELECT COUNT(*) FROM decision_snapshots\")
-print(f\"Total snapshots: {cursor.fetchone()[0]}\")
-cursor.execute(\"SELECT COUNT(*) FROM decision_snapshots WHERE exit_price_24h IS NOT NULL\")
-print(f\"With counterfactuals: {cursor.fetchone()[0]}\")
-conn.close()
-"'
-
-# Monitor counterfactual calculation in real-time
-ssh root@46.224.45.196 'cd /opt/trader_bitcoin && docker compose -f docker-compose.simple.yml logs -f app' | grep -E "(Calculated counterfactuals|Counterfactual calculation)"
-
-# Monitor snapshot saves in real-time
-ssh root@46.224.45.196 'cd /opt/trader_bitcoin && docker compose -f docker-compose.simple.yml logs -f app' | grep "Decision snapshot saved"
-
-# Check for errors
-ssh root@46.224.45.196 'cd /opt/trader_bitcoin && docker compose -f docker-compose.simple.yml logs app' | grep -i "learning.*ERROR"
-
-# Check scheduler status
-ssh root@46.224.45.196 'cd /opt/trader_bitcoin && docker compose -f docker-compose.simple.yml logs app' | grep -E "(Added task counterfactual_calculation|Counterfactual calculation task started)"
-```
-
-**Expected Logs on Startup**:
-```
-2025-11-08 13:46:49 - services.scheduler - INFO - Added task counterfactual_calculation with 3600s interval
-2025-11-08 13:46:49 - services.startup - INFO - Counterfactual calculation task started (1-hour interval)
-2025-11-08 13:46:49 - services.startup - INFO - All services initialized successfully
-```
-
-**Expected Logs on Hourly Job Execution**:
-```
-2025-11-08 14:46:49 - services.learning.decision_snapshot_service - INFO - Processing 69 snapshots for counterfactual analysis
-2025-11-08 14:46:51 - services.learning.decision_snapshot_service - DEBUG - Found historical price for BTC: $101971.00 (time diff: 3.2 min from target)
-...
-2025-11-08 14:52:30 - services.learning.decision_snapshot_service - INFO - ✅ Calculated counterfactuals for 69/69 snapshots
-2025-11-08 14:52:30 - services.startup - INFO - ✅ Calculated counterfactuals for 69 snapshots
-```
-
-### 🧪 Testing Procedures
-
-**To verify system is working correctly:**
-
-1. **Check snapshot data integrity**:
-   ```python
-   # Verify latest snapshot has complete data
-   SELECT id, LENGTH(indicators_snapshot), LENGTH(deepseek_reasoning)
-   FROM decision_snapshots ORDER BY timestamp DESC LIMIT 1;
-   ```
-   - `indicators_snapshot` should be >1000 chars (JSON with all technical factors)
-   - `deepseek_reasoning` should be >50 chars
-
-2. **Test counterfactual calculation logic**:
-   ```python
-   # Manual calculation test (see backend/scripts/testing/test_counterfactual_logic.py)
-   # Simulates: Entry $100, Exit $102 (+2%), Size 100%, Account $1000
-   # Expected: LONG +$20, SHORT -$20, HOLD $0, Optimal=LONG, Regret=$20
-   ```
-
-3. **Test self-analysis API**:
-   ```bash
-   curl -X POST "http://localhost:5611/api/learning/analyze/1?limit=10"
-   # Should return JSON with: total_regret, accuracy_rate, worst_patterns, suggested_weights
-   ```
-
-4. **Verify scheduled jobs execute**:
-   ```bash
-   # Check logs for job execution (not just registration)
-   grep -E "(Captured portfolio|Orders synced|technical analysis)" logs
-   ```
-
-### 🚨 Troubleshooting
-
-**Problem**: Snapshots not being saved (count = 0)
-
-**Diagnosis**:
-```bash
-# Check for SessionLocal async error
-docker compose logs app | grep "does not support the asynchronous context manager protocol"
-```
-
-**Solution**: Verify `async_session_factory` is used (not `SessionLocal`) in:
-- `backend/services/learning/decision_snapshot_service.py` (3 functions)
-- `backend/services/learning/deepseek_self_analysis_service.py` (1 function)
-
----
-
-**Problem**: Counterfactual calculation fails with type error
-
-**Diagnosis**:
-```bash
-docker compose logs app | grep "unsupported operand type.*Decimal"
-```
-
-**Solution**: Add explicit `float()` conversion in `calculate_counterfactuals_batch()`:
-```python
-entry_price = float(snapshot.entry_price)
-size_pct = float(snapshot.actual_size_pct) if snapshot.actual_size_pct else 0.2
-```
-
----
-
-**Problem**: Rate limiting errors (429) during counterfactual calculation
-
-**Diagnosis**:
-```bash
-docker compose logs app | grep "429.*hyperliquid"
-```
-
-**Solution**: This is normal - Hyperliquid API rate limits. System will retry automatically on next hourly job run. Not a critical issue.
-
----
-
-**Problem**: Self-analysis returns "No snapshots available"
-
-**Diagnosis**: Not enough snapshots with counterfactuals calculated yet
-
-**Solution**: Wait 24h after first snapshot for counterfactuals to be calculated. System needs:
-- Minimum: 1 snapshot older than 24h
-- Optimal: 50+ snapshots with counterfactuals for meaningful insights
 
 ## 📚 DEPLOYMENT & INFRASTRUCTURE DOCUMENTATION
 
