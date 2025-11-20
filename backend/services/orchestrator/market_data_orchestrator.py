@@ -438,7 +438,10 @@ async def _fetch_portfolio(account_id: int) -> dict:
 
             # Build portfolio state
             total_assets = float(margin_summary.get("accountValue", 0))
-            available_cash = float(margin_summary.get("withdrawable", 0))
+            total_margin_used = float(margin_summary.get("totalMarginUsed", 0))
+            # Available cash = Account Value - Margin Used (NOT withdrawable!)
+            # withdrawable is for withdrawals, not for trading
+            available_cash = total_assets - total_margin_used
 
             # Format positions
             positions = []
