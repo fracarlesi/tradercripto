@@ -54,13 +54,7 @@ def initialize_services() -> None:
         )
         logger.info("Portfolio snapshot capture task started (5-minute interval)")
 
-        # DISABLED: Counterfactual learning (replaced by hourly market retrospective)
-        # Old 24h feedback system - too slow for real-time trading
-        # Hourly retrospective provides 1h feedback with dynamic corrections
-        # from services.learning import calculate_counterfactuals_batch, run_self_analysis
-        # logger.info("Counterfactual learning disabled (replaced by hourly retrospective)")
-
-        # Add hourly market retrospective (REPLACES missed_opportunities_analyzer)
+        # Add hourly market retrospective
         # This provides REAL-TIME learning with dynamic weight adjustments
         from services.learning.hourly_retrospective import analyze_hourly_market_sync
 

@@ -940,23 +940,54 @@ Quick reference for 4 active MCP servers:
 
 ## 🧠 LEARNING SYSTEM
 
-**Status**: Hourly Market Retrospective (replaced Counterfactual Learning)
+**Current System**: Daily Evening Analysis (21:00) + Hourly Market Retrospective
 
-The original counterfactual learning system (24h feedback loop) was too slow for real-time trading optimization. It has been replaced by the **Hourly Market Retrospective** which provides faster feedback with dynamic corrections.
+The system combines two complementary learning mechanisms:
 
-### Current: Hourly Market Retrospective
+### 1. **Daily Evening Analysis** (PRIMARY - Manual Review)
 
-- **Interval**: Every 1 hour (`startup.py`)
-- **Function**: `analyze_hourly_market_sync()` from `backend/services/learning/hourly_retrospective.py`
-- **Purpose**: Analyzes market conditions and trading decisions from the past hour
-- **Output**: Dynamic weight adjustments and pattern recognition
+**Scheduler**: Cron job at 21:00 every day (`main.py:194-200`)
+**Files**:
+- `backend/services/learning/daily_analysis_service.py` - Orchestration
+- `backend/services/learning/skill_metrics_calculator.py` - Metrics calculation
+- `backend/services/learning/daily_deepseek_prompts.py` - AI prompts
+- `backend/api/daily_learning_routes.py` - Review API
 
-### Disabled: Original Counterfactual Learning
+**How it works**:
+1. **21:00**: System analyzes today's performance (all decisions + completed trades)
+2. **Skill-Based Metrics**: Calculates win rate, profit factor, Sharpe ratio, max drawdown %, entry/exit timing quality, false signal rate
+3. **DeepSeek Analysis**: Identifies patterns, mistakes, and suggests improvements
+4. **User Review**: Dashboard shows report with suggestions for:
+   - Indicator weights (auto-applicable)
+   - Prompt modifications (manual code update)
+5. **Manual Approval**: User reviews and applies changes
 
-The original system (`decision_snapshot_service.py`, `deepseek_self_analysis_service.py`) is disabled.
-- Too slow: Required 24h wait for exit price
-- Decision snapshots table still exists but not actively used
-- Code remains for potential future use but not scheduled
+**Key Features**:
+- ✅ Skill-based metrics (NOT market-dependent)
+- ✅ Manual review and approval (no auto-apply)
+- ✅ Actionable suggestions (weights + prompt rules)
+- ✅ Daily feedback loop (not 24h delay)
+
+**API Endpoints**:
+- `GET /api/daily-learning/reports/{account_id}` - List reports
+- `GET /api/daily-learning/reports/{account_id}/{date}` - Get specific report
+- `POST /api/daily-learning/reports/{report_id}/apply-weights` - Apply suggested weights
+- `GET /api/daily-learning/reports/{report_id}/prompt-instructions` - Get manual prompt instructions
+- `POST /api/daily-learning/reports/{report_id}/dismiss` - Dismiss report
+
+### 2. **Hourly Market Retrospective** (SECONDARY - Informational)
+
+**Scheduler**: Every 1 hour (`startup.py:67-72`)
+**Function**: `analyze_hourly_market_sync()`
+**Purpose**: Analyzes market movers and missed opportunities (informational only)
+**Output**: Saves to `pending_strategy_suggestions` table (not auto-applied)
+
+### Database Tables
+
+- `daily_learning_reports` - Daily analysis reports with suggestions
+- `decision_snapshots` - Every AI decision (saved every 3 min)
+- `indicator_weights_history` - Tracking weight changes over time
+- `pending_strategy_suggestions` - Hourly retrospective suggestions (legacy)
 
 
 ## 📚 DEPLOYMENT & INFRASTRUCTURE DOCUMENTATION

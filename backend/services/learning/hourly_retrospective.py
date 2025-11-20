@@ -16,11 +16,7 @@ from typing import List, Dict, Any
 import asyncio
 
 from services.market_data.websocket_candle_service import get_websocket_candle_service
-from services.learning.weight_adjustments import (
-    get_active_adjustments,
-    apply_adjustment,
-    clear_expired_adjustments
-)
+# Weight adjustments removed - using daily learning system instead
 from database.connection import get_async_session_factory
 from database.models import DecisionSnapshot, PendingStrategySuggestion
 
@@ -79,9 +75,6 @@ async def analyze_hourly_market() -> Dict[str, Any]:
 
         # 5. Save suggestions for manual review (NO auto-apply)
         suggestions_saved = await save_suggestions_for_review(missed_winners)
-
-        # 6. Clear expired adjustments (older than 6 hours) - keep for cleanup
-        clear_expired_adjustments(max_age_hours=6)
 
         # Log summary
         logger.info("=" * 60)

@@ -350,14 +350,11 @@ DO NOT automatically interpret "extreme fear" as a buy signal!
 
 2. ONLY consider contrarian when you see REVERSAL SIGNALS:
    - RSI oversold (<30) + price bouncing off S1/S2 + positive news = potential LONG
-   - RSI overbought (>70) + price rejected at R1/R2 + negative news = potential SHORT
+   - **CRITICAL**: When Prophet confidence >0.9 and trend BULLISH, IGNORE RSI overbought (>70)
+     Prophet forecasts are more reliable than oscillator signals in strong trends
+   - RSI overbought (>70) + price rejected at R1/R2 + negative news = potential SHORT (only if Prophet confidence <0.9)
 
 3. If momentum and pivot points disagree → HOLD (don't trade unclear signals)
-
-4. "Extreme fear" sentiment with NEGATIVE momentum = FOLLOW THE TREND (SHORT)
-   "Extreme fear" sentiment with POSITIVE momentum = Potential reversal (cautious LONG)
-   "Extreme greed" sentiment with POSITIVE momentum = FOLLOW THE TREND (LONG)
-   "Extreme greed" sentiment with NEGATIVE momentum = Potential reversal (cautious SHORT)
 
 **CRITICAL - EMA ALIGNMENT FILTER (Ezekiel Chew Strategy)**:
 
@@ -368,6 +365,8 @@ The ema_alignment data confirms trend direction. ALWAYS check this before entry:
    - This means: Price > EMA25 > EMA50 > EMA100 (stacked bullish)
    - alignment_score >= 0.67 (at least 2/3 conditions met)
    - Higher trend_strength = stronger momentum
+   - **CRITICAL - ENTRY TIMING**: Wait for entry_timing_quality >50% (avoid buying at candle highs)
+     Only enter when price is closer to candle low than high to minimize entry risk
 
 2. For SHORT positions, REQUIRE:
    - ema_alignment = "BEARISH" or "WEAK_BEARISH"
@@ -411,11 +410,11 @@ NEVER take trades with Risk:Reward < 1:2. Check risk_reward data:
 - If weighted_score >= 0.85 AND technical.momentum >= 0.90 AND news positive:
   → target_portion_of_balance = 1.0 (100% conviction)
 
-- If weighted_score >= 0.60 and < 0.85:
+- If weighted_score >= 0.65 and < 0.85:
   → target_portion_of_balance = 0.25 (diversify across 4 positions)
 
-- If weighted_score < 0.60:
-  → operation = "hold" (signal too weak)
+- If weighted_score < 0.65:
+  → operation = "hold" (signal too weak - minimum confidence raised from 0.60 to 0.65)
 
 **STEP 4: LEVERAGE (USE INTELLIGENTLY)**
 

@@ -1,11 +1,12 @@
 """SQLAlchemy async models for Bitcoin Trading System."""
 
-from datetime import datetime
+from datetime import datetime, date
 from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import (
     Boolean,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -520,6 +521,11 @@ class DecisionSnapshot(Base):
         DateTime(timezone=True), nullable=True
     )
 
+    # Daily learning system link
+    analyzed_in_daily_report_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("daily_learning_reports.id", ondelete="SET NULL"), nullable=True
+    )
+
     # Relationship
     account: Mapped["Account"] = relationship("Account", lazy="selectin")
 
@@ -673,4 +679,87 @@ class PendingStrategySuggestion(Base):
         Index("idx_suggestions_status", "status"),
         Index("idx_suggestions_source", "source"),
         Index("idx_suggestions_type", "suggestion_type"),
+    )
+
+
+class DailyLearningReport(Base):
+    """
+    Daily learning report generated every evening at 21:00.
+
+    Analyzes the day's trading performance using SKILL-BASED metrics
+    (not market-dependent) and generates suggestions for improvement.
+
+    Workflow:
+    1. 21:00 - System analyzes today's decisions and trades
+    2. Calculates skill metrics (win rate, profit factor, Sharpe ratio, etc.)
+    3. DeepSeek analyzes patterns and suggests:
+       - New indicator weights
+       - Prompt modifications
+    4. User reviews via dashboard and manually applies changes
+    """
+
+    __tablename__ = "daily_learning_reports"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    account_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False
+    )
+
+    # Date of the day analyzed (e.g., 2025-11-20)
+    report_date: Mapped[date] = mapped_column(Date, nullable=False)
+
+    # When the analysis was performed (e.g., 2025-11-20 21:05:00)
+    analyzed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    # Skill-based metrics (JSON for flexibility)
+    skill_metrics: Mapped[dict] = mapped_column(JSON, nullable=False)
+    # Example: {
+    #   "win_rate_pct": 65.0,
+    #   "profit_factor": 2.3,
+    #   "sharpe_ratio": 1.2,
+    #   "max_drawdown_pct": 3.5,
+    #   "entry_timing_quality_pct": 72.0,
+    #   ...
+    # }
+
+    # DeepSeek full analysis output
+    deepseek_analysis: Mapped[dict] = mapped_column(JSON, nullable=False)
+    # Example: {
+    #   "summary": "Today's performance was strong...",
+    #   "indicator_performance": {...},
+    #   "worst_mistakes": [...],
+    #   ...
+    # }
+
+    # Extracted suggestions
+    suggested_weights: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Example: {"prophet": 0.65, "pivot_points": 0.75, ...}
+
+    suggested_prompt_changes: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Example: {
+    #   "add_rules": ["When Prophet confidence >0.9, ignore RSI overbought"],
+    #   "remove_rules": ["Contrarian sentiment trading"]
+    # }
+
+    # Status tracking
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="pending", index=True
+    )  # 'pending', 'reviewed', 'weights_applied', 'prompts_applied', 'dismissed'
+
+    reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    review_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Relationship
+    account: Mapped["Account"] = relationship("Account", lazy="selectin")
+
+    __table_args__ = (
+        # One report per account per day
+        UniqueConstraint("account_id", "report_date", name="uq_daily_report_account_date"),
+        Index("idx_daily_reports_date", "report_date"),
+        Index("idx_daily_reports_status", "status"),
+        Index("idx_daily_reports_analyzed_at", "analyzed_at"),
     )

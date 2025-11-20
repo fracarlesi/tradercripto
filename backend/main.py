@@ -187,6 +187,18 @@ async def lifespan(app: FastAPI):
         )
         logger.info("✅ take_profit_check enabled (5-min interval, 150s delay)")
 
+        # Add daily evening analysis job (21:00 every day)
+        # Analyzes day's performance and generates improvement suggestions
+        from services.learning.daily_analysis_service import run_daily_analysis_sync
+
+        scheduler_service.add_cron_job(
+            job_func=run_daily_analysis_sync,
+            hour=21,
+            minute=0,
+            job_id="daily_evening_analysis"
+        )
+        logger.info("✅ daily_evening_analysis enabled (21:00 every day)")
+
     except Exception as e:
         print(f"Warning: Failed to start scheduler: {e}")
 
@@ -446,6 +458,7 @@ try:
     from api.orders_async import router as orders_async_router
     from api.sync_routes import router as sync_router
     from api.trade_history_routes import router as trade_history_router  # Complete trade history
+    from api.daily_learning_routes import router as daily_learning_router  # Daily learning system
 
     app.include_router(health_router)
     app.include_router(sync_router)
@@ -453,6 +466,7 @@ try:
     app.include_router(market_data_async_router)
     app.include_router(orders_async_router)
     app.include_router(learning_router)  # Counterfactual learning & self-analysis
+    app.include_router(daily_learning_router)  # Daily learning system
     app.include_router(trade_history_router)  # Trade history with P&L and duration
 
     # Missed opportunities analysis
