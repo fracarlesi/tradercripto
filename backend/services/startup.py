@@ -2,9 +2,7 @@
 
 import asyncio
 import logging
-import threading
 
-from services.auto_trader import AI_TRADE_JOB_ID, place_multi_agent_order
 from services.scheduler import setup_market_tasks, start_scheduler, task_scheduler
 
 logger = logging.getLogger(__name__)
@@ -20,9 +18,8 @@ def initialize_services() -> None:
         start_scheduler()
         logger.info("Scheduler service started")
 
-        # AI trading - 3 minute interval for momentum surfing
-        schedule_auto_trading(interval_seconds=180)
-        logger.info("Automatic cryptocurrency trading task started (3-minute interval)")
+        # NOTE: AI trading job is now scheduled in main.py with APScheduler (ai_crypto_trade)
+        # Removed duplicate task_scheduler registration to prevent double execution
 
         # Add price cache cleanup task (every 2 minutes)
         from services.market_data.price_cache import clear_expired_prices
@@ -104,35 +101,3 @@ async def startup_event() -> None:
 async def shutdown_event() -> None:
     """FastAPI application shutdown event"""
     shutdown_services()
-
-
-def schedule_auto_trading(interval_seconds: int = 300, max_ratio: float = 0.2) -> None:
-    """Schedule AI-driven automatic trading tasks (real trading only)
-
-    Args:
-        interval_seconds: Interval between trading attempts
-        max_ratio: Maximum portion of portfolio to use per trade
-    """
-
-    def execute_trade():
-        try:
-            place_multi_agent_order(max_ratio)
-            logger.info("Initial multi-agent trading execution completed")
-        except Exception as e:
-            logger.error(f"Error during initial multi-agent trading execution: {e}", exc_info=True)
-
-    logger.info("Scheduling multi-agent crypto trading with orchestrator (real trading on Hyperliquid)")
-
-    # Schedule the recurring multi-agent task
-    task_scheduler.add_interval_task(
-        task_func=place_multi_agent_order,
-        interval_seconds=interval_seconds,
-        task_id=AI_TRADE_JOB_ID,
-        max_ratio=max_ratio,
-    )
-
-    # FIX: Removed initial trade thread to prevent startup blocking
-    # The thread was causing event loop deadlock during application startup
-    # First trade will execute on the first scheduled interval instead
-    # initial_trade = threading.Thread(target=execute_trade, daemon=True)
-    # initial_trade.start()
