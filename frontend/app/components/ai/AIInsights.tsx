@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Card } from '@/components/ui/card'
-import { Brain, TrendingUp, TrendingDown, Minus, ChevronDown, ChevronUp, Filter, Lightbulb, Check, X, AlertTriangle } from 'lucide-react'
+import { Brain, TrendingUp, TrendingDown, Minus, ChevronDown, ChevronUp, Filter } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Select,
@@ -15,6 +15,7 @@ import {
   TabsList,
   TabsTrigger,
 } from '@/components/ui/tabs'
+import DailyReports from './DailyReports'
 
 interface DecisionSnapshot {
   id: number
@@ -36,46 +37,15 @@ interface DecisionSnapshot {
   regret: number | null
 }
 
-interface PendingSuggestion {
-  id: number
-  created_at: string
-  source: string
-  suggestion_type: string
-  symbol: string | null
-  suggestion_data: {
-    type: string
-    from?: number
-    to?: number
-    boost_amount?: number
-    condition: Record<string, number>
-    duration_hours: number
-  }
-  reason: string
-  evidence: {
-    missed_profit: number
-    return_pct: number
-    score: number
-    momentum: number
-    support: number
-  } | null
-  status: string
-  reviewed_at: string | null
-  review_notes: string | null
-}
-
 interface AIInsightsProps {
   accountId: number
 }
 
 export default function AIInsights({ accountId }: AIInsightsProps) {
   const [snapshots, setSnapshots] = useState<DecisionSnapshot[]>([])
-  const [suggestions, setSuggestions] = useState<PendingSuggestion[]>([])
-  const [pendingCount, setPendingCount] = useState(0)
   const [loading, setLoading] = useState(true)
-  const [suggestionsLoading, setSuggestionsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [expandedId, setExpandedId] = useState<number | null>(null)
-  const [expandedSuggestionId, setExpandedSuggestionId] = useState<number | null>(null)
 
   // Filters
   const [symbolFilter, setSymbolFilter] = useState<string>('all')
@@ -83,7 +53,6 @@ export default function AIInsights({ accountId }: AIInsightsProps) {
 
   useEffect(() => {
     fetchSnapshots()
-    fetchSuggestions()
   }, [accountId])
 
   const fetchSnapshots = async () => {
@@ -106,61 +75,8 @@ export default function AIInsights({ accountId }: AIInsightsProps) {
     }
   }
 
-  const fetchSuggestions = async () => {
-    try {
-      setSuggestionsLoading(true)
-      const response = await fetch('/api/learning/suggestions?status=pending')
-      if (!response.ok) {
-        throw new Error(`Failed to fetch suggestions: ${response.statusText}`)
-      }
-      const data = await response.json()
-      setSuggestions(data.suggestions || [])
-      setPendingCount(data.pending_count || 0)
-    } catch (err) {
-      console.error('Error fetching suggestions:', err)
-    } finally {
-      setSuggestionsLoading(false)
-    }
-  }
-
-  const dismissSuggestion = async (id: number) => {
-    try {
-      const response = await fetch(`/api/learning/suggestions/${id}/dismiss`, {
-        method: 'POST',
-      })
-      if (!response.ok) {
-        throw new Error('Failed to dismiss suggestion')
-      }
-      // Refresh suggestions
-      fetchSuggestions()
-    } catch (err) {
-      console.error('Error dismissing suggestion:', err)
-      alert('Failed to dismiss suggestion')
-    }
-  }
-
-  const markApplied = async (id: number) => {
-    try {
-      const response = await fetch(`/api/learning/suggestions/${id}/mark-applied`, {
-        method: 'POST',
-      })
-      if (!response.ok) {
-        throw new Error('Failed to mark suggestion as applied')
-      }
-      // Refresh suggestions
-      fetchSuggestions()
-    } catch (err) {
-      console.error('Error marking suggestion as applied:', err)
-      alert('Failed to mark suggestion as applied')
-    }
-  }
-
   const toggleExpand = (id: number) => {
     setExpandedId(expandedId === id ? null : id)
-  }
-
-  const toggleSuggestionExpand = (id: number) => {
-    setExpandedSuggestionId(expandedSuggestionId === id ? null : id)
   }
 
   const parseIndicators = (jsonString: string) => {
@@ -228,204 +144,15 @@ export default function AIInsights({ accountId }: AIInsightsProps) {
         </div>
       </div>
 
-      <Tabs defaultValue="suggestions" className="w-full">
+      <Tabs defaultValue="daily-reports" className="w-full">
         <TabsList className="grid w-full grid-cols-2">
-          <TabsTrigger value="suggestions" className="flex items-center gap-2">
-            <Lightbulb className="w-4 h-4" />
-            Suggestions
-            {pendingCount > 0 && (
-              <span className="ml-1 px-2 py-0.5 text-xs bg-primary text-primary-foreground rounded-full">
-                {pendingCount}
-              </span>
-            )}
-          </TabsTrigger>
+          <TabsTrigger value="daily-reports">Daily Reports</TabsTrigger>
           <TabsTrigger value="history">Decision History</TabsTrigger>
         </TabsList>
 
-        {/* Suggestions Tab */}
-        <TabsContent value="suggestions" className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="text-sm text-muted-foreground">
-              {suggestions.length} pending suggestions
-            </div>
-            <Button variant="outline" size="sm" onClick={fetchSuggestions}>
-              Refresh
-            </Button>
-          </div>
-
-          {suggestionsLoading ? (
-            <div className="flex items-center justify-center h-32">
-              <div className="text-muted-foreground">Loading suggestions...</div>
-            </div>
-          ) : suggestions.length === 0 ? (
-            <Card className="p-8 text-center">
-              <Lightbulb className="w-12 h-12 mx-auto mb-4 text-muted-foreground/50" />
-              <p className="text-muted-foreground">No pending suggestions</p>
-              <p className="text-sm text-muted-foreground mt-2">
-                Suggestions will appear here when the system identifies opportunities to improve the strategy.
-              </p>
-            </Card>
-          ) : (
-            <div className="space-y-3">
-              {suggestions.map(suggestion => (
-                <Card key={suggestion.id} className="overflow-hidden">
-                  <div
-                    className="p-4 cursor-pointer hover:bg-muted/50 transition-colors"
-                    onClick={() => toggleSuggestionExpand(suggestion.id)}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-4">
-                        <AlertTriangle className="w-5 h-5 text-yellow-500" />
-                        <div>
-                          <div className="font-semibold">
-                            {suggestion.suggestion_type === 'threshold_adjustment' ? 'Lower Threshold' : 'Score Boost'}
-                            {suggestion.symbol && ` - ${suggestion.symbol}`}
-                          </div>
-                          <div className="text-sm text-muted-foreground">
-                            {formatTimestamp(suggestion.created_at)}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-3">
-                        {suggestion.evidence && (
-                          <div className="text-right">
-                            <div className="text-sm font-medium text-destructive">
-                              -${suggestion.evidence.missed_profit.toFixed(2)}
-                            </div>
-                            <div className="text-xs text-muted-foreground">
-                              missed profit
-                            </div>
-                          </div>
-                        )}
-
-                        {expandedSuggestionId === suggestion.id ? (
-                          <ChevronUp className="w-5 h-5 text-muted-foreground" />
-                        ) : (
-                          <ChevronDown className="w-5 h-5 text-muted-foreground" />
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Expanded Details */}
-                  {expandedSuggestionId === suggestion.id && (
-                    <div className="border-t bg-muted/20 p-4 space-y-4">
-                      {/* Reason */}
-                      <div>
-                        <h4 className="font-semibold mb-2">Reason</h4>
-                        <div className="text-sm text-muted-foreground bg-background p-3 rounded-md">
-                          {suggestion.reason}
-                        </div>
-                      </div>
-
-                      {/* Suggestion Details */}
-                      <div>
-                        <h4 className="font-semibold mb-2">Suggested Change</h4>
-                        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                          <div className="bg-background p-3 rounded-md">
-                            <div className="text-xs text-muted-foreground">Type</div>
-                            <div className="text-sm font-medium">{suggestion.suggestion_data.type}</div>
-                          </div>
-                          {suggestion.suggestion_data.from !== undefined && (
-                            <div className="bg-background p-3 rounded-md">
-                              <div className="text-xs text-muted-foreground">From → To</div>
-                              <div className="text-sm font-medium">
-                                {suggestion.suggestion_data.from} → {suggestion.suggestion_data.to}
-                              </div>
-                            </div>
-                          )}
-                          {suggestion.suggestion_data.boost_amount !== undefined && (
-                            <div className="bg-background p-3 rounded-md">
-                              <div className="text-xs text-muted-foreground">Boost Amount</div>
-                              <div className="text-sm font-medium">+{suggestion.suggestion_data.boost_amount}</div>
-                            </div>
-                          )}
-                          <div className="bg-background p-3 rounded-md">
-                            <div className="text-xs text-muted-foreground">Duration</div>
-                            <div className="text-sm font-medium">{suggestion.suggestion_data.duration_hours}h</div>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Conditions */}
-                      <div>
-                        <h4 className="font-semibold mb-2">Conditions</h4>
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                          {Object.entries(suggestion.suggestion_data.condition).map(([key, value]) => (
-                            <div key={key} className="bg-background p-3 rounded-md">
-                              <div className="text-xs text-muted-foreground">{key}</div>
-                              <div className="text-sm font-medium">{value}</div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* Evidence */}
-                      {suggestion.evidence && (
-                        <div>
-                          <h4 className="font-semibold mb-2">Evidence</h4>
-                          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-                            <div className="bg-background p-3 rounded-md">
-                              <div className="text-xs text-muted-foreground">Return %</div>
-                              <div className="text-sm font-medium text-green-500">
-                                +{suggestion.evidence.return_pct.toFixed(1)}%
-                              </div>
-                            </div>
-                            <div className="bg-background p-3 rounded-md">
-                              <div className="text-xs text-muted-foreground">Score</div>
-                              <div className="text-sm font-medium">{suggestion.evidence.score.toFixed(2)}</div>
-                            </div>
-                            <div className="bg-background p-3 rounded-md">
-                              <div className="text-xs text-muted-foreground">Momentum</div>
-                              <div className="text-sm font-medium">{suggestion.evidence.momentum.toFixed(2)}</div>
-                            </div>
-                            <div className="bg-background p-3 rounded-md">
-                              <div className="text-xs text-muted-foreground">Support</div>
-                              <div className="text-sm font-medium">{suggestion.evidence.support.toFixed(2)}</div>
-                            </div>
-                            <div className="bg-background p-3 rounded-md border-2 border-destructive/30">
-                              <div className="text-xs text-muted-foreground">Missed Profit</div>
-                              <div className="text-sm font-medium text-destructive">
-                                ${suggestion.evidence.missed_profit.toFixed(2)}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Actions */}
-                      <div className="flex gap-3 pt-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="flex-1"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            dismissSuggestion(suggestion.id)
-                          }}
-                        >
-                          <X className="w-4 h-4 mr-2" />
-                          Dismiss
-                        </Button>
-                        <Button
-                          size="sm"
-                          className="flex-1"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            markApplied(suggestion.id)
-                          }}
-                        >
-                          <Check className="w-4 h-4 mr-2" />
-                          Mark Applied
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-                </Card>
-              ))}
-            </div>
-          )}
+        {/* Daily Reports Tab */}
+        <TabsContent value="daily-reports" className="space-y-4">
+          <DailyReports accountId={accountId} />
         </TabsContent>
 
         {/* Decision History Tab */}

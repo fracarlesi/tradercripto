@@ -468,10 +468,6 @@ try:
     app.include_router(learning_router)  # Counterfactual learning & self-analysis
     app.include_router(daily_learning_router)  # Daily learning system
     app.include_router(trade_history_router)  # Trade history with P&L and duration
-
-    # Missed opportunities analysis
-    from api.missed_opportunities_routes import router as missed_opportunities_router
-    app.include_router(missed_opportunities_router)
 except ImportError:
     pass  # New routes not available yet
 
