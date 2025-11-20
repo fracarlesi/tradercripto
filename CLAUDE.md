@@ -763,17 +763,17 @@ asyncio.run(check())
 ```
 
 ```bash
-# 2. Check DB snapshots (should match Hyperliquid after sync)
-sqlite3 backend/data.db "
+# 2. Check DB snapshots in PostgreSQL (should match Hyperliquid after sync)
+ssh root@46.224.45.196 'cd /opt/trader_bitcoin && docker compose -f docker-compose.simple.yml exec -T postgres psql -U trader -d trader_db -c "
 SELECT
-    datetime(snapshot_time) as time,
+    snapshot_time as time,
     total_assets,
     withdrawable,
     total_margin_used
 FROM portfolio_snapshots
 ORDER BY snapshot_time DESC
 LIMIT 5;
-"
+"'
 ```
 
 ```bash
