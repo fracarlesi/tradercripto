@@ -1,0 +1,14 @@
+# Exclude macOS metadata files (AppleDouble)
+._* export-ignore
+.DS_Store export-ignore
+
+# Ensure line endings are correct
+* text=auto
+*.py text eol=lf
+*.js text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
