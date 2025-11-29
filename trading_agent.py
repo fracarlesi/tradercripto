@@ -1,91 +1,84 @@
 from openai import OpenAI
 from dotenv import load_dotenv
 import os
-import json 
+import json
 
 load_dotenv()
-# read api key
+
+# OpenAI direct API
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-def previsione_trading_agent(prompt):
-    response = client.responses.create(
-    model="gpt-5.1",
-    input=prompt,
-    text={
-        "format": {
-        "type": "json_schema",
-        "name": "trade_operation",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {
-            "operation": {
-                "type": "string",
-                "description": "Type of trading operation to perform",
-                "enum": [
-                "open",
-                "close",
-                "hold"
-                ]
-            },
-            "symbol": {
-                "type": "string",
-                "description": "The cryptocurrency symbol to act on",
-                "enum": [
-                "BTC",
-                "ETH",
-                "SOL"
-                ]
-            },
-            "direction": {
-                "type": "string",
-                "description": "Trade direction: betting the price goes up (long) or down (short). For hold, may be omitted.",
-                "enum": [
-                "long",
-                "short"
-                ]
-            },
-            "target_portion_of_balance": {
-                "type": "number",
-                "description": "Fraction of (for open: balance, for close: position) to allocate/close; from 0.0 to 1.0 inclusive",
-                "minimum": 0,
-                "maximum": 1
-            },
-            "leverage": {
-                "type": "number",
-                "description": "Leverage multiplier (risk/reward, 1-10). Only applicable for 'open'.",
-                "minimum": 1,
-                "maximum": 10
-            },
-            "reason": {
-                "type": "string",
-                "description": "Brief explanation of the trading decision",
-                "minLength": 1,
-                "maxLength": 300
-            }
-            },
-            "required": [
-            "operation",
-            "symbol",
-            "direction",
-            "target_portion_of_balance",
-            "leverage",
-            "reason"
-            ],
-            "additionalProperties": False
-        }
+TRADE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "operation": {
+            "type": "string",
+            "description": "Type of trading operation to perform",
+            "enum": ["open", "close", "hold"]
         },
-        "verbosity": "medium"
+        "symbol": {
+            "type": "string",
+            "description": "The cryptocurrency symbol to act on",
+            "enum": ["BTC", "ETH", "SOL"]
+        },
+        "direction": {
+            "type": "string",
+            "description": "Trade direction: betting the price goes up (long) or down (short).",
+            "enum": ["long", "short"]
+        },
+        "target_portion_of_balance": {
+            "type": "number",
+            "description": "Fraction of balance/position to allocate/close; from 0.0 to 1.0",
+            "minimum": 0,
+            "maximum": 1
+        },
+        "leverage": {
+            "type": "number",
+            "description": "Leverage multiplier (1-10). Only applicable for 'open'.",
+            "minimum": 1,
+            "maximum": 10
+        },
+        "reason": {
+            "type": "string",
+            "description": "Brief explanation of the trading decision (max 300 chars)"
+        }
     },
-    reasoning={
-        "effort": "medium",
-        "summary": "auto"
-    },
-    tools=[],
-    store=True,
-    include=[
-        "reasoning.encrypted_content",
-        "web_search_call.action.sources"
-    ])
-    return(json.loads(response.output_text))
+    "required": ["operation", "symbol", "direction", "target_portion_of_balance", "leverage", "reason"],
+    "additionalProperties": False
+}
+
+def previsione_trading_agent(prompt):
+    """Call GPT 5.1 via OpenRouter for trading decision."""
+
+    system_message = """You are a professional crypto trading agent. Analyze the market data and make a trading decision.
+
+You MUST respond with a valid JSON object matching this exact schema:
+{
+    "operation": "open" | "close" | "hold",
+    "symbol": "BTC" | "ETH" | "SOL",
+    "direction": "long" | "short",
+    "target_portion_of_balance": 0.0 to 1.0,
+    "leverage": 1 to 10,
+    "reason": "Brief explanation (max 300 chars)"
+}
+
+Rules:
+- For "hold" operation, still provide symbol, direction, target_portion_of_balance=0, leverage=1
+- Always use leverage 10x
+- Consider all indicators, sentiment, and news before deciding
+- Respond ONLY with the JSON object, no additional text"""
+
+    response = client.chat.completions.create(
+        model="gpt-5.1",
+        messages=[
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0.3,
+        max_completion_tokens=128000,
+        response_format={"type": "json_object"}
+    )
+
+    result = json.loads(response.choices[0].message.content)
+    return result

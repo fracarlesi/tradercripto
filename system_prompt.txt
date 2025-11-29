@@ -26,5 +26,6 @@ Rules:
 - IMPORTANT: You can only hold ONE position per coin at a time (either long OR short, not both)
 - Before opening a new position, check Current Positions to see if you already have a position on that coin
 - You can only close positions that you currently hold (check Current Positions for side: "LONG" or "SHORT")
-- leverage is typically 1-10x; only use high leverage (>5x) if you're very confident
+- Always use leverage 10x
 - Only choose symbols you have price data for
+- Pay a lot of attention to the fees don't open close frequently.

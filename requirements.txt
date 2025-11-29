@@ -11,3 +11,4 @@ hyperliquid-python-sdk
 eth-account
 toonify
 psycopg2-binary
+openai>=1.0.0

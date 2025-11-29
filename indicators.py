@@ -139,21 +139,61 @@ class CryptoTechnicalAnalysisHL:
         return {"pp": pp, "s1": s1, "s2": s2, "r1": r1, "r2": r2}
 
     # ==============================
-    #   FUNDING / OI (placeholder)
+    #   FUNDING / OI (real implementation)
     # ==============================
+    def get_funding_and_oi(self, coin: str) -> Dict:
+        """
+        Recupera funding rate e open interest reali da Hyperliquid.
+        Usa meta_and_asset_ctxs() per ottenere i dati.
+        """
+        try:
+            meta_and_ctxs = self.info.meta_and_asset_ctxs()
+            # meta_and_ctxs è una lista: [meta, [asset_ctx1, asset_ctx2, ...]]
+            if len(meta_and_ctxs) < 2:
+                return {"open_interest": 0.0, "funding_rate": 0.0}
+
+            meta = meta_and_ctxs[0]
+            asset_ctxs = meta_and_ctxs[1]
+
+            # Trova l'indice del coin
+            coin_upper = coin.upper()
+            coin_idx = None
+            for i, asset in enumerate(meta.get("universe", [])):
+                if asset.get("name", "").upper() == coin_upper:
+                    coin_idx = i
+                    break
+
+            if coin_idx is None or coin_idx >= len(asset_ctxs):
+                return {"open_interest": 0.0, "funding_rate": 0.0}
+
+            ctx = asset_ctxs[coin_idx]
+            open_interest = float(ctx.get("openInterest", 0.0))
+            funding_rate = float(ctx.get("funding", 0.0))
+
+            return {
+                "open_interest": open_interest,
+                "funding_rate": funding_rate
+            }
+        except Exception as e:
+            print(f"Errore recuperando funding/OI per {coin}: {e}")
+            return {"open_interest": 0.0, "funding_rate": 0.0}
+
     def get_funding_rate(self, coin: str) -> float:
-        """
-        Per ora ritorniamo 0.0 per evitare problemi di compatibilità se
-        la tua versione dell'SDK non espone funding_history.
-        """
-        return 0.0
+        """Recupera funding rate reale."""
+        data = self.get_funding_and_oi(coin)
+        return data["funding_rate"]
 
     def get_open_interest(self, coin: str) -> Dict[str, float]:
+        """Recupera open interest reale."""
+        data = self.get_funding_and_oi(coin)
+        return {"latest": data["open_interest"], "average": data["open_interest"]}
+
+    def get_est_transaction_fee(self, price: float, fee_rate: float = 0.00035) -> float:
         """
-        Hyperliquid non espone un semplice 'open interest globale' via SDK.
-        Placeholder che ritorna 0.0.
+        Calcola la stima della transaction fee.
+        Fee rate default: 0.035% = 0.00035
         """
-        return {"latest": 0.0, "average": 0.0}
+        return price * fee_rate
 
     # ==============================
     #   ANALISI COMPLETA A 15m
@@ -204,18 +244,20 @@ class CryptoTechnicalAnalysisHL:
                 last["high"], last["low"], last["close"]
             )
 
-        oi_data = self.get_open_interest(coin)
-        funding_rate = self.get_funding_rate(coin)
+        funding_oi = self.get_funding_and_oi(coin)
 
         current_15m = df_15m.iloc[-1]
         current_longer = longer_term.iloc[-1]
 
+        current_price = current_15m["close"]
+        est_tx_fee = self.get_est_transaction_fee(current_price)
+
         result = {
             "ticker": ticker,
             "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-            
+
             "current": {
-                "price": current_15m["close"],
+                "price": current_price,
                 "ema20": current_15m["ema_20"],
                 "macd": current_15m["macd"],
                 "rsi_7": current_15m["rsi_7"],
@@ -224,9 +266,9 @@ class CryptoTechnicalAnalysisHL:
             "pivot_points": pivot_points,
 
             "derivatives": {
-                "open_interest_latest": oi_data["latest"],
-                "open_interest_average": oi_data["average"],
-                "funding_rate": funding_rate,
+                "open_interest": funding_oi["open_interest"],
+                "funding_rate": funding_oi["funding_rate"],
+                "est_transaction_fee": est_tx_fee,
             },
 
             "intraday": {
@@ -276,11 +318,9 @@ class CryptoTechnicalAnalysisHL:
         output += (
             f"In addition, here is the latest {data['ticker']} funding data on Hyperliquid:\n"
         )
-        output += (
-            f"Open Interest (placeholder): Latest: {deriv['open_interest_latest']:.2f} "
-            f"Average: {deriv['open_interest_average']:.2f}\n"
-        )
-        output += f"Funding Rate: {deriv['funding_rate']:.2e}\n\n"
+        output += f"Open Interest: Latest: {deriv['open_interest']:.2f}\n"
+        output += f"Funding Rate: {deriv['funding_rate']:.6f}\n"
+        output += f"Est. Transaction Fee (0.035%): {deriv['est_transaction_fee']:.4f} USD\n\n"
 
         intra = data["intraday"]
         output += "Intraday series (15m, oldest → latest):\n"
