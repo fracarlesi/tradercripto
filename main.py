@@ -1,7 +1,6 @@
 from indicators import analyze_multiple_tickers
 from news_feed import fetch_latest_news
 from trading_agent import previsione_trading_agent
-from whalealert import format_whale_alerts_to_string
 from sentiment import get_sentiment
 from forecaster import get_crypto_forecasts
 from hyperliquid_trader import HyperLiquidTrader
