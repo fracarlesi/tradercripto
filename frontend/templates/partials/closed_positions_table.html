@@ -1,0 +1,36 @@
+{% if positions %}
+<div class="closed-positions-list">
+    {% for pos in positions %}
+    <div class="position-card closed">
+        <div class="position-header">
+            <strong>{{ pos.symbol }}</strong>
+            <span class="tag {% if pos.side == 'long' %}tag-long{% else %}tag-short{% endif %}">
+                {{ pos.side|upper }}
+            </span>
+            {% if pos.leverage %}
+            <span class="tag">{{ pos.leverage }}</span>
+            {% endif %}
+        </div>
+        <div class="position-details">
+            <small>Size: {{ "%.4f"|format(pos.size) }}</small>
+            {% if pos.entry_price %}
+            <small>Entry: ${{ "%.2f"|format(pos.entry_price) }}</small>
+            {% endif %}
+            {% if pos.exit_price %}
+            <small>Exit: ${{ "%.2f"|format(pos.exit_price) }}</small>
+            {% endif %}
+        </div>
+        <div class="position-pnl">
+            {% if pos.pnl_usd is not none %}
+            <span class="{% if pos.pnl_usd >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">
+                {% if pos.pnl_usd >= 0 %}+{% endif %}${{ "%.2f"|format(pos.pnl_usd) }}
+            </span>
+            {% endif %}
+        </div>
+        <small class="position-date">{{ pos.closed_at|to_rome }}</small>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<p class="no-data">Nessuna posizione chiusa rilevata.</p>
+{% endif %}

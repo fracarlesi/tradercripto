@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, List, Optional
 from zoneinfo import ZoneInfo
 
+import httpx
 import psycopg2
 from dotenv import load_dotenv
 from fastapi import FastAPI, Query, Request
@@ -75,6 +76,16 @@ class BotOperation(BaseModel):
     system_prompt: Optional[str]
 
 
+class RegimeDecision(BaseModel):
+    id: int
+    timestamp: datetime
+    regime: str
+    confidence: float
+    risk_adjustment: float
+    asset_regimes: Any
+    analysis: Optional[str]
+
+
 # =====================
 # App FastAPI + Template Jinja2
 # =====================
@@ -115,7 +126,7 @@ templates.env.filters["to_rome"] = to_rome_tz
 
 @app.get("/balance", response_model=List[BalancePoint])
 def get_balance() -> List[BalancePoint]:
-    """Restituisce TUTTA la storia del saldo (balance_usd) ordinata nel tempo.
+    """Restituisce TUTTA la storia del saldo (equity) ordinata nel tempo.
 
     I dati sono presi dalla tabella `account_snapshots`.
     """
@@ -124,9 +135,9 @@ def get_balance() -> List[BalancePoint]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT created_at, balance_usd
+                SELECT timestamp, equity
                 FROM account_snapshots
-                ORDER BY created_at ASC;
+                ORDER BY timestamp ASC;
                 """
             )
             rows = cur.fetchall()
@@ -139,47 +150,31 @@ def get_balance() -> List[BalancePoint]:
 
 @app.get("/open-positions", response_model=List[OpenPosition])
 def get_open_positions() -> List[OpenPosition]:
-    """Restituisce le posizioni aperte dell'ULTIMO snapshot disponibile.
+    """Restituisce le posizioni aperte più recenti.
 
-    - Prende l'ultimo record da `account_snapshots`.
-    - Recupera le posizioni corrispondenti da `open_positions`.
+    - Recupera le posizioni dalla tabella `positions`.
     """
 
     with get_connection() as conn:
         with conn.cursor() as cur:
-            # Ultimo snapshot
-            cur.execute(
-                """
-                SELECT id, created_at
-                FROM account_snapshots
-                ORDER BY created_at DESC
-                LIMIT 1;
-                """
-            )
-            row = cur.fetchone()
-            if not row:
-                return []
-            snapshot_id = row[0]
-            snapshot_created_at = row[1]
-
-            # Posizioni aperte per quello snapshot
+            # Posizioni più recenti (ultima snapshot_time)
             cur.execute(
                 """
                 SELECT
                     id,
-                    snapshot_id,
+                    0 as snapshot_id,
                     symbol,
                     side,
                     size,
                     entry_price,
-                    mark_price,
-                    pnl_usd,
-                    leverage
-                FROM open_positions
-                WHERE snapshot_id = %s
+                    current_price,
+                    unrealized_pnl,
+                    leverage,
+                    snapshot_time
+                FROM positions
+                WHERE snapshot_time = (SELECT MAX(snapshot_time) FROM positions)
                 ORDER BY symbol ASC, id ASC;
-                """,
-                (snapshot_id,),
+                """
             )
             rows = cur.fetchall()
 
@@ -193,8 +188,8 @@ def get_open_positions() -> List[OpenPosition]:
             entry_price=float(row[5]) if row[5] is not None else None,
             mark_price=float(row[6]) if row[6] is not None else None,
             pnl_usd=float(row[7]) if row[7] is not None else None,
-            leverage=row[8],
-            snapshot_created_at=snapshot_created_at,
+            leverage=str(row[8]) if row[8] is not None else None,
+            snapshot_created_at=row[9],
         )
         for row in rows
     ]
@@ -209,9 +204,9 @@ def get_bot_operations(
         description="Numero massimo di operazioni da restituire (default 50)",
     ),
 ) -> List[BotOperation]:
-    """Restituisce le ULTIME `limit` operazioni del bot con il full system prompt.
+    """Restituisce le ULTIME `limit` operazioni (trades) del bot.
 
-    - I dati provengono da `bot_operations` uniti a `ai_contexts`.
+    - I dati provengono dalla tabella `trades`.
     - Ordinati da più recente a meno recente.
     """
 
@@ -220,18 +215,17 @@ def get_bot_operations(
             cur.execute(
                 """
                 SELECT
-                    bo.id,
-                    bo.created_at,
-                    bo.operation,
-                    bo.symbol,
-                    bo.direction,
-                    bo.target_portion_of_balance,
-                    bo.leverage,
-                    bo.raw_payload,
-                    ac.system_prompt
-                FROM bot_operations AS bo
-                LEFT JOIN ai_contexts AS ac ON bo.context_id = ac.id
-                ORDER BY bo.created_at DESC
+                    id,
+                    entry_time,
+                    CASE WHEN exit_time IS NULL THEN 'OPEN' ELSE 'CLOSED' END as operation,
+                    symbol,
+                    side,
+                    size,
+                    entry_price,
+                    metadata,
+                    strategy_id
+                FROM trades
+                ORDER BY entry_time DESC
                 LIMIT %s;
                 """,
                 (limit,),
@@ -255,6 +249,51 @@ def get_bot_operations(
         )
 
     return operations
+
+
+@app.get("/regime-history", response_model=List[RegimeDecision])
+def get_regime_history(
+    limit: int = Query(
+        50,
+        ge=1,
+        le=500,
+        description="Numero massimo di decisioni da restituire (default 50)",
+    ),
+) -> List[RegimeDecision]:
+    """Restituisce le ultime analisi del regime di mercato."""
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    timestamp,
+                    regime,
+                    confidence,
+                    risk_adjustment,
+                    asset_regimes,
+                    analysis
+                FROM regime_history
+                ORDER BY timestamp DESC
+                LIMIT %s;
+                """,
+                (limit,),
+            )
+            rows = cur.fetchall()
+
+    return [
+        RegimeDecision(
+            id=row[0],
+            timestamp=row[1],
+            regime=row[2],
+            confidence=float(row[3]) if row[3] is not None else 0,
+            risk_adjustment=float(row[4]) if row[4] is not None else 0,
+            asset_regimes=row[5],
+            analysis=row[6],
+        )
+        for row in rows
+    ]
 
 
 # =====================
@@ -298,9 +337,66 @@ async def ui_bot_operations(request: Request) -> HTMLResponse:
     """Partial HTML con le ultime operazioni del bot."""
 
     operations = get_bot_operations(limit=50)
+    regimes = get_regime_history(limit=50)
     return templates.TemplateResponse(
         "partials/bot_operations_table.html",
-        {"request": request, "operations": operations},
+        {"request": request, "operations": operations, "regimes": regimes},
+    )
+
+
+@app.get("/ui/regime-history", response_class=HTMLResponse)
+async def ui_regime_history(request: Request) -> HTMLResponse:
+    """Partial HTML con le decisioni AI del regime di mercato."""
+
+    regimes = get_regime_history(limit=50)
+    return templates.TemplateResponse(
+        "partials/regime_history.html",
+        {"request": request, "regimes": regimes},
+    )
+
+
+# =====================
+# HFT Metrics Proxy
+# =====================
+
+BOT_URL = os.getenv("BOT_URL", "http://app:8080")
+
+
+@app.get("/hft-metrics")
+async def get_hft_metrics():
+    """Proxy to bot's /metrics endpoint for HFT performance data."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(f"{BOT_URL}/metrics")
+            return response.json()
+    except Exception as e:
+        return {"error": str(e), "bot_url": BOT_URL}
+
+
+@app.get("/hft-metrics/history")
+async def get_hft_metrics_history(limit: int = Query(100, ge=1, le=1000)):
+    """Proxy to bot's /metrics/history endpoint."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(f"{BOT_URL}/metrics/history", params={"limit": limit})
+            return response.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/ui/hft-metrics", response_class=HTMLResponse)
+async def ui_hft_metrics(request: Request) -> HTMLResponse:
+    """Partial HTML con le metriche HFT."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(f"{BOT_URL}/metrics")
+            metrics = response.json()
+    except Exception:
+        metrics = None
+
+    return templates.TemplateResponse(
+        "partials/hft_metrics.html",
+        {"request": request, "metrics": metrics},
     )
 
 

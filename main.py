@@ -25,6 +25,11 @@ try:
         testnet=TESTNET
     )
 
+    # Sincronizza trade chiusi da SL/TP on-chain
+    synced = bot.sync_closed_trades()
+    if synced > 0:
+        print(f"[sync] Sincronizzati {synced} trade chiusi on-chain")
+
     # Calcolo delle informazioni in input per Ticker
     tickers = ['BTC', 'ETH', 'SOL']
     indicators_txt, indicators_json  = analyze_multiple_tickers(tickers)
@@ -51,12 +56,24 @@ try:
     system_prompt = system_prompt.format(portfolio_data, msg_info)
         
     print("L'agente sta decidendo la sua azione!")
-    out = previsione_trading_agent(system_prompt)
-    bot.execute_signal(out)
+    out, usage = previsione_trading_agent(system_prompt)
 
-
+    # Log operazione PRIMA di eseguirla per avere l'operation_id
     op_id = db_utils.log_bot_operation(out, system_prompt=system_prompt, indicators=indicators_json, news_text=news_txt, sentiment=sentiment_json, forecasts=forecasts_json)
     print(f"[db_utils] Operazione inserita con id={op_id}")
+
+    # Esegui il segnale passando l'operation_id per il tracking
+    bot.execute_signal(out, operation_id=op_id)
+
+    # Log costi API
+    cost_id = db_utils.log_api_cost(
+        model=usage["model"],
+        prompt_tokens=usage["prompt_tokens"],
+        completion_tokens=usage["completion_tokens"],
+        total_tokens=usage["total_tokens"],
+        operation_id=op_id
+    )
+    print(f"[db_utils] Costo API loggato con id={cost_id} - Tokens: {usage['total_tokens']}")
 
 except Exception as e:
     db_utils.log_error(e, context={"prompt": system_prompt, "tickers": tickers,

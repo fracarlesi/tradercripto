@@ -1,5 +1,13 @@
 # Rizzo Trading Bot - Guida Deploy e Sviluppo
 
+## Note per Claude Code
+
+**REGOLA IMPORTANTE**: MAI prendere iniziativa su modifiche tecniche (cambiare modelli AI, endpoint, configurazioni critiche) senza prima condividere e chiedere conferma all'utente.
+
+Per ricerche semantiche nella codebase, usare l'MCP `claude-context`:
+- `mcp__claude-context__search_code` - ricerca semantica nel codice
+- `mcp__claude-context__index_codebase` - indicizza la codebase (se necessario)
+
 ## Repository GitHub
 https://github.com/fracarlesi/tradercripto
 
@@ -85,12 +93,37 @@ Il deploy usa `rsync --delete` che sovrascrive tutto sul server con i file local
 
 ---
 
+## 🚨 REGOLA FONDAMENTALE: Usare SEMPRE deploy.sh
+
+**Per il deploy usare SEMPRE `./deploy.sh`, MAI rsync manuale!**
+
+Il file `run_bot.sh` ha bisogno di permessi di esecuzione (`chmod +x`) e ownership `root:root`.
+Quando si usa `rsync` direttamente, i permessi vengono sovrascritti con quelli del Mac (owner 501:staff, senza +x) e il **cron smette di funzionare silenziosamente**.
+
+Lo script `deploy.sh` include automaticamente:
+```bash
+ssh root@$VPS_IP "chown root:root $DEPLOY_DIR/run_bot.sh && chmod +x $DEPLOY_DIR/run_bot.sh"
+```
+
+**Se il bot non esegue decisioni**, la prima cosa da verificare è:
+```bash
+ssh root@<VPS_IP_REDACTED> "ls -la /opt/trader_bitcoin/run_bot.sh"
+# Deve mostrare: -rwx--x--x 1 root root ...
+# Se mostra: -rw------- 1 501 staff ... → i permessi sono sbagliati!
+
+# Fix manuale:
+ssh root@<VPS_IP_REDACTED> "chown root:root /opt/trader_bitcoin/run_bot.sh && chmod +x /opt/trader_bitcoin/run_bot.sh"
+```
+
+---
+
 ## Deploy su Hetzner VPS con Docker
 
 ### Server
 - **IP**: <VPS_IP_REDACTED>
 - **Directory**: /opt/trader_bitcoin
 - **User**: root
+- **Dashboard**: http://<VPS_IP_REDACTED>:5611/
 
 ### Comandi Deploy Rapido
 
@@ -101,7 +134,7 @@ Il deploy usa `rsync --delete` che sovrascrive tutto sul server con i file local
 # Oppure manualmente:
 rsync -avz --delete --exclude='.git' --exclude='__pycache__' --exclude='.env' ./ root@<VPS_IP_REDACTED>:/opt/trader_bitcoin/
 scp .env root@<VPS_IP_REDACTED>:/opt/trader_bitcoin/.env
-ssh root@<VPS_IP_REDACTED> "cd /opt/trader_bitcoin && docker compose build --no-cache && docker compose up -d postgres"
+ssh root@<VPS_IP_REDACTED> "cd /opt/trader_bitcoin && docker compose build --no-cache && docker compose up -d postgres dashboard"
 ```
 
 ### Gestione Container sul Server
@@ -118,6 +151,7 @@ tail -f /opt/trader_bitcoin/logs/bot.log
 
 # Vedere logs Docker
 docker compose logs -f postgres
+docker compose logs -f dashboard
 
 # Eseguire bot manualmente
 docker compose run --rm app python main.py
@@ -137,6 +171,9 @@ docker-compose.yml
 ├── postgres (porta 5432)
 │   └─ Volume: postgres_data
 │   └─ Healthcheck attivo
+├── dashboard (porta 5611)
+│   └─ FastAPI + HTMX
+│   └─ restart: unless-stopped
 └── app (bot trading)
     └─ restart: "no" (eseguito da cron)
 ```
@@ -212,6 +249,12 @@ docker compose run --rm app python -c "import db_utils; db_utils.init_db()"
 docker compose run --rm app python -c "import db_utils; db_utils.init_db()"
 ```
 
+### Dashboard non raggiungibile (porta 5611)
+1. Verificare che il container sia attivo: `docker compose ps`
+2. Avviare il dashboard: `docker compose up -d dashboard`
+3. Controllare logs: `docker compose logs -f dashboard`
+4. Verificare porta esposta: `curl http://localhost:5611/`
+
 ---
 
 ## Struttura File
@@ -235,5 +278,10 @@ trader_bitcoin/
 ├── news_feed.py            # RSS news
 ├── db_utils.py             # PostgreSQL logging
 ├── system_prompt.txt       # Prompt LLM
-└── logs/                   # Directory logs (sul server)
+├── logs/                   # Directory logs (sul server)
+└── frontend/               # Dashboard web (FastAPI + HTMX)
+    ├── Dockerfile          # Build image dashboard
+    ├── main.py             # API e pagine HTML
+    ├── requirements.txt    # Dipendenze frontend
+    └── templates/          # Template Jinja2
 ```

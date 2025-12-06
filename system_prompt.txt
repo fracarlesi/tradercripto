@@ -18,6 +18,8 @@ Rules:
   - direction: "long" or "short"
   - target_portion_of_balance: % of available cash to use (0.0-1.0)
   - leverage: leverage multiplier (1-10, higher = more risk/reward)
+  - stop_loss_percent: (optional) % distance for stop loss (default: 5%). Use ATR to calibrate.
+  - take_profit_percent: (optional) % distance for take profit. Only set if you have a clear target.
 - For "close": Close an existing position
   - symbol: which coin position to close
   - direction: must match the position side you want to close ("long" or "short")
@@ -26,6 +28,18 @@ Rules:
 - IMPORTANT: You can only hold ONE position per coin at a time (either long OR short, not both)
 - Before opening a new position, check Current Positions to see if you already have a position on that coin
 - You can only close positions that you currently hold (check Current Positions for side: "LONG" or "SHORT")
-- Always use leverage 10x
+- leverage is typically 1-10x; only use high leverage (>5x) if you're very confident
 - Only choose symbols you have price data for
 - Pay a lot of attention to the fees don't open close frequently.
+
+RISK MANAGEMENT:
+- A stop loss is ALWAYS set on-chain (default 5% if not specified). This protects against crashes between cycles.
+- A take profit is ALWAYS set on-chain. If you don't specify, default = 2x your SL (risk/reward 1:2).
+- Use ATR to calibrate stop_loss_percent: volatile markets need wider SL (e.g., 7%), calm markets can use tighter SL (e.g., 3%).
+- You can override the default TP by specifying take_profit_percent based on resistance levels or market conditions.
+
+WHEN TO CUSTOMIZE TP:
+- Strong breakout with momentum → set higher TP (e.g., 15-20%) to ride the trend
+- Range-bound market → use default 2x SL or tighter TP near resistance
+- Key resistance/support nearby → set TP just before that level
+- If unsure, let the default 2x SL handle it (guaranteed 1:2 risk/reward)

@@ -1,4 +1,5 @@
 {% if operations %}
+<h3 style="margin-bottom: 0.5rem; color: var(--accent);">Trades</h3>
 <div class="operations-column">
     {% for op in operations %}
     <article class="operation-card">
@@ -51,6 +52,44 @@
     </article>
     {% endfor %}
 </div>
-{% else %}
-<p>Nessuna operazione trovata nel range selezionato.</p>
+{% endif %}
+
+{% if regimes %}
+<h3 style="margin-top: 1rem; margin-bottom: 0.5rem; color: var(--accent);">Decisioni AI (Regime)</h3>
+<div class="operations-column">
+    {% for r in regimes %}
+    <article class="operation-card">
+        <div class="operation-header">
+            <div>
+                <strong class="{% if r.regime == 'trending_up' %}tag-long{% elif r.regime == 'trending_down' %}tag-short{% elif r.regime == 'uncertain' %}tag-uncertain{% endif %}">
+                    {{ r.regime|upper|replace('_', ' ') }}
+                </strong>
+                <span> · Conf: {{ '%.0f' | format(r.confidence * 100) }}%</span>
+            </div>
+            <small>{{ r.timestamp | to_rome }}</small>
+        </div>
+
+        <div class="operation-tags">
+            <span class="tag">Risk Adj: {{ '%.0f' | format(r.risk_adjustment * 100) }}%</span>
+            {% if r.asset_regimes %}
+                {% for asset, regime in r.asset_regimes.items() %}
+                <span class="tag {% if regime == 'trending_up' %}tag-long{% elif regime == 'trending_down' %}tag-short{% endif %}">
+                    {{ asset }}: {{ regime|replace('_', ' ') }}
+                </span>
+                {% endfor %}
+            {% endif %}
+        </div>
+
+        {% if r.analysis %}
+        <p style="margin-top:0.5rem; margin-bottom:0.5rem; font-size: 0.9em;">
+            {{ r.analysis }}
+        </p>
+        {% endif %}
+    </article>
+    {% endfor %}
+</div>
+{% endif %}
+
+{% if not operations and not regimes %}
+<p>Nessuna operazione o decisione trovata.</p>
 {% endif %}

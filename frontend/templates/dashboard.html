@@ -25,6 +25,16 @@
                 <!-- Posizioni aperte caricate via HTMX come card orizzontali -->
             </div>
         </article>
+
+        <article class="card">
+            <div style="margin-bottom:0.5rem;">
+                <h2><span class="accent-dot"></span> Metriche HFT</h2>
+                <p class="card-subtitle">Performance del loop, latenza decisionale, CPU e RAM per test HFT.</p>
+            </div>
+            <div id="hft-metrics-panel" hx-get="/ui/hft-metrics" hx-trigger="load, every 5s">
+                <!-- Metriche HFT caricate via HTMX con refresh ogni 5s -->
+            </div>
+        </article>
     </div>
 
     <!-- Colonna destra: ultime operazioni dell'agente -->

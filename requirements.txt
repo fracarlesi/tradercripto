@@ -1,14 +1,36 @@
-ccxt>=4.1.0
+# Core async
+aiohttp>=3.9.0
+asyncpg>=0.29.0
+websockets>=12.0
+
+# Config & validation
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+pyyaml>=6.0.0
+
+# Hyperliquid
+hyperliquid-python-sdk
+eth-account>=0.10.0
+
+# Data & analysis
 pandas>=2.0.0
 numpy>=1.24.0
 ta>=0.11.0
+
+# AI
+openai>=1.0.0
+
+# Database
+psycopg2-binary>=2.9.0
+
+# Utils
+python-dotenv>=1.0.0
+psutil>=5.9.0
+
+# Legacy (for compatibility)
+ccxt>=4.1.0
 tradingview-screener
 prophet
 yfinance
 matplotlib
-python-dotenv
-hyperliquid-python-sdk
-eth-account
 toonify
-psycopg2-binary
-openai>=1.0.0

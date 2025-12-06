@@ -182,6 +182,66 @@ CREATE TABLE IF NOT EXISTS errors (
 
 CREATE INDEX IF NOT EXISTS idx_errors_created_at
     ON errors(created_at);
+
+CREATE TABLE IF NOT EXISTS api_costs (
+    id              BIGSERIAL PRIMARY KEY,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    model           TEXT NOT NULL,
+    prompt_tokens   INTEGER NOT NULL,
+    completion_tokens INTEGER NOT NULL,
+    total_tokens    INTEGER NOT NULL,
+    cost_usd        NUMERIC(20, 10) NOT NULL,
+    operation_id    BIGINT REFERENCES bot_operations(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_costs_created_at
+    ON api_costs(created_at);
+
+CREATE TABLE IF NOT EXISTS trades (
+    id                  BIGSERIAL PRIMARY KEY,
+
+    -- Identificazione
+    symbol              TEXT NOT NULL,
+    direction           TEXT NOT NULL,
+
+    -- Apertura
+    opened_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    entry_price         NUMERIC(30, 10) NOT NULL,
+    entry_size          NUMERIC(30, 10) NOT NULL,
+    leverage            NUMERIC(10, 4),
+    entry_operation_id  BIGINT REFERENCES bot_operations(id) ON DELETE SET NULL,
+    entry_reason        TEXT,
+    entry_order_id      TEXT,
+    entry_fee           NUMERIC(20, 10),
+
+    -- Chiusura (NULL se posizione ancora aperta)
+    closed_at           TIMESTAMPTZ,
+    exit_price          NUMERIC(30, 10),
+    exit_size           NUMERIC(30, 10),
+    exit_operation_id   BIGINT REFERENCES bot_operations(id) ON DELETE SET NULL,
+    exit_reason         TEXT,
+    exit_order_id       TEXT,
+    exit_fee            NUMERIC(20, 10),
+    close_type          TEXT,
+
+    -- P&L
+    realized_pnl        NUMERIC(20, 10),
+    total_fees          NUMERIC(20, 10),
+    gross_pnl           NUMERIC(20, 10),
+
+    -- Metriche
+    duration_minutes    INTEGER,
+    pnl_percent         NUMERIC(10, 4),
+
+    -- Raw data
+    entry_fill_data     JSONB,
+    exit_fill_data      JSONB
+);
+
+CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
+CREATE INDEX IF NOT EXISTS idx_trades_opened_at ON trades(opened_at);
+CREATE INDEX IF NOT EXISTS idx_trades_closed_at ON trades(closed_at);
+CREATE INDEX IF NOT EXISTS idx_trades_open ON trades(closed_at) WHERE closed_at IS NULL;
 """
 
 
@@ -844,6 +904,104 @@ def get_latest_account_snapshot() -> Optional[Dict[str, Any]]:
 
 
 
+# Prezzi GPT-5.1 ($ per 1M tokens) - aggiornare se cambiano
+GPT_PRICING = {
+    "gpt-5.1": {"input": 2.50, "output": 10.00},  # Placeholder - verificare prezzi reali
+    "gpt-4": {"input": 30.00, "output": 60.00},
+    "gpt-4-turbo": {"input": 10.00, "output": 30.00},
+    "gpt-3.5-turbo": {"input": 0.50, "output": 1.50},
+}
+
+
+def calculate_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
+    """Calcola il costo in USD basandosi sui token usati."""
+    pricing = GPT_PRICING.get(model, GPT_PRICING.get("gpt-4"))  # default a gpt-4
+    input_cost = (prompt_tokens / 1_000_000) * pricing["input"]
+    output_cost = (completion_tokens / 1_000_000) * pricing["output"]
+    return input_cost + output_cost
+
+
+def log_api_cost(
+    model: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    total_tokens: int,
+    operation_id: Optional[int] = None,
+) -> int:
+    """Salva i costi dell'API nella tabella api_costs.
+
+    Restituisce l'ID del record creato.
+    """
+    cost_usd = calculate_cost(model, prompt_tokens, completion_tokens)
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO api_costs (
+                    model,
+                    prompt_tokens,
+                    completion_tokens,
+                    total_tokens,
+                    cost_usd,
+                    operation_id
+                )
+                VALUES (%s, %s, %s, %s, %s, %s)
+                RETURNING id;
+                """,
+                (model, prompt_tokens, completion_tokens, total_tokens, cost_usd, operation_id),
+            )
+            cost_id = cur.fetchone()[0]
+        conn.commit()
+
+    return cost_id
+
+
+def get_api_costs_summary() -> Dict[str, Any]:
+    """Restituisce un riepilogo dei costi API."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            # Costo totale
+            cur.execute("SELECT COALESCE(SUM(cost_usd), 0) FROM api_costs;")
+            total_cost = float(cur.fetchone()[0])
+
+            # Costo ultimo 24h
+            cur.execute("""
+                SELECT COALESCE(SUM(cost_usd), 0)
+                FROM api_costs
+                WHERE created_at > NOW() - INTERVAL '24 hours';
+            """)
+            cost_24h = float(cur.fetchone()[0])
+
+            # Costo ultimo 7 giorni
+            cur.execute("""
+                SELECT COALESCE(SUM(cost_usd), 0)
+                FROM api_costs
+                WHERE created_at > NOW() - INTERVAL '7 days';
+            """)
+            cost_7d = float(cur.fetchone()[0])
+
+            # Numero chiamate totali
+            cur.execute("SELECT COUNT(*) FROM api_costs;")
+            total_calls = cur.fetchone()[0]
+
+            # Token totali
+            cur.execute("SELECT COALESCE(SUM(total_tokens), 0) FROM api_costs;")
+            total_tokens = cur.fetchone()[0]
+
+            # Costo medio per chiamata
+            avg_cost = total_cost / total_calls if total_calls > 0 else 0
+
+    return {
+        "total_cost": round(total_cost, 4),
+        "cost_24h": round(cost_24h, 4),
+        "cost_7d": round(cost_7d, 4),
+        "total_calls": total_calls,
+        "total_tokens": total_tokens,
+        "avg_cost_per_call": round(avg_cost, 6),
+    }
+
+
 def get_recent_bot_operations(limit: int = 50) -> List[Dict[str, Any]]:
     """Restituisce le ultime N operazioni del bot (raw_payload)."""
 
@@ -860,6 +1018,372 @@ def get_recent_bot_operations(limit: int = 50) -> List[Dict[str, Any]]:
             )
             rows = cur.fetchall()
             return [r[0] for r in rows]
+
+
+# =====================
+# Funzioni per trade tracking
+# =====================
+
+
+def open_trade(
+    symbol: str,
+    direction: str,
+    entry_price: float,
+    entry_size: float,
+    leverage: Optional[float] = None,
+    entry_operation_id: Optional[int] = None,
+    entry_reason: Optional[str] = None,
+    entry_order_id: Optional[str] = None,
+    entry_fee: Optional[float] = None,
+    entry_fill_data: Optional[Dict[str, Any]] = None,
+) -> int:
+    """Registra l'apertura di un nuovo trade.
+
+    Restituisce l'ID del trade creato.
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO trades (
+                    symbol, direction, entry_price, entry_size, leverage,
+                    entry_operation_id, entry_reason, entry_order_id, entry_fee,
+                    entry_fill_data
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id;
+                """,
+                (
+                    symbol,
+                    direction,
+                    entry_price,
+                    entry_size,
+                    leverage,
+                    entry_operation_id,
+                    entry_reason,
+                    entry_order_id,
+                    entry_fee,
+                    Json(entry_fill_data) if entry_fill_data else None,
+                ),
+            )
+            trade_id = cur.fetchone()[0]
+        conn.commit()
+
+    print(f"[db_utils] Trade aperto con id={trade_id}")
+    return trade_id
+
+
+def close_trade(
+    trade_id: int,
+    exit_price: float,
+    exit_size: float,
+    close_type: str,
+    exit_operation_id: Optional[int] = None,
+    exit_reason: Optional[str] = None,
+    exit_order_id: Optional[str] = None,
+    exit_fee: Optional[float] = None,
+    exit_fill_data: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Chiude un trade esistente calcolando P&L.
+
+    close_type: "manual" | "sl" | "tp"
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            # Recupera dati del trade per calcolare P&L
+            cur.execute(
+                """
+                SELECT entry_price, entry_size, direction, entry_fee, opened_at
+                FROM trades WHERE id = %s;
+                """,
+                (trade_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise ValueError(f"Trade {trade_id} non trovato")
+
+            entry_price, entry_size, direction, entry_fee, opened_at = row
+            entry_fee = float(entry_fee or 0)
+            exit_fee = float(exit_fee or 0)
+
+            # Calcola P&L
+            if direction == "long":
+                gross_pnl = (exit_price - float(entry_price)) * float(entry_size)
+            else:  # short
+                gross_pnl = (float(entry_price) - exit_price) * float(entry_size)
+
+            total_fees = entry_fee + exit_fee
+            realized_pnl = gross_pnl - total_fees
+
+            # Calcola % return sul capitale investito
+            invested = float(entry_price) * float(entry_size)
+            pnl_percent = (realized_pnl / invested) * 100 if invested > 0 else 0
+
+            # Calcola durata
+            closed_at = _now_utc()
+            duration_minutes = int((closed_at - opened_at).total_seconds() / 60)
+
+            cur.execute(
+                """
+                UPDATE trades SET
+                    closed_at = %s,
+                    exit_price = %s,
+                    exit_size = %s,
+                    exit_operation_id = %s,
+                    exit_reason = %s,
+                    exit_order_id = %s,
+                    exit_fee = %s,
+                    close_type = %s,
+                    gross_pnl = %s,
+                    total_fees = %s,
+                    realized_pnl = %s,
+                    pnl_percent = %s,
+                    duration_minutes = %s,
+                    exit_fill_data = %s
+                WHERE id = %s;
+                """,
+                (
+                    closed_at,
+                    exit_price,
+                    exit_size,
+                    exit_operation_id,
+                    exit_reason,
+                    exit_order_id,
+                    exit_fee,
+                    close_type,
+                    gross_pnl,
+                    total_fees,
+                    realized_pnl,
+                    pnl_percent,
+                    duration_minutes,
+                    Json(exit_fill_data) if exit_fill_data else None,
+                    trade_id,
+                ),
+            )
+        conn.commit()
+
+    print(f"[db_utils] Trade {trade_id} chiuso - P&L: ${realized_pnl:.2f} ({pnl_percent:.2f}%)")
+
+
+def get_open_trade(symbol: str) -> Optional[Dict[str, Any]]:
+    """Restituisce il trade aperto per un simbolo, o None se non esiste."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, symbol, direction, opened_at, entry_price, entry_size,
+                       leverage, entry_operation_id, entry_reason, entry_order_id, entry_fee
+                FROM trades
+                WHERE symbol = %s AND closed_at IS NULL
+                ORDER BY opened_at DESC
+                LIMIT 1;
+                """,
+                (symbol,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+
+            return {
+                "id": row[0],
+                "symbol": row[1],
+                "direction": row[2],
+                "opened_at": row[3],
+                "entry_price": float(row[4]),
+                "entry_size": float(row[5]),
+                "leverage": float(row[6]) if row[6] else None,
+                "entry_operation_id": row[7],
+                "entry_reason": row[8],
+                "entry_order_id": row[9],
+                "entry_fee": float(row[10]) if row[10] else None,
+            }
+
+
+def get_all_open_trades() -> List[Dict[str, Any]]:
+    """Restituisce tutti i trade aperti."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, symbol, direction, opened_at, entry_price, entry_size,
+                       leverage, entry_operation_id, entry_reason, entry_order_id, entry_fee
+                FROM trades
+                WHERE closed_at IS NULL
+                ORDER BY opened_at DESC;
+                """
+            )
+            rows = cur.fetchall()
+            return [
+                {
+                    "id": row[0],
+                    "symbol": row[1],
+                    "direction": row[2],
+                    "opened_at": row[3],
+                    "entry_price": float(row[4]),
+                    "entry_size": float(row[5]),
+                    "leverage": float(row[6]) if row[6] else None,
+                    "entry_operation_id": row[7],
+                    "entry_reason": row[8],
+                    "entry_order_id": row[9],
+                    "entry_fee": float(row[10]) if row[10] else None,
+                }
+                for row in rows
+            ]
+
+
+def get_trade_history(limit: int = 50, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Restituisce lo storico dei trade chiusi."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            if symbol:
+                cur.execute(
+                    """
+                    SELECT id, symbol, direction, opened_at, closed_at,
+                           entry_price, exit_price, entry_size, exit_size,
+                           leverage, realized_pnl, total_fees, gross_pnl,
+                           pnl_percent, duration_minutes, close_type,
+                           entry_reason, exit_reason
+                    FROM trades
+                    WHERE closed_at IS NOT NULL AND symbol = %s
+                    ORDER BY closed_at DESC
+                    LIMIT %s;
+                    """,
+                    (symbol, limit),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT id, symbol, direction, opened_at, closed_at,
+                           entry_price, exit_price, entry_size, exit_size,
+                           leverage, realized_pnl, total_fees, gross_pnl,
+                           pnl_percent, duration_minutes, close_type,
+                           entry_reason, exit_reason
+                    FROM trades
+                    WHERE closed_at IS NOT NULL
+                    ORDER BY closed_at DESC
+                    LIMIT %s;
+                    """,
+                    (limit,),
+                )
+            rows = cur.fetchall()
+            return [
+                {
+                    "id": row[0],
+                    "symbol": row[1],
+                    "direction": row[2],
+                    "opened_at": row[3],
+                    "closed_at": row[4],
+                    "entry_price": float(row[5]) if row[5] else None,
+                    "exit_price": float(row[6]) if row[6] else None,
+                    "entry_size": float(row[7]) if row[7] else None,
+                    "exit_size": float(row[8]) if row[8] else None,
+                    "leverage": float(row[9]) if row[9] else None,
+                    "realized_pnl": float(row[10]) if row[10] else None,
+                    "total_fees": float(row[11]) if row[11] else None,
+                    "gross_pnl": float(row[12]) if row[12] else None,
+                    "pnl_percent": float(row[13]) if row[13] else None,
+                    "duration_minutes": row[14],
+                    "close_type": row[15],
+                    "entry_reason": row[16],
+                    "exit_reason": row[17],
+                }
+                for row in rows
+            ]
+
+
+def get_trade_stats() -> Dict[str, Any]:
+    """Restituisce statistiche aggregate sui trade."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            # Trade totali chiusi
+            cur.execute("SELECT COUNT(*) FROM trades WHERE closed_at IS NOT NULL;")
+            total_trades = cur.fetchone()[0]
+
+            if total_trades == 0:
+                return {
+                    "total_trades": 0,
+                    "winning_trades": 0,
+                    "losing_trades": 0,
+                    "win_rate": 0,
+                    "total_pnl": 0,
+                    "total_fees": 0,
+                    "avg_pnl": 0,
+                    "avg_pnl_percent": 0,
+                    "best_trade_pnl": 0,
+                    "worst_trade_pnl": 0,
+                    "avg_duration_minutes": 0,
+                    "open_trades": 0,
+                }
+
+            # Trade vincenti/perdenti
+            cur.execute(
+                "SELECT COUNT(*) FROM trades WHERE closed_at IS NOT NULL AND realized_pnl > 0;"
+            )
+            winning_trades = cur.fetchone()[0]
+
+            cur.execute(
+                "SELECT COUNT(*) FROM trades WHERE closed_at IS NOT NULL AND realized_pnl <= 0;"
+            )
+            losing_trades = cur.fetchone()[0]
+
+            # P&L totale e fees
+            cur.execute(
+                """
+                SELECT COALESCE(SUM(realized_pnl), 0), COALESCE(SUM(total_fees), 0)
+                FROM trades WHERE closed_at IS NOT NULL;
+                """
+            )
+            total_pnl, total_fees = cur.fetchone()
+
+            # Media P&L
+            cur.execute(
+                """
+                SELECT COALESCE(AVG(realized_pnl), 0), COALESCE(AVG(pnl_percent), 0)
+                FROM trades WHERE closed_at IS NOT NULL;
+                """
+            )
+            avg_pnl, avg_pnl_percent = cur.fetchone()
+
+            # Best/worst trade
+            cur.execute(
+                "SELECT COALESCE(MAX(realized_pnl), 0) FROM trades WHERE closed_at IS NOT NULL;"
+            )
+            best_trade_pnl = cur.fetchone()[0]
+
+            cur.execute(
+                "SELECT COALESCE(MIN(realized_pnl), 0) FROM trades WHERE closed_at IS NOT NULL;"
+            )
+            worst_trade_pnl = cur.fetchone()[0]
+
+            # Durata media
+            cur.execute(
+                """
+                SELECT COALESCE(AVG(duration_minutes), 0)
+                FROM trades WHERE closed_at IS NOT NULL;
+                """
+            )
+            avg_duration = cur.fetchone()[0]
+
+            # Trade aperti
+            cur.execute("SELECT COUNT(*) FROM trades WHERE closed_at IS NULL;")
+            open_trades = cur.fetchone()[0]
+
+    win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
+
+    return {
+        "total_trades": total_trades,
+        "winning_trades": winning_trades,
+        "losing_trades": losing_trades,
+        "win_rate": round(win_rate, 2),
+        "total_pnl": round(float(total_pnl), 2),
+        "total_fees": round(float(total_fees), 4),
+        "avg_pnl": round(float(avg_pnl), 2),
+        "avg_pnl_percent": round(float(avg_pnl_percent), 2),
+        "best_trade_pnl": round(float(best_trade_pnl), 2),
+        "worst_trade_pnl": round(float(worst_trade_pnl), 2),
+        "avg_duration_minutes": round(float(avg_duration), 0),
+        "open_trades": open_trades,
+    }
 
 
 if __name__ == "__main__":

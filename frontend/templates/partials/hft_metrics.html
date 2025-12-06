@@ -1,0 +1,266 @@
+{% if metrics and not metrics.error %}
+<div class="hft-metrics-grid">
+    <!-- Latency Card -->
+    <div class="metric-card">
+        <h4>Latenza Loop</h4>
+        <div class="metric-value {% if metrics.latency.p95_loop_ms < 500 %}metric-good{% elif metrics.latency.p95_loop_ms < 1000 %}metric-warning{% else %}metric-bad{% endif %}">
+            {{ '%.1f' | format(metrics.latency.avg_loop_ms) }} ms
+        </div>
+        <div class="metric-details">
+            <span>P50: {{ '%.1f' | format(metrics.latency.p50_loop_ms) }}ms</span>
+            <span>P95: {{ '%.1f' | format(metrics.latency.p95_loop_ms) }}ms</span>
+            <span>P99: {{ '%.1f' | format(metrics.latency.p99_loop_ms) }}ms</span>
+            <span>Max: {{ '%.1f' | format(metrics.latency.max_loop_ms) }}ms</span>
+        </div>
+    </div>
+
+    <!-- Breakdown Card -->
+    <div class="metric-card">
+        <h4>Breakdown Latenza</h4>
+        <div class="breakdown-bars">
+            <div class="breakdown-item">
+                <span class="breakdown-label">Strategy</span>
+                <div class="breakdown-bar">
+                    <div class="breakdown-fill strategy-fill" style="width: {{ (metrics.latency.breakdown.strategy_ms / (metrics.latency.avg_loop_ms + 0.1) * 100) | int }}%"></div>
+                </div>
+                <span class="breakdown-value">{{ '%.1f' | format(metrics.latency.breakdown.strategy_ms) }}ms</span>
+            </div>
+            <div class="breakdown-item">
+                <span class="breakdown-label">Risk</span>
+                <div class="breakdown-bar">
+                    <div class="breakdown-fill risk-fill" style="width: {{ (metrics.latency.breakdown.risk_ms / (metrics.latency.avg_loop_ms + 0.1) * 100) | int }}%"></div>
+                </div>
+                <span class="breakdown-value">{{ '%.1f' | format(metrics.latency.breakdown.risk_ms) }}ms</span>
+            </div>
+            <div class="breakdown-item">
+                <span class="breakdown-label">Execution</span>
+                <div class="breakdown-bar">
+                    <div class="breakdown-fill exec-fill" style="width: {{ (metrics.latency.breakdown.execution_ms / (metrics.latency.avg_loop_ms + 0.1) * 100) | int }}%"></div>
+                </div>
+                <span class="breakdown-value">{{ '%.1f' | format(metrics.latency.breakdown.execution_ms) }}ms</span>
+            </div>
+            <div class="breakdown-item">
+                <span class="breakdown-label">Regime AI</span>
+                <div class="breakdown-bar">
+                    <div class="breakdown-fill regime-fill" style="width: {{ (metrics.latency.breakdown.regime_ms / (metrics.latency.avg_loop_ms + 0.1) * 100) | int }}%"></div>
+                </div>
+                <span class="breakdown-value">{{ '%.1f' | format(metrics.latency.breakdown.regime_ms) }}ms</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- System Card -->
+    <div class="metric-card">
+        <h4>Sistema</h4>
+        <div class="system-stats">
+            <div class="stat-item">
+                <span class="stat-label">CPU</span>
+                <span class="stat-value">{{ '%.1f' | format(metrics.system.cpu_percent) }}%</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">RAM</span>
+                <span class="stat-value">{{ '%.0f' | format(metrics.system.memory_mb) }} MB</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Counters Card -->
+    <div class="metric-card">
+        <h4>Contatori</h4>
+        <div class="counter-grid">
+            <div class="counter-item">
+                <span class="counter-value">{{ metrics.counters.loop_count }}</span>
+                <span class="counter-label">Loop</span>
+            </div>
+            <div class="counter-item">
+                <span class="counter-value">{{ metrics.counters.signals_generated }}</span>
+                <span class="counter-label">Segnali</span>
+            </div>
+            <div class="counter-item">
+                <span class="counter-value">{{ metrics.counters.orders_executed }}</span>
+                <span class="counter-label">Ordini</span>
+            </div>
+            <div class="counter-item">
+                <span class="counter-value">{{ metrics.counters.regime_detections }}</span>
+                <span class="counter-label">Regime AI</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Test Thresholds -->
+    <div class="metric-card threshold-card">
+        <h4>Test HFT</h4>
+        <div class="threshold-items">
+            <div class="threshold-item {% if metrics.latency.p95_loop_ms <= metrics.thresholds.test_a_target_ms %}threshold-pass{% else %}threshold-fail{% endif %}">
+                <span>Test A (<500ms)</span>
+                <span>{% if metrics.latency.p95_loop_ms <= metrics.thresholds.test_a_target_ms %}PASS{% else %}FAIL{% endif %}</span>
+            </div>
+            <div class="threshold-item {% if metrics.latency.p95_loop_ms <= metrics.thresholds.test_b_target_ms %}threshold-pass{% else %}threshold-fail{% endif %}">
+                <span>Test B (<1000ms)</span>
+                <span>{% if metrics.latency.p95_loop_ms <= metrics.thresholds.test_b_target_ms %}PASS{% else %}FAIL{% endif %}</span>
+            </div>
+            <div class="threshold-item {% if metrics.latency.p95_loop_ms <= metrics.thresholds.test_c_target_ms %}threshold-pass{% else %}threshold-fail{% endif %}">
+                <span>Test C (<2000ms)</span>
+                <span>{% if metrics.latency.p95_loop_ms <= metrics.thresholds.test_c_target_ms %}PASS{% else %}FAIL{% endif %}</span>
+            </div>
+        </div>
+        {% if metrics.dry_run.enabled %}
+        <div class="dry-run-badge">DRY-RUN ATTIVO ({{ metrics.dry_run.simulated_orders }} ordini simulati)</div>
+        {% endif %}
+    </div>
+</div>
+
+<style>
+    .hft-metrics-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 1rem;
+    }
+
+    .metric-card {
+        background: #f9fafb;
+        border: 1px solid #e5e7eb;
+        border-radius: 0.8rem;
+        padding: 1rem;
+    }
+
+    .metric-card h4 {
+        margin: 0 0 0.75rem 0;
+        font-size: 0.9rem;
+        color: var(--text-muted);
+        font-weight: 500;
+    }
+
+    .metric-value {
+        font-size: 2rem;
+        font-weight: 700;
+        line-height: 1.2;
+    }
+
+    .metric-good { color: #16a34a; }
+    .metric-warning { color: #f59e0b; }
+    .metric-bad { color: #ef4444; }
+
+    .metric-details {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-top: 0.5rem;
+        font-size: 0.8rem;
+        color: var(--text-muted);
+    }
+
+    .breakdown-bars {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+
+    .breakdown-item {
+        display: grid;
+        grid-template-columns: 70px 1fr 50px;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .breakdown-label {
+        font-size: 0.75rem;
+        color: var(--text-muted);
+    }
+
+    .breakdown-bar {
+        height: 8px;
+        background: #e5e7eb;
+        border-radius: 4px;
+        overflow: hidden;
+    }
+
+    .breakdown-fill {
+        height: 100%;
+        border-radius: 4px;
+    }
+
+    .strategy-fill { background: #3b82f6; }
+    .risk-fill { background: #f59e0b; }
+    .exec-fill { background: #10b981; }
+    .regime-fill { background: #8b5cf6; }
+
+    .breakdown-value {
+        font-size: 0.75rem;
+        text-align: right;
+        color: var(--text-main);
+    }
+
+    .system-stats, .counter-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.75rem;
+    }
+
+    .stat-item, .counter-item {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.25rem;
+    }
+
+    .stat-label, .counter-label {
+        font-size: 0.75rem;
+        color: var(--text-muted);
+    }
+
+    .stat-value {
+        font-size: 1.25rem;
+        font-weight: 600;
+    }
+
+    .counter-value {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: var(--accent);
+    }
+
+    .threshold-items {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+
+    .threshold-item {
+        display: flex;
+        justify-content: space-between;
+        padding: 0.4rem 0.6rem;
+        border-radius: 0.4rem;
+        font-size: 0.85rem;
+    }
+
+    .threshold-pass {
+        background: #ecfdf5;
+        color: #166534;
+    }
+
+    .threshold-fail {
+        background: #fef2f2;
+        color: #b91c1c;
+    }
+
+    .dry-run-badge {
+        margin-top: 0.75rem;
+        padding: 0.5rem;
+        background: #fef3c7;
+        border: 1px solid #f59e0b;
+        border-radius: 0.4rem;
+        font-size: 0.8rem;
+        color: #92400e;
+        text-align: center;
+    }
+</style>
+{% else %}
+<p style="color: var(--text-muted);">
+    {% if metrics.error %}
+    Errore connessione metriche: {{ metrics.error }}
+    {% else %}
+    Nessuna metrica HFT disponibile.
+    {% endif %}
+</p>
+{% endif %}

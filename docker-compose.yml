@@ -1,12 +1,13 @@
 services:
   postgres:
     image: postgres:15-alpine
+    container_name: trader_mainnet_postgres
     environment:
       POSTGRES_USER: trader
       POSTGRES_PASSWORD: password
       POSTGRES_DB: trader_db
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data_mainnet:/var/lib/postgresql/data
     ports:
       - "5432:5432"
     restart: unless-stopped
@@ -18,18 +19,36 @@ services:
 
   app:
     build: .
+    container_name: trader_mainnet_app
     env_file: .env
     environment:
       - DATABASE_URL=postgresql://trader:password@postgres:5432/trader_db
+      - CONFIG_PROFILE=${CONFIG_PROFILE:-default}
     depends_on:
       postgres:
         condition: service_healthy
-    restart: "no"
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+    command: ["python", "main_daemon.py"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
 
   dashboard:
     build: ./frontend
+    container_name: trader_mainnet_dashboard
     environment:
       - DATABASE_URL=postgresql://trader:password@postgres:5432/trader_db
+      - BOT_URL=http://app:8080
     ports:
       - "5611:5611"
     depends_on:
@@ -38,4 +57,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  postgres_data:
+  postgres_data_mainnet:
