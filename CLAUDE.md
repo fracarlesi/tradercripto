@@ -9,7 +9,7 @@ Per ricerche semantiche nella codebase, usare l'MCP `claude-context`:
 - `mcp__claude-context__index_codebase` - indicizza la codebase (se necessario)
 
 ## Repository GitHub
-https://github.com/fracarlesi/tradercripto
+https://github.com/fracarlesi/tradercripto2
 
 ## Architettura
 
