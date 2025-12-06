@@ -1,4 +1,4 @@
-# Rizzo Trading Bot - Guida Deploy e Sviluppo
+# HLQuantBot - Guida Deploy e Sviluppo
 
 ## Note per Claude Code
 
@@ -8,280 +8,201 @@ Per ricerche semantiche nella codebase, usare l'MCP `claude-context`:
 - `mcp__claude-context__search_code` - ricerca semantica nel codice
 - `mcp__claude-context__index_codebase` - indicizza la codebase (se necessario)
 
+## Ambiente Attivo
+
+**SIAMO SU MAINNET - SOLDI VERI!**
+
+| Parametro | Valore |
+|-----------|--------|
+| Environment | **PRODUCTION (MAINNET)** |
+| Directory server | `/opt/trader_bitcoin` |
+| Dashboard | http://<VPS_IP_REDACTED>:5611/ |
+| PostgreSQL | porta 5432 |
+| Health | porta 8081 |
+| API | https://hyperliquid.xyz |
+
 ## Repository GitHub
 https://github.com/fracarlesi/tradercripto2
 
 ## Architettura
 
-Bot di trading crypto automatizzato che usa **GPT-5.1** (via API OpenAI diretta) per decisioni di trading su Hyperliquid.
+Bot di trading HFT quantitativo per Hyperliquid con AI DeepSeek V3.2-Speciale per regime detection.
 
-### Sistema Monolitico
-
-Il bot esegue un ciclo completo ogni 15 minuti:
+### Main Loop (ogni 1 secondo)
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                        FLUSSO ESECUZIONE                                │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                         │
-│  1. Raccolta Dati (ogni 15 min)                                        │
-│     └─ Indicatori tecnici: EMA, MACD, RSI, ATR, Pivot Points           │
-│     └─ Forecast prezzi: Prophet (15min e 1h)                           │
-│     └─ Sentiment: Fear & Greed Index (CoinMarketCap)                   │
-│     └─ News: Feed RSS crypto                                           │
-│     └─ Account: Balance e posizioni Hyperliquid                        │
-│                                                                         │
-│  2. Decisione LLM                                                       │
-│     └─ Prompt con tutti i dati aggregati                               │
-│     └─ GPT-5.1 via API OpenAI                                          │
-│     └─ Output JSON: operation, symbol, direction, leverage, reason     │
-│                                                                         │
-│  3. Esecuzione                                                          │
-│     └─ Azione: OPEN / CLOSE / HOLD                                     │
-│     └─ Simboli: BTC, ETH, SOL                                          │
-│     └─ Leverage: 1-10x (raccomandato max 5x)                           │
-│                                                                         │
-│  4. Logging                                                             │
-│     └─ PostgreSQL: operazioni, errori, contesti                        │
-│                                                                         │
-└─────────────────────────────────────────────────────────────────────────┘
+1. Check circuit breaker (temporal + hard)
+2. Get account state (REST)
+3. Detect market regime (AI ogni 5 min, cached)
+4. Get market data (WebSocket + BarAggregator)
+5. Evaluate strategies (5 HFT strategies)
+6. Risk engine (validate, size, leverage check)
+7. Execute orders (maker-only ALO)
+8. Save metrics + snapshots
 ```
 
-### Componenti
+### Componenti Principali
 
-**Core:**
-- **main.py**: Entry point, orchestrazione ciclo
-- **trading_agent.py**: Chiamate GPT-5.1 via API OpenAI
-- **hyperliquid_trader.py**: Interfaccia con exchange Hyperliquid
-- **indicators.py**: Analisi tecnica (EMA, MACD, RSI, Pivot Points)
-- **forecaster.py**: Previsioni prezzi con Prophet
-- **sentiment.py**: Fear & Greed Index da CoinMarketCap
-- **news_feed.py**: Feed RSS notizie crypto
-- **db_utils.py**: Logging PostgreSQL
-
-**Configurazione:**
-- **system_prompt.txt**: Istruzioni per il modello LLM
-- **requirements.txt**: Dipendenze Python
-
-## Configurazione LLM
-
-Il bot usa **GPT-5.1** via API OpenAI diretta. Parametri in `trading_agent.py`:
-```python
-model="gpt-5.1"
-temperature=0.3      # Basso per reasoning deterministico
-max_tokens=1000      # Spazio per risposta JSON
-response_format={"type": "json_object"}
+```
+hlquantbot/
+├── bot.py               # Main orchestrator
+├── config/
+│   ├── settings.py      # Pydantic settings + YAML
+│   └── config.yaml      # Parametri strategie e risk
+├── strategies/hft/
+│   ├── mmr_hft.py       # Micro Mean Reversion (VWAP)
+│   ├── micro_breakout.py    # Breakout BB compression
+│   ├── pair_trading.py      # Spread trading BTC/ETH, ETH/SOL
+│   └── liquidation_sniping.py  # Liquidation cascade
+├── ai/
+│   └── regime_detector.py   # DeepSeek V3.2-Speciale
+├── risk/
+│   ├── risk_engine.py       # Portfolio risk
+│   └── circuit_breaker.py   # Hard + temporal stops
+└── execution/
+    └── execution_engine.py  # Order execution ALO
 ```
 
-## Variabili d'Ambiente (.env)
+## AI Layer - DeepSeek V3.2-Speciale
 
-```bash
-PRIVATE_KEY=<hyperliquid_private_key>
-WALLET_ADDRESS=<hyperliquid_wallet>
-OPENAI_API_KEY=<openai_api_key>
-CMC_PRO_API_KEY=<coinmarketcap_api_key>
-DATABASE_URL=postgresql://trader:password@postgres:5432/trader_db
+```yaml
+openai:
+  enabled: true
+  model: deepseek-reasoner
+  base_url: https://api.deepseek.com/v3.2_speciale_expires_on_20251215
+  regime_detection_interval_minutes: 5
+  max_tokens: 4000
+  temperature: 0.3
 ```
+
+**Regime Output**: `trend_up | trend_down | range_bound | high_volatility | low_volatility | uncertain`
+
+**API Key**: `OPENAI_API_KEY` nel .env (sk-cbd31...)
+
+**Scadenza endpoint**: 15 Dicembre 2025
+
+## Risk Management
+
+### Fee Structure (MAINNET)
+```
+MAKER_FEE = 0.02%   # SEMPRE usare questo (ALO)
+TAKER_FEE = 0.05%   # MAI per HFT
+```
+
+### Position Limits
+```
+RISK_PER_TRADE = 0.7%
+MAX_PORTFOLIO_LEVERAGE = 4x
+MAX_EXPOSURE_PER_ASSET = 40%
+MAX_OPEN_POSITIONS = 15
+```
+
+### Circuit Breaker
+- **Daily loss > 10%** → Exit process
+- **Total drawdown > 50%** → Exit process
+- Richiede restart manuale
+
+### Temporal Kill-Switch
+| Livello | Finestra | Max Drawdown | Cooldown |
+|---------|----------|--------------|----------|
+| 1 | 30s | 0.7% | 15 min |
+| 2 | 10 min | 2.0% | 1 ora |
+| 3 | 1 ora | 4.5% | 6 ore |
 
 ---
 
-## ⚠️ IMPORTANTE: Modifiche Sempre in Locale
+## Deploy su Hetzner VPS
 
-**Le modifiche al codice vanno SEMPRE fatte sui file locali, MAI direttamente sul server.**
-
-Il deploy usa `rsync --delete` che sovrascrive tutto sul server con i file locali. Modifiche fatte direttamente sul server verranno perse al prossimo deploy.
-
----
-
-## 🚨 REGOLA FONDAMENTALE: Usare SEMPRE deploy.sh
-
-**Per il deploy usare SEMPRE `./deploy.sh`, MAI rsync manuale!**
-
-Il file `run_bot.sh` ha bisogno di permessi di esecuzione (`chmod +x`) e ownership `root:root`.
-Quando si usa `rsync` direttamente, i permessi vengono sovrascritti con quelli del Mac (owner 501:staff, senza +x) e il **cron smette di funzionare silenziosamente**.
-
-Lo script `deploy.sh` include automaticamente:
-```bash
-ssh root@$VPS_IP "chown root:root $DEPLOY_DIR/run_bot.sh && chmod +x $DEPLOY_DIR/run_bot.sh"
-```
-
-**Se il bot non esegue decisioni**, la prima cosa da verificare è:
-```bash
-ssh root@<VPS_IP_REDACTED> "ls -la /opt/trader_bitcoin/run_bot.sh"
-# Deve mostrare: -rwx--x--x 1 root root ...
-# Se mostra: -rw------- 1 501 staff ... → i permessi sono sbagliati!
-
-# Fix manuale:
-ssh root@<VPS_IP_REDACTED> "chown root:root /opt/trader_bitcoin/run_bot.sh && chmod +x /opt/trader_bitcoin/run_bot.sh"
-```
-
----
-
-## Deploy su Hetzner VPS con Docker
-
-### Server
+### Server MAINNET
 - **IP**: <VPS_IP_REDACTED>
 - **Directory**: /opt/trader_bitcoin
 - **User**: root
-- **Dashboard**: http://<VPS_IP_REDACTED>:5611/
 
-### Comandi Deploy Rapido
+### Comandi Deploy
 
 ```bash
-# Deploy completo (da locale)
+# Deploy completo (da Mac locale)
+cd "/Users/francescocarlesi/Downloads/Progetti Python/trader_bitcoin"
 ./deploy.sh
-
-# Oppure manualmente:
-rsync -avz --delete --exclude='.git' --exclude='__pycache__' --exclude='.env' ./ root@<VPS_IP_REDACTED>:/opt/trader_bitcoin/
-scp .env root@<VPS_IP_REDACTED>:/opt/trader_bitcoin/.env
-ssh root@<VPS_IP_REDACTED> "cd /opt/trader_bitcoin && docker compose build --no-cache && docker compose up -d postgres dashboard"
 ```
 
-### Gestione Container sul Server
+### Gestione Container
 
 ```bash
 # SSH al server
 ssh root@<VPS_IP_REDACTED>
 
-# Vai alla directory
-cd /opt/trader_bitcoin
+# Logs bot MAINNET
+docker logs trader_mainnet_app --tail 100 -f
 
-# Vedere logs bot
-tail -f /opt/trader_bitcoin/logs/bot.log
+# Stato container
+docker ps --filter 'name=trader'
 
-# Vedere logs Docker
-docker compose logs -f postgres
-docker compose logs -f dashboard
+# Restart bot
+cd /opt/trader_bitcoin && docker compose restart app
 
-# Eseguire bot manualmente
-docker compose run --rm app python main.py
+# Health check
+curl http://localhost:8081/health
 
-# Inizializzare database (se necessario)
-docker compose run --rm app python -c "import db_utils; db_utils.init_db()"
-
-# Entrare nel container
-docker compose exec app bash
-docker compose exec postgres psql -U trader -d trader_db
+# Database
+docker exec trader_mainnet_postgres psql -U trader -d trader_db
 ```
 
-### Struttura Docker
+### Query Database Utili
 
-```
-docker-compose.yml
-├── postgres (porta 5432)
-│   └─ Volume: postgres_data
-│   └─ Healthcheck attivo
-├── dashboard (porta 5611)
-│   └─ FastAPI + HTMX
-│   └─ restart: unless-stopped
-└── app (bot trading)
-    └─ restart: "no" (eseguito da cron)
-```
-
-### Cron Job
-
-```bash
-# Vedere crontab attuale
-crontab -l
-
-# Configurazione attiva:
-*/15 * * * * /opt/trader_bitcoin/run_bot.sh
-```
-
-Esegue ogni 15 minuti:
-- X:00, X:15, X:30, X:45
-
----
-
-## Database PostgreSQL
-
-### Connessione da locale
-```bash
-psql postgresql://trader:password@<VPS_IP_REDACTED>:5432/trader_db
-```
-
-### Query utili
 ```sql
--- Ultime operazioni
-SELECT * FROM bot_operations ORDER BY id DESC LIMIT 10;
+-- Ultime analisi AI regime
+SELECT id, timestamp, regime, confidence, analysis
+FROM regime_history ORDER BY id DESC LIMIT 5;
 
--- Balance history
+-- Account snapshots
 SELECT * FROM account_snapshots ORDER BY id DESC LIMIT 20;
 
--- Errori recenti
-SELECT * FROM errors ORDER BY id DESC LIMIT 10;
-
--- Contesti AI
-SELECT * FROM ai_contexts ORDER BY id DESC LIMIT 5;
-```
-
-### Inizializzare/Reset Database
-```bash
-# Reset completo
-docker compose exec postgres psql -U trader -d trader_db -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public; GRANT ALL ON SCHEMA public TO trader;"
-
-# Ricreare tabelle
-docker compose run --rm app python -c "import db_utils; db_utils.init_db()"
+-- Trade recenti
+SELECT * FROM trades ORDER BY id DESC LIMIT 10;
 ```
 
 ---
 
 ## Troubleshooting
 
-### Bot non esegue trade
-1. Verificare logs: `tail -50 /opt/trader_bitcoin/logs/bot.log`
-2. Controllare API keys nel .env
-3. Verificare balance su Hyperliquid
-4. Test manuale: `docker compose run --rm app python main.py`
+### Bot non genera segnali
+1. Verificare regime: se "uncertain", condizioni non ottimali
+2. Controllare se ha posizioni aperte (skippa simboli con posizione)
+3. Verificare spread (troppo largo per HFT)
 
-### Errore OpenAI API
-1. Verificare OPENAI_API_KEY nel .env
-2. Controllare crediti su platform.openai.com
-3. Verificare modello disponibile: `gpt-5.1`
+### DeepSeek timeout
+- Timeout configurato: 90 secondi
+- Se persiste, controllare connettività API
 
-### Database connection refused
-1. Verificare che postgres sia up: `docker compose ps`
-2. Controllare DATABASE_URL nel .env
-3. Riavviare: `docker compose restart postgres`
-
-### Tabelle non esistono
+### Bot frozen/unhealthy
 ```bash
-docker compose run --rm app python -c "import db_utils; db_utils.init_db()"
+# Restart
+ssh root@<VPS_IP_REDACTED> "cd /opt/trader_bitcoin && docker compose restart app"
 ```
 
-### Dashboard non raggiungibile (porta 5611)
-1. Verificare che il container sia attivo: `docker compose ps`
-2. Avviare il dashboard: `docker compose up -d dashboard`
-3. Controllare logs: `docker compose logs -f dashboard`
-4. Verificare porta esposta: `curl http://localhost:5611/`
+### Verificare API key DeepSeek
+```bash
+ssh root@<VPS_IP_REDACTED> "docker exec trader_mainnet_app env | grep OPENAI"
+# Deve mostrare: OPENAI_API_KEY=sk-cbd31...
+```
 
 ---
 
-## Struttura File
+## Variabili d'Ambiente (.env)
 
+```bash
+ENVIRONMENT=production
+PRIVATE_KEY=0x...
+WALLET_ADDRESS=0x...
+OPENAI_API_KEY=sk-cbd31...  # DeepSeek V3.2-Speciale
+CMC_PRO_API_KEY=...
+DATABASE_URL=postgresql://trader:password@postgres:5432/trader_db
 ```
-trader_bitcoin/
-├── .env                    # Credenziali (NON committare)
-├── .gitignore
-├── CLAUDE.md               # Questa guida
-├── deploy.sh               # Script deploy Hetzner
-├── docker-compose.yml      # Configurazione Docker
-├── Dockerfile              # Build image Python
-├── requirements.txt        # Dipendenze Python
-├── run_bot.sh              # Script per cron
-├── main.py                 # Entry point
-├── trading_agent.py        # LLM GPT-5.1 via API OpenAI
-├── hyperliquid_trader.py   # Exchange API
-├── indicators.py           # Analisi tecnica
-├── forecaster.py           # Prophet forecasting
-├── sentiment.py            # Fear & Greed
-├── news_feed.py            # RSS news
-├── db_utils.py             # PostgreSQL logging
-├── system_prompt.txt       # Prompt LLM
-├── logs/                   # Directory logs (sul server)
-└── frontend/               # Dashboard web (FastAPI + HTMX)
-    ├── Dockerfile          # Build image dashboard
-    ├── main.py             # API e pagine HTML
-    ├── requirements.txt    # Dipendenze frontend
-    └── templates/          # Template Jinja2
-```
+
+---
+
+## Note
+
+- I valori dinamici (equity, posizioni, regime) cambiano continuamente - controllare sempre via dashboard o database
+- Per lo stato attuale: `docker logs trader_mainnet_app --tail 20`
