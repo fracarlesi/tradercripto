@@ -166,6 +166,63 @@ class ExecutionEngine:
         # Alert callback
         self._alert_callback = None
 
+        # Dynamic slippage configuration
+        self._base_slippage_pct = Decimal("0.005")  # 0.5% base
+        self._spread_multiplier = Decimal("0.5")   # 50% of spread added
+        self._volatility_multiplier = Decimal("0.3")  # 30% of ATR added
+        self._min_slippage_pct = Decimal("0.003")  # 0.3% minimum
+        self._max_slippage_pct = Decimal("0.020")  # 2% maximum
+
+    def calculate_dynamic_slippage(
+        self,
+        symbol: str,
+        current_price: Decimal,
+        spread: Optional[Decimal] = None,
+        atr: Optional[Decimal] = None,
+    ) -> float:
+        """
+        Calculate dynamic slippage based on current market conditions.
+
+        This improves fill quality by:
+        - Increasing slippage in high volatility (avoid rejections)
+        - Decreasing slippage in calm markets (better fills)
+        - Accounting for spread (wider spread = more slippage needed)
+
+        Args:
+            symbol: Trading symbol
+            current_price: Current mid price
+            spread: Current bid-ask spread (optional)
+            atr: ATR value for volatility (optional)
+
+        Returns:
+            Slippage as a decimal (e.g., 0.01 for 1%)
+        """
+        slippage = self._base_slippage_pct
+
+        # Spread component: if spread is 0.05%, add 0.025%
+        if spread and spread > 0 and current_price > 0:
+            spread_pct = spread / current_price
+            spread_component = spread_pct * self._spread_multiplier
+            slippage += spread_component
+
+        # Volatility component: if ATR is 1%, add 0.3%
+        if atr and atr > 0 and current_price > 0:
+            atr_pct = atr / current_price
+            vol_component = atr_pct * self._volatility_multiplier
+            slippage += vol_component
+
+        # Clamp between min and max
+        slippage = max(self._min_slippage_pct, min(slippage, self._max_slippage_pct))
+
+        logger.debug(
+            f"Dynamic slippage for {symbol}: {float(slippage):.4%} "
+            f"(base={float(self._base_slippage_pct):.4%}, "
+            f"spread={float(spread_pct if spread else 0):.4%}, "
+            f"vol={float(atr_pct if atr else 0):.4%})"
+        )
+
+        return float(slippage)
+
     def on_alert(self, callback):
         """Register alert callback."""
         self._alert_callback = callback
@@ -815,9 +872,16 @@ class ExecutionEngine:
         order: ApprovedOrder,
         current_price: Decimal,
         spread: Optional[Decimal] = None,
+        atr: Optional[Decimal] = None,
     ) -> bool:
         """
         Execute an approved order.
+
+        Args:
+            order: Approved order to execute
+            current_price: Current mid price
+            spread: Current bid-ask spread (for dynamic slippage)
+            atr: ATR value (for dynamic slippage in volatile markets)
 
         Returns True if successful.
         """
@@ -825,10 +889,10 @@ class ExecutionEngine:
             # Check if order should be split
             notional = order.size * current_price
             if notional > self.chunk_size_usd:
-                return await self._execute_chunked(order, current_price, spread)
+                return await self._execute_chunked(order, current_price, spread, atr)
 
             # Single order execution
-            return await self._execute_single(order, current_price, spread)
+            return await self._execute_single(order, current_price, spread, atr)
 
         except Exception as e:
             logger.error(f"Execution error for {order.order_id}: {e}")
@@ -844,6 +908,7 @@ class ExecutionEngine:
         order: ApprovedOrder,
         current_price: Decimal,
         spread: Optional[Decimal] = None,
+        atr: Optional[Decimal] = None,
     ) -> bool:
         """Execute a single order with HFT-aware order type selection."""
         is_hft = self.is_hft_strategy(order.strategy_id)
@@ -885,7 +950,7 @@ class ExecutionEngine:
             order.status = OrderStatus.SUBMITTED
 
             if use_market:
-                result = await self._place_market_order(order)
+                result = await self._place_market_order(order, current_price, spread, atr)
             elif use_maker_only:
                 # Use post-only (GTX) limit order for HFT
                 result = await self._place_maker_order(order, current_price)
@@ -948,6 +1013,7 @@ class ExecutionEngine:
         order: ApprovedOrder,
         current_price: Decimal,
         spread: Optional[Decimal] = None,
+        atr: Optional[Decimal] = None,
     ) -> bool:
         """Execute a large order in chunks."""
         total_size = order.size
@@ -979,7 +1045,7 @@ class ExecutionEngine:
             )
 
             # Execute chunk
-            success = await self._execute_single(chunk_order, current_price, spread)
+            success = await self._execute_single(chunk_order, current_price, spread, atr)
             if not success:
                 logger.warning(f"Chunk {chunk_num} failed, stopping")
                 break
@@ -1005,17 +1071,31 @@ class ExecutionEngine:
 
         return filled_size > 0
 
-    async def _place_market_order(self, order: ApprovedOrder) -> dict:
-        """Place a market order."""
+    async def _place_market_order(
+        self,
+        order: ApprovedOrder,
+        current_price: Optional[Decimal] = None,
+        spread: Optional[Decimal] = None,
+        atr: Optional[Decimal] = None,
+    ) -> dict:
+        """Place a market order with dynamic slippage."""
         is_buy = order.side == Side.LONG
         size = self._round_size(order.symbol, order.size)
+
+        # Calculate dynamic slippage based on market conditions
+        if current_price and current_price > 0:
+            slippage = self.calculate_dynamic_slippage(order.symbol, current_price, spread, atr)
+        else:
+            slippage = 0.01  # Fallback to 1% if no price data
+
+        logger.debug(f"Market order for {order.symbol}: slippage={slippage:.4%}")
 
         return self.exchange.market_open(
             name=order.symbol,
             is_buy=is_buy,
             sz=size,
             px=None,
-            slippage=0.01,  # 1% slippage tolerance
+            slippage=slippage,
         )
 
     async def _place_limit_order(

@@ -373,3 +373,68 @@ class MarketDataLayer:
             return True
         age = (datetime.now(timezone.utc) - self._last_account_update).total_seconds()
         return age > max_age_seconds
+
+    # -------------------------------------------------------------------------
+    # ATR Calculation
+    # -------------------------------------------------------------------------
+    def calculate_atr(self, symbol: str, period: int = 14, timeframe: TimeFrame = TimeFrame.M1) -> Optional[Decimal]:
+        """
+        Calculate Average True Range (ATR) for a symbol.
+
+        Args:
+            symbol: The trading symbol
+            period: ATR period (default 14)
+            timeframe: Bar timeframe to use (default 1m)
+
+        Returns:
+            ATR value as Decimal, or None if insufficient data
+        """
+        bars = self.get_bars(symbol, timeframe, count=period + 1)
+
+        if not bars or len(bars) < period + 1:
+            return None
+
+        tr_values = []
+        for i in range(-period, 0):
+            high = bars[i].high
+            low = bars[i].low
+            prev_close = bars[i - 1].close
+
+            # True Range = max(high-low, |high-prev_close|, |low-prev_close|)
+            tr = max(
+                high - low,
+                abs(high - prev_close),
+                abs(low - prev_close)
+            )
+            tr_values.append(tr)
+
+        if not tr_values:
+            return None
+
+        return sum(tr_values) / len(tr_values)
+
+    def get_atr(self, symbol: str) -> Optional[Decimal]:
+        """Get ATR(14) for a symbol using 1-minute bars."""
+        return self.calculate_atr(symbol, period=14, timeframe=TimeFrame.M1)
+
+    def get_all_market_contexts_with_atr(self) -> Dict[str, MarketContext]:
+        """
+        Get all market contexts enriched with live spread AND ATR.
+
+        This should be used instead of get_all_market_contexts() when
+        dynamic TP/SL based on volatility is needed.
+        """
+        contexts = self._market_contexts.copy()
+
+        for symbol, ctx in contexts.items():
+            # Enrich with live spread from WebSocket ticks
+            tick = self.ws.get_tick(symbol)
+            if tick:
+                ctx.spread = tick.spread
+
+            # Calculate and set ATR
+            atr = self.calculate_atr(symbol)
+            if atr:
+                ctx.atr_14 = atr
+
+        return contexts

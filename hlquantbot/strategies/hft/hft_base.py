@@ -128,6 +128,55 @@ class HFTBaseStrategy(BaseStrategy):
         return Decimal("0.002")
 
     # -------------------------------------------------------------------------
+    # Dynamic TP/SL based on ATR
+    # -------------------------------------------------------------------------
+    def calculate_dynamic_tp_sl(
+        self,
+        entry_price: Decimal,
+        context: MarketContext,
+    ) -> Tuple[Decimal, Decimal]:
+        """
+        Calculate dynamic TP/SL based on ATR if available.
+
+        Uses ATR to scale TP/SL appropriately for current volatility:
+        - High volatility: wider TP/SL to avoid premature stops
+        - Low volatility: tighter TP/SL for faster exits
+
+        Returns:
+            Tuple of (take_profit_pct, stop_loss_pct)
+        """
+        # Check if ATR is available in context
+        if context.atr_14 and entry_price > 0:
+            atr_pct = context.atr_14 / entry_price
+
+            # Clamp ATR between reasonable bounds
+            MIN_ATR_PCT = Decimal("0.002")  # 0.2%
+            MAX_ATR_PCT = Decimal("0.010")  # 1.0%
+            atr_pct = max(MIN_ATR_PCT, min(atr_pct, MAX_ATR_PCT))
+
+            # TP = 1.2x ATR, SL = 0.6x ATR (RR = 2.0)
+            dynamic_tp = atr_pct * Decimal("1.2")
+            dynamic_sl = atr_pct * Decimal("0.6")
+
+            # Ensure minimum TP for profitability after fees (0.04% roundtrip)
+            MIN_TP = Decimal("0.0035")  # 0.35% min
+            MAX_SL = Decimal("0.0020")  # 0.20% max
+
+            # Apply constraints
+            final_tp = max(dynamic_tp, MIN_TP)
+            final_sl = min(dynamic_sl, MAX_SL)
+
+            logger.debug(
+                f"Dynamic TP/SL for {context.symbol}: "
+                f"ATR={float(atr_pct):.4%} -> TP={float(final_tp):.4%}, SL={float(final_sl):.4%}"
+            )
+
+            return final_tp, final_sl
+
+        # Fallback to static config values
+        return self.take_profit_pct, self.stop_loss_pct
+
+    # -------------------------------------------------------------------------
     # Fee-Aware Calculations
     # -------------------------------------------------------------------------
     def calculate_net_tp(
@@ -237,17 +286,20 @@ class HFTBaseStrategy(BaseStrategy):
         reason: str = "",
     ) -> ProposedTrade:
         """
-        Create an HFT trade proposal with fee-aware TP/SL.
+        Create an HFT trade proposal with dynamic ATR-based TP/SL.
 
         All HFT trades use:
         - Maker-only (post-only) orders
         - Fee-aware TP calculation
-        - Tight stop losses
+        - Dynamic TP/SL based on ATR (if available)
         - High leverage
         """
-        # Calculate TP/SL with fees
-        tp_price = self.calculate_net_tp(entry_price, self.take_profit_pct, side)
-        sl_price = self.calculate_sl(entry_price, self.stop_loss_pct, side)
+        # Calculate dynamic TP/SL based on ATR (or fallback to static)
+        tp_pct, sl_pct = self.calculate_dynamic_tp_sl(entry_price, context)
+
+        # Calculate actual prices with fees
+        tp_price = self.calculate_net_tp(entry_price, tp_pct, side)
+        sl_price = self.calculate_sl(entry_price, sl_pct, side)
 
         # Validate profitability
         if not self.is_profitable_after_fees(entry_price, tp_price, side):

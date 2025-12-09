@@ -282,11 +282,12 @@ class HLQuantBot:
                     if loop_count % 60 == 1:  # Log regime every ~60 iterations
                         logger.info(f"Iter {loop_count}: Current regime={current_regime.value}")
 
-                    # Get market data
-                    contexts = self.market_data.get_all_market_contexts()
+                    # Get market data with ATR enrichment
+                    contexts = self.market_data.get_all_market_contexts_with_atr()
                     bars_by_symbol = self._get_bars_for_strategies()
                     prices = {s: ctx.mid_price for s, ctx in contexts.items()}
-                    atrs = self._calculate_atrs(bars_by_symbol)
+                    # ATR now comes from context (calculated in market_data)
+                    atrs = {s: ctx.atr_14 for s, ctx in contexts.items() if ctx.atr_14}
 
                     # Update positions with current prices
                     for symbol, price in prices.items():
@@ -535,7 +536,7 @@ class HLQuantBot:
                 return
 
         self._last_regime_check = now
-        contexts = self.market_data.get_all_market_contexts()
+        contexts = self.market_data.get_all_market_contexts_with_atr()
 
         # Gather bars data for technical analysis
         bars_data = {}

@@ -10,7 +10,7 @@ UPDATED per requisiti 3.1-3.3:
 import asyncio
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from typing import List, Dict, Optional, Tuple
 from enum import Enum
@@ -43,6 +43,138 @@ class TradingState(str, Enum):
 
 # Fee roundtrip minimo richiesto per HFT (0.20%)
 MIN_NET_PROFIT_AFTER_FEES_PCT = Decimal("0.0020")  # 0.20%
+
+
+class SymbolBlacklist:
+    """
+    Dynamic blacklist for underperforming symbols.
+
+    Tracks symbol P&L and temporarily blacklists symbols with poor performance.
+    This prevents the bot from trading symbols that have a negative edge.
+
+    Config defaults:
+    - min_trades: 10 (minimum trades to evaluate)
+    - min_win_rate: 0.40 (40% - below this = blacklist)
+    - blacklist_duration_hours: 2 (auto-expire after 2 hours)
+    """
+
+    def __init__(
+        self,
+        min_trades: int = 10,
+        min_win_rate: float = 0.40,
+        blacklist_duration_hours: int = 2,
+    ):
+        self._blacklist: Dict[str, datetime] = {}
+        self._min_trades = min_trades
+        self._min_win_rate = min_win_rate
+        self._blacklist_duration = timedelta(hours=blacklist_duration_hours)
+        self._performance_cache: Dict[str, Dict] = {}
+
+    def update_from_performance(self, symbol_performance: Dict):
+        """
+        Update blacklist based on symbol performance.
+
+        Args:
+            symbol_performance: Dict with 'symbol', 'total_trades', 'win_rate', 'total_pnl'
+        """
+        symbol = symbol_performance.get("symbol")
+        if not symbol:
+            return
+
+        # Cache performance
+        self._performance_cache[symbol] = symbol_performance
+
+        total_trades = symbol_performance.get("total_trades", 0)
+        win_rate = symbol_performance.get("win_rate", 0.5)
+        total_pnl = symbol_performance.get("total_pnl", Decimal(0))
+
+        # Only evaluate if we have enough trades
+        if total_trades >= self._min_trades:
+            # Blacklist if win rate below threshold OR significant negative P&L
+            should_blacklist = False
+            reason = ""
+
+            if win_rate < self._min_win_rate:
+                should_blacklist = True
+                reason = f"win_rate={win_rate:.1%} < {self._min_win_rate:.1%}"
+
+            # Also blacklist if large negative P&L (> $50 loss in lookback period)
+            if isinstance(total_pnl, Decimal) and total_pnl < Decimal("-50"):
+                should_blacklist = True
+                reason = f"total_pnl=${float(total_pnl):.2f}"
+
+            if should_blacklist:
+                if symbol not in self._blacklist:
+                    logger.warning(
+                        f"Symbol {symbol} BLACKLISTED: {reason} "
+                        f"(trades={total_trades}, duration={self._blacklist_duration})"
+                    )
+                self._blacklist[symbol] = datetime.now(timezone.utc)
+
+    def is_blacklisted(self, symbol: str) -> bool:
+        """
+        Check if symbol is currently blacklisted.
+
+        Returns False if blacklist has expired.
+        """
+        if symbol not in self._blacklist:
+            return False
+
+        # Check if blacklist expired
+        blacklist_time = self._blacklist[symbol]
+        if datetime.now(timezone.utc) - blacklist_time > self._blacklist_duration:
+            # Expired - remove from blacklist
+            del self._blacklist[symbol]
+            logger.info(f"Symbol {symbol} blacklist EXPIRED - now tradeable")
+            return False
+
+        return True
+
+    def remove_from_blacklist(self, symbol: str):
+        """Manually remove a symbol from blacklist."""
+        if symbol in self._blacklist:
+            del self._blacklist[symbol]
+            logger.info(f"Symbol {symbol} manually removed from blacklist")
+
+    def get_blacklisted_symbols(self) -> List[str]:
+        """Get list of currently blacklisted symbols."""
+        # Clean up expired entries
+        now = datetime.now(timezone.utc)
+        expired = [
+            s for s, t in self._blacklist.items()
+            if now - t > self._blacklist_duration
+        ]
+        for s in expired:
+            del self._blacklist[s]
+
+        return list(self._blacklist.keys())
+
+    def get_blacklist_info(self) -> Dict:
+        """Get detailed blacklist info for dashboard."""
+        now = datetime.now(timezone.utc)
+        info = {}
+        for symbol, blacklist_time in self._blacklist.items():
+            remaining = self._blacklist_duration - (now - blacklist_time)
+            if remaining.total_seconds() > 0:
+                perf = self._performance_cache.get(symbol, {})
+                info[symbol] = {
+                    "blacklisted_at": blacklist_time.isoformat(),
+                    "remaining_seconds": int(remaining.total_seconds()),
+                    "win_rate": perf.get("win_rate", 0),
+                    "total_trades": perf.get("total_trades", 0),
+                    "total_pnl": float(perf.get("total_pnl", 0)),
+                }
+        return info
+
+    def get_metrics(self) -> Dict:
+        """Get blacklist metrics."""
+        return {
+            "blacklisted_count": len(self.get_blacklisted_symbols()),
+            "blacklisted_symbols": self.get_blacklisted_symbols(),
+            "min_trades": self._min_trades,
+            "min_win_rate": self._min_win_rate,
+            "blacklist_duration_hours": self._blacklist_duration.total_seconds() / 3600,
+        }
 
 
 # Strategy priority mapping (higher = more priority)
@@ -105,6 +237,15 @@ class RiskEngine:
 
         # Trading state (per nuovo Circuit Breaker 4 livelli)
         self._trading_state = TradingState.RUNNING
+
+        # Symbol blacklist for underperforming symbols
+        self._symbol_blacklist = SymbolBlacklist(
+            min_trades=10,
+            min_win_rate=0.40,
+            blacklist_duration_hours=2,
+        )
+        self._last_blacklist_update = datetime.now(timezone.utc)
+        self._blacklist_update_interval = timedelta(minutes=10)
 
         logger.info(
             f"RiskEngine initialized - max_risk_per_trade={self.risk_config.max_risk_per_trade_pct:.2%}, "
@@ -322,6 +463,11 @@ class RiskEngine:
 
             # Check side is actionable
             if p.side == Side.FLAT:
+                continue
+
+            # Check if symbol is blacklisted for poor performance
+            if self._symbol_blacklist.is_blacklisted(p.symbol):
+                logger.info(f"Skipping {p.symbol}: blacklisted for poor performance")
                 continue
 
             # Check strategy is enabled
@@ -821,3 +967,57 @@ class RiskEngine:
         """Set aggression controller for dynamic risk adjustment."""
         self._aggression_controller = aggression_controller
         logger.info("Aggression controller connected to RiskEngine")
+
+    # -------------------------------------------------------------------------
+    # Symbol Blacklist Management
+    # -------------------------------------------------------------------------
+    async def update_symbol_blacklist(self, database) -> None:
+        """
+        Update symbol blacklist from database P&L data.
+
+        Should be called periodically (e.g., every 10 minutes).
+
+        Args:
+            database: Database instance with get_all_symbols_performance method
+        """
+        now = datetime.now(timezone.utc)
+
+        # Only update if enough time has passed
+        if now - self._last_blacklist_update < self._blacklist_update_interval:
+            return
+
+        try:
+            # Get performance for all symbols in last 24h
+            performances = await database.get_all_symbols_performance(lookback_hours=24)
+
+            for perf in performances:
+                self._symbol_blacklist.update_from_performance(perf)
+
+            self._last_blacklist_update = now
+            logger.debug(
+                f"Symbol blacklist updated - {len(self._symbol_blacklist.get_blacklisted_symbols())} symbols blacklisted"
+            )
+
+        except Exception as e:
+            logger.error(f"Error updating symbol blacklist: {e}")
+
+    def get_symbol_blacklist(self) -> SymbolBlacklist:
+        """Get the symbol blacklist instance."""
+        return self._symbol_blacklist
+
+    def get_blacklist_metrics(self) -> Dict:
+        """Get blacklist metrics for dashboard."""
+        return {
+            **self._symbol_blacklist.get_metrics(),
+            "blacklist_info": self._symbol_blacklist.get_blacklist_info(),
+            "last_update": self._last_blacklist_update.isoformat(),
+            "update_interval_minutes": self._blacklist_update_interval.total_seconds() / 60,
+        }
+
+    def is_symbol_blacklisted(self, symbol: str) -> bool:
+        """Check if a specific symbol is blacklisted."""
+        return self._symbol_blacklist.is_blacklisted(symbol)
+
+    def remove_symbol_from_blacklist(self, symbol: str) -> None:
+        """Manually remove a symbol from the blacklist."""
+        self._symbol_blacklist.remove_from_blacklist(symbol)

@@ -833,3 +833,144 @@ class Database:
         if row and row["total"] > 0:
             return float(row["wins"]) / float(row["total"])
         return None
+
+    # -------------------------------------------------------------------------
+    # Symbol P&L Tracking (per dynamic blacklist)
+    # -------------------------------------------------------------------------
+    async def get_symbol_performance(
+        self,
+        symbol: str,
+        lookback_hours: int = 24,
+    ) -> Dict[str, Any]:
+        """
+        Get P&L metrics for a specific symbol.
+
+        Used by SymbolBlacklist to identify underperforming symbols.
+
+        Returns:
+            Dict with: symbol, total_trades, winning_trades, win_rate, total_pnl, avg_pnl
+        """
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
+
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT
+                    COUNT(*) as total_trades,
+                    COUNT(*) FILTER (WHERE pnl > 0) as winning_trades,
+                    COUNT(*) FILTER (WHERE pnl <= 0) as losing_trades,
+                    COALESCE(SUM(pnl), 0) as total_pnl,
+                    COALESCE(AVG(pnl), 0) as avg_pnl,
+                    COALESCE(SUM(CASE WHEN pnl > 0 THEN pnl ELSE 0 END), 0) as gross_profit,
+                    COALESCE(SUM(CASE WHEN pnl <= 0 THEN pnl ELSE 0 END), 0) as gross_loss
+                FROM trades
+                WHERE symbol = $1 AND exit_time >= $2
+            """, symbol, cutoff_time)
+
+        total_trades = row["total_trades"] or 0
+        winning_trades = row["winning_trades"] or 0
+
+        return {
+            "symbol": symbol,
+            "total_trades": total_trades,
+            "winning_trades": winning_trades,
+            "losing_trades": row["losing_trades"] or 0,
+            "win_rate": winning_trades / total_trades if total_trades > 0 else 0.5,
+            "total_pnl": Decimal(str(row["total_pnl"])),
+            "avg_pnl": Decimal(str(row["avg_pnl"])),
+            "gross_profit": Decimal(str(row["gross_profit"])),
+            "gross_loss": Decimal(str(row["gross_loss"])),
+            "lookback_hours": lookback_hours,
+        }
+
+    async def get_all_symbols_performance(
+        self,
+        lookback_hours: int = 24,
+    ) -> List[Dict[str, Any]]:
+        """
+        Get P&L metrics for all traded symbols.
+
+        Useful for dashboard and ranking symbols by profitability.
+
+        Returns:
+            List of dicts with symbol performance metrics, sorted by total_pnl desc
+        """
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
+
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT
+                    symbol,
+                    COUNT(*) as total_trades,
+                    COUNT(*) FILTER (WHERE pnl > 0) as winning_trades,
+                    COUNT(*) FILTER (WHERE pnl <= 0) as losing_trades,
+                    COALESCE(SUM(pnl), 0) as total_pnl,
+                    COALESCE(AVG(pnl), 0) as avg_pnl,
+                    COALESCE(SUM(CASE WHEN pnl > 0 THEN pnl ELSE 0 END), 0) as gross_profit,
+                    COALESCE(SUM(CASE WHEN pnl <= 0 THEN pnl ELSE 0 END), 0) as gross_loss
+                FROM trades
+                WHERE exit_time >= $1
+                GROUP BY symbol
+                ORDER BY total_pnl DESC
+            """, cutoff_time)
+
+        results = []
+        for row in rows:
+            total_trades = row["total_trades"] or 0
+            winning_trades = row["winning_trades"] or 0
+
+            results.append({
+                "symbol": row["symbol"],
+                "total_trades": total_trades,
+                "winning_trades": winning_trades,
+                "losing_trades": row["losing_trades"] or 0,
+                "win_rate": winning_trades / total_trades if total_trades > 0 else 0.5,
+                "total_pnl": Decimal(str(row["total_pnl"])),
+                "avg_pnl": Decimal(str(row["avg_pnl"])),
+                "gross_profit": Decimal(str(row["gross_profit"])),
+                "gross_loss": Decimal(str(row["gross_loss"])),
+            })
+
+        return results
+
+    async def get_strategy_symbol_performance(
+        self,
+        strategy_id: StrategyId,
+        lookback_hours: int = 24,
+    ) -> List[Dict[str, Any]]:
+        """
+        Get P&L metrics per symbol for a specific strategy.
+
+        Useful for identifying which symbols work best with which strategy.
+        """
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
+
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT
+                    symbol,
+                    COUNT(*) as total_trades,
+                    COUNT(*) FILTER (WHERE pnl > 0) as winning_trades,
+                    COALESCE(SUM(pnl), 0) as total_pnl,
+                    COALESCE(AVG(pnl), 0) as avg_pnl
+                FROM trades
+                WHERE strategy_id = $1 AND exit_time >= $2
+                GROUP BY symbol
+                ORDER BY total_pnl DESC
+            """, strategy_id.value, cutoff_time)
+
+        results = []
+        for row in rows:
+            total_trades = row["total_trades"] or 0
+            winning_trades = row["winning_trades"] or 0
+
+            results.append({
+                "symbol": row["symbol"],
+                "strategy_id": strategy_id.value,
+                "total_trades": total_trades,
+                "winning_trades": winning_trades,
+                "win_rate": winning_trades / total_trades if total_trades > 0 else 0.5,
+                "total_pnl": Decimal(str(row["total_pnl"])),
+                "avg_pnl": Decimal(str(row["avg_pnl"])),
+            })
+
+        return results
