@@ -62,24 +62,25 @@ risk:
       cooldown_seconds: 0  # permanente
       action: hard_stop
 
-  # Temporal Kill-Switch (legacy - mantenuto per compatibilità)
+  # Temporal Kill-Switch - AGGIORNATO secondo specifica consigli.md
+  # Nota: questi sono i parametri EFFETTIVI usati dal circuit_breaker.py
   temporal_risk:
     enabled: true
-    # Level 1: Rapid loss (30s window)
+    # Level 1: 5 min window, -1.5% DD -> pausa 5 min
     level_1:
-      window_seconds: 30
-      max_drawdown_pct: 0.007  # 0.7%
-      cooldown_seconds: 900  # 15 minutes
-    # Level 2: Medium-term loss (10 min window)
+      window_seconds: 300  # 5 minuti
+      max_drawdown_pct: 0.015  # 1.5%
+      cooldown_seconds: 300  # 5 minuti pausa
+    # Level 2: 30 min window, -4% DD -> pausa 30 min
     level_2:
-      window_seconds: 600
-      max_drawdown_pct: 0.02  # 2%
-      cooldown_seconds: 3600  # 1 hour
-    # Level 3: Hourly loss (1h window)
+      window_seconds: 1800  # 30 minuti
+      max_drawdown_pct: 0.04  # 4%
+      cooldown_seconds: 1800  # 30 minuti pausa
+    # Level 3: 4 ore window, -10% DD -> stop fino giorno successivo
     level_3:
-      window_seconds: 3600
-      max_drawdown_pct: 0.045  # 4.5%
-      cooldown_seconds: 21600  # 6 hours
+      window_seconds: 14400  # 4 ore
+      max_drawdown_pct: 0.10  # 10%
+      cooldown_seconds: 86400  # fino a giorno successivo (24h)
 
 # =============================================================================
 # LEGACY STRATEGIES (Disabled - to be removed)
@@ -380,7 +381,7 @@ telegram:
 # =============================================================================
 openai:
   enabled: true
-  model: deepseek-chat
+  model: deepseek-reasoner  # Changed from deepseek-chat for more accurate analysis
   base_url: https://api.deepseek.com
   regime_detection_interval_minutes: 5  # More frequent for HFT
   param_tuning_interval_hours: 6  # More frequent tuning

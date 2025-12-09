@@ -449,6 +449,33 @@ class CircuitBreaker:
         """Alias for get_cooldown_remaining for clarity."""
         return self.get_cooldown_remaining()
 
+    def get_current_level(self) -> int:
+        """
+        Get current active circuit breaker level (0-4).
+
+        Returns:
+            0: No active kill-switch (trading allowed)
+            1: Level 1 temporal kill-switch (short cooldown)
+            2: Level 2 temporal kill-switch (medium cooldown)
+            3: Level 3 temporal kill-switch (long cooldown)
+            4: Hard circuit breaker triggered (requires restart)
+        """
+        if self._state.is_triggered:
+            return 4  # Hard stop
+
+        if not self._state.temporal_kill_switch_active:
+            return 0  # No active level
+
+        if self._state.active_kill_switch_level:
+            level_map = {
+                KillSwitchLevel.LEVEL_1: 1,
+                KillSwitchLevel.LEVEL_2: 2,
+                KillSwitchLevel.LEVEL_3: 3,
+            }
+            return level_map.get(self._state.active_kill_switch_level, 0)
+
+        return 0
+
     def get_temporal_status(self) -> Dict:
         """Get human-readable temporal kill-switch status."""
         status = {

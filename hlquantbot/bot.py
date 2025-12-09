@@ -70,6 +70,7 @@ class HLQuantBot:
         self._last_snapshot_time: Optional[datetime] = None
         self._last_regime_check: Optional[datetime] = None
         self._last_metrics_calc: Optional[datetime] = None
+        self._regime_detection_task: Optional[asyncio.Task] = None  # Background regime detection
 
         # Intervals
         self._main_loop_interval = 1.0  # seconds
@@ -114,6 +115,15 @@ class HLQuantBot:
         logger.info(f"Stopping HLQuantBot: {reason}")
         self._running = False
         self._shutdown_event.set()
+
+        # Cancel background regime detection task
+        if self._regime_detection_task and not self._regime_detection_task.done():
+            self._regime_detection_task.cancel()
+            try:
+                await self._regime_detection_task
+            except asyncio.CancelledError:
+                pass
+            logger.info("Background regime detection task stopped")
 
         # Send shutdown notification
         if self.telegram:
@@ -204,6 +214,11 @@ class HLQuantBot:
         self.health_server = HealthServer(self, port=8080)
         await self.health_server.start()
 
+        # Start background regime detection task (non-blocking)
+        # This prevents deepseek-reasoner (30-60s) from blocking the main loop
+        self._regime_detection_task = asyncio.create_task(self._regime_detection_loop())
+        logger.info("Background regime detection task started")
+
         logger.info("All components initialized")
 
     def _setup_signal_handlers(self):
@@ -259,12 +274,13 @@ class HLQuantBot:
                     # Update circuit breaker
                     await self.risk_engine.circuit_breaker.update(account.equity)
 
-                    # Run regime detection periodically (with timing)
-                    logger.info(f"Iter {loop_count}: Starting regime detection")
+                    # Get current regime (non-blocking - detection runs in background task)
+                    # This prevents deepseek-reasoner (30-60s) from blocking the main loop
                     metrics.regime_start()
-                    await self._maybe_detect_regime(account)
+                    current_regime = self.regime_detector.get_current_regime()
                     metrics.regime_end()
-                    logger.info(f"Iter {loop_count}: Regime detection done")
+                    if loop_count % 60 == 1:  # Log regime every ~60 iterations
+                        logger.info(f"Iter {loop_count}: Current regime={current_regime.value}")
 
                     # Get market data
                     contexts = self.market_data.get_all_market_contexts()
@@ -473,6 +489,42 @@ class HLQuantBot:
     # -------------------------------------------------------------------------
     # Periodic Tasks
     # -------------------------------------------------------------------------
+    async def _regime_detection_loop(self):
+        """
+        Background loop for regime detection - does NOT block main loop.
+
+        Runs every regime_check_interval (5 min by default).
+        Supports deepseek-reasoner which can take 30-60 seconds to respond.
+        """
+        logger.info("Regime detection background loop started")
+
+        # Initial delay to let market data warm up
+        await asyncio.sleep(10)
+
+        while self._running:
+            try:
+                # Get current account state
+                account = self.market_data.get_account_state()
+                if not account:
+                    logger.debug("No account state for regime detection, waiting...")
+                    await asyncio.sleep(30)
+                    continue
+
+                # Run regime detection (can take 30-90s with deepseek-reasoner)
+                logger.info("Background regime detection starting...")
+                await self._maybe_detect_regime(account)
+                logger.info("Background regime detection completed")
+
+                # Wait for next interval
+                await asyncio.sleep(self._regime_check_interval)
+
+            except asyncio.CancelledError:
+                logger.info("Regime detection loop cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Error in regime detection loop: {e}")
+                await asyncio.sleep(60)  # Back off on error
+
     async def _maybe_detect_regime(self, account: AccountState):
         """Run regime detection if needed."""
         now = datetime.now(timezone.utc)

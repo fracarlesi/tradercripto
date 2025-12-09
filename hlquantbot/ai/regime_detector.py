@@ -279,7 +279,7 @@ class RegimeDetector:
             ],
             "temperature": self.config.temperature,
             "max_tokens": self.config.max_tokens,
-            "timeout": 30.0,  # SDK-level timeout for deepseek-chat (5-15s typical)
+            "timeout": 90.0,  # SDK-level timeout for deepseek-reasoner (30-60s typical)
         }
 
         # Only add response_format for OpenAI (not DeepSeek)
@@ -294,12 +294,12 @@ class RegimeDetector:
             try:
                 response = await asyncio.wait_for(
                     client.chat.completions.create(**call_params),
-                    timeout=30.0  # 30 second asyncio timeout for deepseek-chat
+                    timeout=90.0  # 90 second asyncio timeout for deepseek-reasoner
                 )
                 break  # Success - exit retry loop
             except asyncio.TimeoutError:
                 last_error = Exception("API timeout")
-                logger.warning(f"Regime detection API call timed out after 30s (attempt {attempt + 1}/{max_retries})")
+                logger.warning(f"Regime detection API call timed out after 90s (attempt {attempt + 1}/{max_retries})")
                 if attempt < max_retries - 1:
                     await asyncio.sleep(1)  # Short delay before retry
                     continue
