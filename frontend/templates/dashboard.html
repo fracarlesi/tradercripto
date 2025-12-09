@@ -35,6 +35,16 @@
                 <!-- Metriche HFT caricate via HTMX con refresh ogni 5s -->
             </div>
         </article>
+
+        <article class="card">
+            <div style="margin-bottom:0.5rem;">
+                <h2><span class="accent-dot"></span> P&L per Simbolo</h2>
+                <p class="card-subtitle">Performance breakdown per ogni simbolo tradato (ultime 24h). Simboli con win rate &lt;40% sono blacklistati.</p>
+            </div>
+            <div id="pnl-by-symbol-panel" hx-get="/ui/pnl-by-symbol" hx-trigger="load, every 30s">
+                <!-- P&L per simbolo caricato via HTMX con refresh ogni 30s -->
+            </div>
+        </article>
     </div>
 
     <!-- Colonna destra: ultime operazioni dell'agente -->

@@ -86,6 +86,19 @@ class RegimeDecision(BaseModel):
     analysis: Optional[str]
 
 
+class SymbolPerformance(BaseModel):
+    symbol: str
+    total_trades: int
+    winning_trades: int
+    losing_trades: int
+    win_rate: float
+    total_pnl: float
+    avg_pnl: float
+    gross_profit: float
+    gross_loss: float
+    is_blacklisted: bool = False
+
+
 # =====================
 # App FastAPI + Template Jinja2
 # =====================
@@ -296,6 +309,63 @@ def get_regime_history(
     ]
 
 
+@app.get("/pnl-by-symbol", response_model=List[SymbolPerformance])
+def get_pnl_by_symbol(
+    lookback_hours: int = Query(
+        24,
+        ge=1,
+        le=168,
+        description="Ore di lookback per il calcolo P&L (default 24h, max 168h/7gg)",
+    ),
+) -> List[SymbolPerformance]:
+    """Restituisce P&L breakdown per simbolo (ultimi N ore)."""
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    symbol,
+                    COUNT(*) as total_trades,
+                    COUNT(*) FILTER (WHERE pnl > 0) as winning_trades,
+                    COUNT(*) FILTER (WHERE pnl <= 0) as losing_trades,
+                    COALESCE(SUM(pnl), 0) as total_pnl,
+                    COALESCE(AVG(pnl), 0) as avg_pnl,
+                    COALESCE(SUM(CASE WHEN pnl > 0 THEN pnl ELSE 0 END), 0) as gross_profit,
+                    COALESCE(SUM(CASE WHEN pnl <= 0 THEN pnl ELSE 0 END), 0) as gross_loss
+                FROM trades
+                WHERE exit_time IS NOT NULL
+                  AND exit_time >= NOW() - INTERVAL '%s hours'
+                GROUP BY symbol
+                ORDER BY total_pnl DESC;
+                """ % lookback_hours,
+            )
+            rows = cur.fetchall()
+
+    results = []
+    for row in rows:
+        total = row[1] if row[1] else 0
+        winning = row[2] if row[2] else 0
+        win_rate = (winning / total * 100) if total > 0 else 0
+
+        results.append(
+            SymbolPerformance(
+                symbol=row[0],
+                total_trades=total,
+                winning_trades=winning,
+                losing_trades=row[3] if row[3] else 0,
+                win_rate=win_rate,
+                total_pnl=float(row[4]) if row[4] else 0,
+                avg_pnl=float(row[5]) if row[5] else 0,
+                gross_profit=float(row[6]) if row[6] else 0,
+                gross_loss=float(row[7]) if row[7] else 0,
+                is_blacklisted=(win_rate < 40 and total >= 10),
+            )
+        )
+
+    return results
+
+
 # =====================
 # Endpoint HTML + HTMX
 # =====================
@@ -352,6 +422,20 @@ async def ui_regime_history(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         "partials/regime_history.html",
         {"request": request, "regimes": regimes},
+    )
+
+
+@app.get("/ui/pnl-by-symbol", response_class=HTMLResponse)
+async def ui_pnl_by_symbol(
+    request: Request,
+    lookback_hours: int = Query(24, ge=1, le=168),
+) -> HTMLResponse:
+    """Partial HTML con P&L breakdown per simbolo."""
+
+    performances = get_pnl_by_symbol(lookback_hours=lookback_hours)
+    return templates.TemplateResponse(
+        "partials/pnl_by_symbol.html",
+        {"request": request, "performances": performances, "lookback_hours": lookback_hours},
     )
 
 
