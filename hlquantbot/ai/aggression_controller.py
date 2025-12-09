@@ -166,6 +166,10 @@ class AggressionController:
         """Check if trading is paused by aggression controller."""
         return self._state.level == AggressionLevel.PAUSED
 
+    def get_current_level(self) -> AggressionLevel:
+        """Get current aggression level."""
+        return self._state.level
+
     def get_strategy_risk_multiplier(self, strategy_id: StrategyId) -> Decimal:
         """Get risk multiplier for a specific strategy (with override support)."""
         override = self._state.strategy_overrides.get(strategy_id.value)
