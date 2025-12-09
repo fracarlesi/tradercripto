@@ -337,10 +337,20 @@ class RegimeDetector:
         }
         regime = regime_map.get(regime_str, MarketRegime.UNCERTAIN)
 
-        # Parse asset regimes
+        # Parse asset regimes (handle both string and dict formats from AI)
         asset_regimes = {}
         for symbol, regime_val in result.get("asset_regimes", {}).items():
-            asset_regimes[symbol] = regime_map.get(regime_val.lower(), MarketRegime.UNCERTAIN)
+            try:
+                # Handle dict format: {"BTC": {"regime": "trend_up", "confidence": 0.8}}
+                if isinstance(regime_val, dict):
+                    regime_str = regime_val.get("regime", "uncertain")
+                else:
+                    # Handle string format: {"BTC": "trend_up"}
+                    regime_str = str(regime_val)
+                asset_regimes[symbol] = regime_map.get(regime_str.lower(), MarketRegime.UNCERTAIN)
+            except Exception as e:
+                logger.warning(f"Could not parse regime for {symbol}: {regime_val} - {e}")
+                asset_regimes[symbol] = MarketRegime.UNCERTAIN
 
         # Parse strategy allocation suggestions
         suggested_allocations = None

@@ -71,6 +71,9 @@ class HLQuantBot:
         self._last_regime_check: Optional[datetime] = None
         self._last_metrics_calc: Optional[datetime] = None
         self._regime_detection_task: Optional[asyncio.Task] = None  # Background regime detection
+        self._watchdog_task: Optional[asyncio.Task] = None  # Watchdog to detect freezes
+        self._last_loop_iteration: Optional[datetime] = None  # Track last successful loop iteration
+        self._watchdog_timeout = 60  # Kill bot if no loop iteration for 60 seconds
 
         # Intervals
         self._main_loop_interval = 1.0  # seconds
@@ -115,6 +118,15 @@ class HLQuantBot:
         logger.info(f"Stopping HLQuantBot: {reason}")
         self._running = False
         self._shutdown_event.set()
+
+        # Cancel watchdog task first (to prevent forced exit during shutdown)
+        if self._watchdog_task and not self._watchdog_task.done():
+            self._watchdog_task.cancel()
+            try:
+                await self._watchdog_task
+            except asyncio.CancelledError:
+                pass
+            logger.info("Watchdog task stopped")
 
         # Cancel background regime detection task
         if self._regime_detection_task and not self._regime_detection_task.done():
@@ -200,6 +212,10 @@ class HLQuantBot:
         # REQUISITO 4.3: Start bot-side TP/SL monitor
         await self.execution.start_tpsl_monitor()
 
+        # Sync positions from exchange at startup
+        # This recovers state if bot crashed with open positions
+        await self._sync_positions_from_exchange()
+
         # AI layer
         self.regime_detector = RegimeDetector(self.settings)
         self.param_tuner = ParameterTuner(self.settings)
@@ -208,6 +224,7 @@ class HLQuantBot:
         # Influenza rischio e leva in base a win rate, P&L, regime
         self.aggression_controller = AggressionController(self.settings)
         self.risk_engine.set_aggression_controller(self.aggression_controller)
+        self.risk_engine.set_database(self.database)  # For signal tracking
         logger.info(f"AggressionController initialized, level: {self.aggression_controller.current_state.level.value}")
 
         # Health server for Docker/K8s monitoring
@@ -218,6 +235,10 @@ class HLQuantBot:
         # This prevents deepseek-reasoner (30-60s) from blocking the main loop
         self._regime_detection_task = asyncio.create_task(self._regime_detection_loop())
         logger.info("Background regime detection task started")
+
+        # Start watchdog task to detect main loop freezes
+        self._watchdog_task = asyncio.create_task(self._watchdog_loop())
+        logger.info("Watchdog task started (timeout: 60s)")
 
         logger.info("All components initialized")
 
@@ -274,6 +295,10 @@ class HLQuantBot:
                     # Update circuit breaker
                     await self.risk_engine.circuit_breaker.update(account.equity)
 
+                    # Check for externally closed positions (every 30 iterations ~30s)
+                    if loop_count % 30 == 0:
+                        await self._detect_external_closes(account)
+
                     # Get current regime (non-blocking - detection runs in background task)
                     # This prevents deepseek-reasoner (30-60s) from blocking the main loop
                     metrics.regime_start()
@@ -327,6 +352,8 @@ class HLQuantBot:
                     metrics.risk_start()
                     approved_orders = []
                     if proposals:
+                        # Set current regime for signal tracking
+                        self.risk_engine.set_current_regime(current_regime.value)
                         approved_orders = await self.risk_engine.process_proposals(
                             proposals, account, prices, atrs
                         )
@@ -356,6 +383,9 @@ class HLQuantBot:
 
                     # Calculate metrics periodically
                     await self._maybe_calculate_metrics()
+
+                # Update watchdog timestamp (proves loop is running)
+                self._last_loop_iteration = datetime.now(timezone.utc)
 
                 # Sleep for remaining interval
                 elapsed = (datetime.now(timezone.utc) - loop_start).total_seconds()
@@ -490,6 +520,64 @@ class HLQuantBot:
     # -------------------------------------------------------------------------
     # Periodic Tasks
     # -------------------------------------------------------------------------
+    async def _watchdog_loop(self):
+        """
+        Watchdog task to detect main loop freeze.
+
+        If main loop doesn't update _last_loop_iteration for 60 seconds,
+        this will force exit the process and let Docker restart it.
+        This prevents the bot from staying frozen with open positions
+        while the market moves against us.
+        """
+        logger.info("Watchdog loop started - monitoring main loop health")
+
+        # Initial grace period for startup
+        await asyncio.sleep(30)
+
+        while self._running:
+            try:
+                await asyncio.sleep(10)  # Check every 10 seconds
+
+                if self._last_loop_iteration:
+                    elapsed = (datetime.now(timezone.utc) - self._last_loop_iteration).total_seconds()
+
+                    if elapsed > self._watchdog_timeout:
+                        logger.critical(
+                            f"WATCHDOG TRIGGERED: Main loop frozen for {elapsed:.0f}s "
+                            f"(threshold: {self._watchdog_timeout}s). Forcing exit for Docker restart."
+                        )
+
+                        # Send alert if possible
+                        if self.telegram:
+                            try:
+                                await asyncio.wait_for(
+                                    self.telegram.send_alert(
+                                        f"WATCHDOG: Bot frozen for {elapsed:.0f}s - forcing restart",
+                                        AlertSeverity.CRITICAL
+                                    ),
+                                    timeout=5.0
+                                )
+                            except:
+                                pass
+
+                        # Force exit - Docker will restart the container
+                        import os
+                        os._exit(1)
+
+                    elif elapsed > self._watchdog_timeout / 2:
+                        logger.warning(
+                            f"Watchdog warning: Main loop slow - {elapsed:.0f}s since last iteration"
+                        )
+
+            except asyncio.CancelledError:
+                logger.info("Watchdog loop cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Error in watchdog loop: {e}")
+                await asyncio.sleep(10)
+
+        logger.info("Watchdog loop stopped")
+
     async def _regime_detection_loop(self):
         """
         Background loop for regime detection - does NOT block main loop.
@@ -663,6 +751,15 @@ class HLQuantBot:
         """Handle order fill."""
         logger.info(f"Order filled: {order.symbol} {order.side.value} {order.filled_size}")
 
+        # Save open trade to database (with exit_time=NULL)
+        # This ensures we track positions even if bot crashes before close
+        if self.database:
+            try:
+                await self.database.save_open_trade(order)
+                logger.info(f"Open trade saved to DB: {order.symbol} {order.side.value}")
+            except Exception as e:
+                logger.error(f"Failed to save open trade to DB: {e}")
+
         # Notify via Telegram
         position = self.execution.order_manager.get_position(order.symbol)
         if position and self.telegram:
@@ -681,6 +778,124 @@ class HLQuantBot:
         # Notify via Telegram
         if self.telegram:
             await self.telegram.send_trade_alert(trade)
+
+    # -------------------------------------------------------------------------
+    # Position Sync and External Close Detection
+    # -------------------------------------------------------------------------
+    async def _sync_positions_from_exchange(self):
+        """
+        Sync positions from Hyperliquid at startup.
+
+        This recovers state if the bot crashed with open positions.
+        It compares exchange positions with DB open trades and reconciles.
+        """
+        logger.info("Syncing positions from exchange...")
+
+        try:
+            # Get positions from Hyperliquid
+            account = self.market_data.get_account_state()
+            if not account:
+                logger.warning("No account state available for position sync")
+                return
+
+            exchange_positions = {p.symbol: p for p in account.positions}
+            logger.info(f"Found {len(exchange_positions)} positions on exchange")
+
+            # Get open trades from DB
+            if self.database:
+                open_trades = await self.database.get_open_trades()
+                db_symbols = {t["symbol"] for t in open_trades}
+                logger.info(f"Found {len(open_trades)} open trades in DB")
+
+                # Check for positions closed externally (in DB but not on exchange)
+                for trade in open_trades:
+                    symbol = trade["symbol"]
+                    if symbol not in exchange_positions:
+                        # Position was closed externally - close the DB trade
+                        logger.warning(
+                            f"Position {symbol} was closed externally, updating DB"
+                        )
+                        # We don't have exact exit price, use entry as estimate
+                        # The P&L will be inaccurate but at least the trade is closed
+                        entry_price = Decimal(str(trade["entry_price"]))
+                        await self.database.close_orphan_trade(
+                            symbol=symbol,
+                            exit_price=entry_price,  # Best estimate
+                            pnl=Decimal(0),
+                            pnl_pct=Decimal(0),
+                            exit_reason="external_close_at_startup",
+                        )
+
+            # Log current positions
+            for symbol, pos in exchange_positions.items():
+                logger.info(
+                    f"Position: {symbol} {pos.side.value} {pos.size} @ {pos.entry_price}"
+                )
+
+        except Exception as e:
+            logger.error(f"Error syncing positions: {e}")
+
+    async def _detect_external_closes(self, account: 'AccountState'):
+        """
+        Detect positions closed externally (not by the bot).
+
+        This is called during the main loop to catch manual closes.
+        """
+        if not self.database:
+            return
+
+        try:
+            # Get current exchange positions
+            exchange_symbols = {p.symbol for p in account.positions}
+
+            # Get open trades from DB
+            open_trades = await self.database.get_open_trades()
+
+            # Check each open trade
+            for trade in open_trades:
+                symbol = trade["symbol"]
+                if symbol not in exchange_symbols:
+                    # Position was closed externally
+                    entry_price = Decimal(str(trade["entry_price"]))
+                    entry_side = trade["side"]
+
+                    # Try to get current price for P&L estimate
+                    ctx = self.market_data.get_context(symbol)
+                    if ctx and ctx.mid_price > 0:
+                        exit_price = ctx.mid_price
+                        if entry_side == "LONG":
+                            pnl = (exit_price - entry_price) * Decimal(str(trade["size"]))
+                        else:
+                            pnl = (entry_price - exit_price) * Decimal(str(trade["size"]))
+                        pnl_pct = pnl / (entry_price * Decimal(str(trade["size"]))) if entry_price > 0 else Decimal(0)
+                    else:
+                        exit_price = entry_price
+                        pnl = Decimal(0)
+                        pnl_pct = Decimal(0)
+
+                    logger.warning(
+                        f"EXTERNAL CLOSE DETECTED: {symbol} | "
+                        f"Estimated P&L: ${pnl:.2f} ({pnl_pct:.2%})"
+                    )
+
+                    await self.database.close_orphan_trade(
+                        symbol=symbol,
+                        exit_price=exit_price,
+                        pnl=pnl,
+                        pnl_pct=pnl_pct,
+                        exit_reason="external_close",
+                    )
+
+                    # Send alert
+                    if self.telegram:
+                        await self.telegram.send_alert(
+                            f"Position {symbol} closed externally\n"
+                            f"Estimated P&L: ${pnl:.2f} ({pnl_pct:.2%})",
+                            AlertSeverity.WARNING
+                        )
+
+        except Exception as e:
+            logger.error(f"Error detecting external closes: {e}")
 
     # -------------------------------------------------------------------------
     # Emergency Controls

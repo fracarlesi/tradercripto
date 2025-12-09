@@ -12,12 +12,26 @@ from ...core.models import (
     MarketContext,
     Position,
 )
-from ...core.enums import StrategyId, Side, OrderType
+from ...core.enums import StrategyId, Side, OrderType, MarketRegime
 from ...config.settings import Settings
 from .hft_base import HFTBaseStrategy
 
 
 logger = logging.getLogger(__name__)
+
+
+# Regime-based direction filtering for counter-trend strategy
+# In TREND_UP: only LONG allowed (buy dips) - don't short pumps against the trend
+# In TREND_DOWN: only SHORT allowed (sell pumps) - don't buy dips against the trend
+# HIGH_VOLATILITY is where liquidations happen - both directions OK
+LIQSNIPE_REGIME_DIRECTIONS = {
+    MarketRegime.TREND_UP: [Side.LONG],       # Only buy dips in uptrends
+    MarketRegime.TREND_DOWN: [Side.SHORT],    # Only short pumps in downtrends
+    MarketRegime.RANGE_BOUND: [Side.LONG, Side.SHORT],
+    MarketRegime.HIGH_VOLATILITY: [Side.LONG, Side.SHORT],  # Core regime for liq sniping
+    MarketRegime.LOW_VOLATILITY: [],   # No liquidations in calm markets
+    MarketRegime.UNCERTAIN: [],        # Disable when uncertain
+}
 
 
 class LiquidationSnipingStrategy(HFTBaseStrategy):
@@ -111,6 +125,27 @@ class LiquidationSnipingStrategy(HFTBaseStrategy):
 
         # Volume bars tracking per calcolare media mobile
         self._volume_bars: Dict[str, List[Decimal]] = {}  # symbol -> [volumes]
+
+        # Current market regime (set by bot)
+        self._current_regime: MarketRegime = MarketRegime.UNCERTAIN
+
+    def set_regime(self, regime: MarketRegime):
+        """Set current market regime. Called by bot."""
+        self._current_regime = regime
+
+    def is_direction_allowed(self, side: Side) -> bool:
+        """
+        Check if trade direction is allowed in current regime.
+
+        Counter-trend logic:
+        - TREND_UP: Only buy dips (LONG), don't short pumps
+        - TREND_DOWN: Only short pumps (SHORT), don't buy dips
+        - HIGH_VOLATILITY: Both OK (core liq sniping regime)
+        """
+        allowed_directions = LIQSNIPE_REGIME_DIRECTIONS.get(
+            self._current_regime, []
+        )
+        return side in allowed_directions
 
     def _get_param(self, name: str, default: Decimal) -> Decimal:
         if self._hft_config:
@@ -506,6 +541,17 @@ class LiquidationSnipingStrategy(HFTBaseStrategy):
         # ===================================================================
         side = cascade["direction"]
         strength = cascade["strength"]
+
+        # REGIME FILTER: Check if direction is allowed in current regime
+        if not self.is_direction_allowed(side):
+            logger.info(
+                f"[{symbol}] Liquidation snipe {side.value} blocked by regime filter "
+                f"(regime={self._current_regime.value}) - skipping counter-trend trade"
+            )
+            # Clear cascade detection
+            if symbol in self._cascade_detected:
+                del self._cascade_detected[symbol]
+            return None
 
         # Calculate TP/SL dinamicamente basato su cascade strength
         # Più forte è la cascade, più aggressivo il TP

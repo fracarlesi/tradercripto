@@ -34,6 +34,7 @@ VANTAGGI:
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal, ROUND_DOWN
 from typing import Dict, List, Optional, Any, Tuple
@@ -54,6 +55,58 @@ from .rate_limiter import OrderRateLimiter
 
 
 logger = logging.getLogger(__name__)
+
+
+def _init_with_retry(init_func, max_retries: int = 5, base_delay: float = 10.0):
+    """
+    Initialize Hyperliquid API clients with exponential backoff retry.
+
+    This prevents the bot from crashing in a restart loop when hitting
+    rate limits (429 errors) during startup. The hyperliquid-python library
+    makes sync HTTP calls during __init__ of Info and Exchange classes.
+
+    Args:
+        init_func: Function that creates the client
+        max_retries: Maximum number of retry attempts
+        base_delay: Initial delay in seconds (doubles each retry)
+
+    Returns:
+        The initialized client
+
+    Raises:
+        Exception: If all retries fail
+    """
+    last_error = None
+
+    for attempt in range(max_retries):
+        try:
+            return init_func()
+        except Exception as e:
+            last_error = e
+            error_str = str(e).lower()
+
+            # Check if this is a rate limit error
+            is_rate_limit = "429" in str(e) or "rate" in error_str or "limit" in error_str
+
+            if attempt < max_retries - 1:
+                delay = base_delay * (2 ** attempt)  # Exponential backoff
+
+                if is_rate_limit:
+                    logger.warning(
+                        f"Rate limit hit during initialization (attempt {attempt + 1}/{max_retries}). "
+                        f"Waiting {delay:.0f}s before retry..."
+                    )
+                else:
+                    logger.warning(
+                        f"Initialization failed: {e} (attempt {attempt + 1}/{max_retries}). "
+                        f"Waiting {delay:.0f}s before retry..."
+                    )
+
+                time.sleep(delay)  # Sync sleep since we're in __init__
+            else:
+                logger.error(f"All {max_retries} initialization attempts failed")
+
+    raise last_error
 
 
 # HFT strategies require maker orders to be profitable
@@ -114,7 +167,8 @@ class ExecutionEngine:
     def __init__(self, settings: Settings):
         self.settings = settings
 
-        # Initialize Hyperliquid clients
+        # Initialize Hyperliquid clients with retry logic
+        # This prevents restart loops when hitting rate limits (429 errors)
         base_url = (
             constants.TESTNET_API_URL
             if settings.is_testnet
@@ -123,16 +177,35 @@ class ExecutionEngine:
 
         account: LocalAccount = eth_account.Account.from_key(settings.hl_private_key)
 
-        self.info = Info(base_url, skip_ws=True)
-        self.exchange = Exchange(
-            account,
-            base_url,
-            account_address=settings.hl_wallet_address,
+        logger.info("Initializing Hyperliquid API clients (with retry)...")
+
+        # Initialize Info client with retry
+        self.info = _init_with_retry(
+            lambda: Info(base_url, skip_ws=True),
+            max_retries=5,
+            base_delay=10.0
         )
 
-        # Get meta for symbol info
-        self._meta = self.info.meta()
+        # Initialize Exchange client with retry
+        self.exchange = _init_with_retry(
+            lambda: Exchange(
+                account,
+                base_url,
+                account_address=settings.hl_wallet_address,
+            ),
+            max_retries=5,
+            base_delay=10.0
+        )
+
+        # Get meta for symbol info (also with retry)
+        self._meta = _init_with_retry(
+            lambda: self.info.meta(),
+            max_retries=5,
+            base_delay=10.0
+        )
         self._symbol_info = {p["name"]: p for p in self._meta.get("universe", [])}
+
+        logger.info("Hyperliquid API clients initialized successfully")
 
         # Components
         self.rate_limiter = OrderRateLimiter(
@@ -1383,8 +1456,15 @@ class ExecutionEngine:
     # Leverage Management
     # -------------------------------------------------------------------------
     async def _set_leverage(self, symbol: str, leverage: int) -> bool:
-        """Set leverage for a symbol."""
+        """Set leverage for a symbol.
+
+        Note: Hyperliquid requires leverage >= 1. When position size is small
+        relative to equity, the effective leverage (notional/equity) can be < 1,
+        but we still need to set at least 1x leverage on the exchange.
+        """
         try:
+            # Hyperliquid requires leverage >= 1
+            leverage = max(1, leverage)
             result = self.exchange.update_leverage(
                 leverage=leverage,
                 name=symbol,

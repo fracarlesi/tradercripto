@@ -247,6 +247,12 @@ class RiskEngine:
         self._last_blacklist_update = datetime.now(timezone.utc)
         self._blacklist_update_interval = timedelta(minutes=10)
 
+        # Database reference for signal tracking (set via set_database)
+        self._database = None
+
+        # Current market regime (set by bot before calling process_proposals)
+        self._current_regime: Optional[str] = None
+
         logger.info(
             f"RiskEngine initialized - max_risk_per_trade={self.risk_config.max_risk_per_trade_pct:.2%}, "
             f"default_leverage={self.risk_config.default_leverage}x, "
@@ -328,6 +334,7 @@ class RiskEngine:
         simulated_account = self._clone_account(account)
 
         for proposal in sorted_proposals:
+            current_price = prices.get(proposal.symbol)
             try:
                 order = await self._process_single_proposal(
                     proposal,
@@ -339,11 +346,38 @@ class RiskEngine:
                     approved_orders.append(order)
                     # Update simulated account
                     self._update_simulated_account(simulated_account, order, prices)
+                    # Save approved signal
+                    await self._save_signal(
+                        proposal,
+                        accepted=True,
+                        order=order,
+                        current_price=current_price,
+                    )
+                else:
+                    # Order was None (e.g., size too small, existing position)
+                    await self._save_signal(
+                        proposal,
+                        accepted=False,
+                        reason_for_reject="Order size too small or position exists",
+                        current_price=current_price,
+                    )
 
             except RiskLimitExceededError as e:
                 logger.warning(f"Proposal rejected - {e.limit_type}: {e}")
+                await self._save_signal(
+                    proposal,
+                    accepted=False,
+                    reason_for_reject=f"{e.limit_type}: {str(e)}",
+                    current_price=current_price,
+                )
             except Exception as e:
                 logger.error(f"Error processing proposal: {e}")
+                await self._save_signal(
+                    proposal,
+                    accepted=False,
+                    reason_for_reject=f"Error: {str(e)}",
+                    current_price=current_price,
+                )
 
         logger.info(
             f"Processed {len(proposals)} proposals -> {len(approved_orders)} approved "
@@ -967,6 +1001,69 @@ class RiskEngine:
         """Set aggression controller for dynamic risk adjustment."""
         self._aggression_controller = aggression_controller
         logger.info("Aggression controller connected to RiskEngine")
+
+    def set_database(self, database):
+        """Set database for signal tracking."""
+        self._database = database
+        logger.info("Database connected to RiskEngine for signal tracking")
+
+    def set_current_regime(self, regime: Optional[str]):
+        """Set current market regime for signal tracking."""
+        self._current_regime = regime
+
+    async def _save_signal(
+        self,
+        proposal: ProposedTrade,
+        accepted: bool,
+        order: Optional[ApprovedOrder] = None,
+        reason_for_reject: Optional[str] = None,
+        current_price: Optional[Decimal] = None,
+    ):
+        """Save a strategy signal for decision tracking."""
+        if not self._database:
+            return
+
+        try:
+            # Get aggression level
+            aggression_level = None
+            if self._aggression_controller:
+                aggression_level = self._aggression_controller.get_current_level().value
+
+            # Calculate TP/SL percentages
+            tp_pct = None
+            sl_pct = None
+            if current_price and current_price > 0:
+                if proposal.take_profit_price:
+                    tp_pct = float(abs(proposal.take_profit_price - current_price) / current_price)
+                if proposal.stop_loss_price:
+                    sl_pct = float(abs(proposal.stop_loss_price - current_price) / current_price)
+
+            # Calculate notional and leverage if order was approved
+            notional_usd = None
+            leverage_effective = None
+            if order:
+                notional_usd = float(order.size * current_price) if current_price else None
+                leverage_effective = float(order.leverage_used) if order.leverage_used else None
+
+            await self._database.save_signal(
+                strategy_id=proposal.strategy_id.value,
+                symbol=proposal.symbol,
+                side=proposal.side.value,
+                accepted=accepted,
+                signal_reason=proposal.reason or "No reason provided",
+                regime=self._current_regime,
+                aggression_level=aggression_level,
+                leverage_effective=leverage_effective,
+                tp_pct=tp_pct,
+                sl_pct=sl_pct,
+                notional_usd=notional_usd,
+                risk_per_trade_pct=float(self.risk_config.max_risk_per_trade_pct) if accepted else None,
+                confidence=float(proposal.confidence) if proposal.confidence else None,
+                reason_for_reject=reason_for_reject,
+                order_id=order.order_id if order else None,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to save signal for {proposal.symbol}: {e}")
 
     # -------------------------------------------------------------------------
     # Symbol Blacklist Management

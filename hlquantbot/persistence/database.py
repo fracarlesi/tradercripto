@@ -242,6 +242,107 @@ class Database:
     # -------------------------------------------------------------------------
     # Trades
     # -------------------------------------------------------------------------
+    async def save_open_trade(self, order) -> str:
+        """
+        Save an open trade (position entry) to database.
+
+        This is called when a position is OPENED, before it's closed.
+        The trade is saved with exit_time=NULL to indicate it's still open.
+        When the position is closed, save_trade() will update it with exit info.
+
+        Returns the trade_id for tracking.
+        """
+        trade_id = f"{order.symbol}_{order.executed_at.timestamp():.0f}"
+
+        async with self._pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO trades (
+                    trade_id, strategy_id, symbol, side, size,
+                    entry_price, exit_price, pnl, pnl_pct, fees,
+                    funding_paid, entry_time, exit_time, duration_seconds,
+                    exit_reason, metadata
+                ) VALUES ($1, $2, $3, $4, $5, $6, NULL, NULL, NULL, $7, 0, $8, NULL, NULL, NULL, $9)
+                ON CONFLICT (trade_id) DO NOTHING
+            """,
+                trade_id,
+                order.strategy_id.value,
+                order.symbol,
+                order.side.value,
+                float(order.filled_size or order.size),
+                float(order.filled_price or order.price or 0),
+                float(order.fees or 0),
+                order.executed_at or datetime.now(timezone.utc),
+                json.dumps({"leverage": float(order.leverage_used)}) if order.leverage_used else None,
+            )
+
+        logger.info(f"Open trade saved: {trade_id} ({order.symbol} {order.side.value})")
+        return trade_id
+
+    async def get_open_trades(self) -> List[Dict]:
+        """Get all open trades (where exit_time is NULL)."""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT * FROM trades
+                WHERE exit_time IS NULL
+                ORDER BY entry_time DESC
+            """)
+        return [dict(row) for row in rows]
+
+    async def close_orphan_trade(
+        self,
+        symbol: str,
+        exit_price: Decimal,
+        pnl: Decimal,
+        pnl_pct: Decimal,
+        exit_reason: str = "external_close",
+    ):
+        """
+        Close an orphan trade (position closed externally).
+
+        This is called when we detect a position was closed outside the bot
+        (e.g., manually on Hyperliquid, or bot crashed and user closed).
+        """
+        async with self._pool.acquire() as conn:
+            # Find the open trade for this symbol
+            row = await conn.fetchrow("""
+                SELECT trade_id, entry_time FROM trades
+                WHERE symbol = $1 AND exit_time IS NULL
+                ORDER BY entry_time DESC LIMIT 1
+            """, symbol)
+
+            if not row:
+                logger.warning(f"No open trade found for {symbol} to close")
+                return
+
+            trade_id = row["trade_id"]
+            entry_time = row["entry_time"]
+            exit_time = datetime.now(timezone.utc)
+            duration = int((exit_time - entry_time).total_seconds())
+
+            await conn.execute("""
+                UPDATE trades SET
+                    exit_price = $2,
+                    pnl = $3,
+                    pnl_pct = $4,
+                    exit_time = $5,
+                    duration_seconds = $6,
+                    exit_reason = $7
+                WHERE trade_id = $1
+            """,
+                trade_id,
+                float(exit_price),
+                float(pnl),
+                float(pnl_pct),
+                exit_time,
+                duration,
+                exit_reason,
+            )
+
+            logger.info(
+                f"Orphan trade closed: {trade_id} | "
+                f"P&L: ${pnl:.2f} ({pnl_pct:.2%}) | Reason: {exit_reason}"
+            )
+
     async def save_trade(self, trade: ClosedTrade, metadata: Optional[Dict] = None):
         """Save a closed trade."""
         async with self._pool.acquire() as conn:
@@ -974,3 +1075,95 @@ class Database:
             })
 
         return results
+
+    # -------------------------------------------------------------------------
+    # Strategy Signals (Decision Tracking)
+    # -------------------------------------------------------------------------
+    async def save_signal(
+        self,
+        strategy_id: str,
+        symbol: str,
+        side: str,
+        accepted: bool,
+        signal_reason: str,
+        regime: Optional[str] = None,
+        aggression_level: Optional[str] = None,
+        leverage_effective: Optional[float] = None,
+        tp_pct: Optional[float] = None,
+        sl_pct: Optional[float] = None,
+        notional_usd: Optional[float] = None,
+        risk_per_trade_pct: Optional[float] = None,
+        confidence: Optional[float] = None,
+        reason_for_reject: Optional[str] = None,
+        order_id: Optional[str] = None,
+    ):
+        """Save a strategy signal with full context for decision tracking.
+
+        This enables debugging and analysis of why trades were taken or rejected.
+        """
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO strategy_signals (
+                        timestamp, strategy_id, symbol, side,
+                        regime, aggression_level,
+                        leverage_effective, tp_pct, sl_pct,
+                        notional_usd, risk_per_trade_pct,
+                        accepted, reason_for_reject,
+                        confidence, signal_reason, order_id
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+                """,
+                    datetime.now(timezone.utc),
+                    strategy_id,
+                    symbol,
+                    side,
+                    regime,
+                    aggression_level,
+                    leverage_effective,
+                    tp_pct,
+                    sl_pct,
+                    notional_usd,
+                    risk_per_trade_pct,
+                    accepted,
+                    reason_for_reject,
+                    confidence,
+                    signal_reason,
+                    order_id,
+                )
+        except Exception as e:
+            logger.warning(f"Failed to save signal: {e}")
+
+    async def get_signals(
+        self,
+        strategy_id: Optional[str] = None,
+        symbol: Optional[str] = None,
+        accepted: Optional[bool] = None,
+        limit: int = 100,
+    ) -> List[Dict]:
+        """Get strategy signals for analysis."""
+        query = "SELECT * FROM strategy_signals WHERE 1=1"
+        params = []
+        param_num = 1
+
+        if strategy_id:
+            query += f" AND strategy_id = ${param_num}"
+            params.append(strategy_id)
+            param_num += 1
+
+        if symbol:
+            query += f" AND symbol = ${param_num}"
+            params.append(symbol)
+            param_num += 1
+
+        if accepted is not None:
+            query += f" AND accepted = ${param_num}"
+            params.append(accepted)
+            param_num += 1
+
+        query += f" ORDER BY timestamp DESC LIMIT ${param_num}"
+        params.append(limit)
+
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(query, *params)
+
+        return [dict(row) for row in rows]

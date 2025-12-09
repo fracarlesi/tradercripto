@@ -99,6 +99,26 @@ class SymbolPerformance(BaseModel):
     is_blacklisted: bool = False
 
 
+class StrategySignal(BaseModel):
+    id: int
+    timestamp: datetime
+    strategy_id: str
+    symbol: str
+    side: str
+    regime: Optional[str]
+    aggression_level: Optional[str]
+    leverage_effective: Optional[float]
+    tp_pct: Optional[float]
+    sl_pct: Optional[float]
+    notional_usd: Optional[float]
+    risk_per_trade_pct: Optional[float]
+    accepted: bool
+    reason_for_reject: Optional[str]
+    confidence: Optional[float]
+    signal_reason: Optional[str]
+    order_id: Optional[str]
+
+
 # =====================
 # App FastAPI + Template Jinja2
 # =====================
@@ -366,6 +386,73 @@ def get_pnl_by_symbol(
     return results
 
 
+@app.get("/strategy-signals", response_model=List[StrategySignal])
+def get_strategy_signals(
+    limit: int = Query(100, ge=1, le=500, description="Numero massimo di segnali (default 100)"),
+    accepted_only: bool = Query(False, description="Mostra solo segnali accettati"),
+    rejected_only: bool = Query(False, description="Mostra solo segnali rifiutati"),
+    strategy_id: Optional[str] = Query(None, description="Filtra per strategy_id"),
+    symbol: Optional[str] = Query(None, description="Filtra per simbolo"),
+) -> List[StrategySignal]:
+    """Restituisce la storia dei segnali delle strategie con ragionamento decisionale."""
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            query = """
+                SELECT
+                    id, timestamp, strategy_id, symbol, side,
+                    regime, aggression_level, leverage_effective,
+                    tp_pct, sl_pct, notional_usd, risk_per_trade_pct,
+                    accepted, reason_for_reject, confidence,
+                    signal_reason, order_id
+                FROM strategy_signals
+                WHERE 1=1
+            """
+            params = []
+
+            if accepted_only:
+                query += " AND accepted = TRUE"
+            elif rejected_only:
+                query += " AND accepted = FALSE"
+
+            if strategy_id:
+                query += " AND strategy_id = %s"
+                params.append(strategy_id)
+
+            if symbol:
+                query += " AND symbol = %s"
+                params.append(symbol)
+
+            query += " ORDER BY timestamp DESC LIMIT %s"
+            params.append(limit)
+
+            cur.execute(query, params)
+            rows = cur.fetchall()
+
+    return [
+        StrategySignal(
+            id=row[0],
+            timestamp=row[1],
+            strategy_id=row[2],
+            symbol=row[3],
+            side=row[4],
+            regime=row[5],
+            aggression_level=row[6],
+            leverage_effective=float(row[7]) if row[7] else None,
+            tp_pct=float(row[8]) if row[8] else None,
+            sl_pct=float(row[9]) if row[9] else None,
+            notional_usd=float(row[10]) if row[10] else None,
+            risk_per_trade_pct=float(row[11]) if row[11] else None,
+            accepted=row[12],
+            reason_for_reject=row[13],
+            confidence=float(row[14]) if row[14] else None,
+            signal_reason=row[15],
+            order_id=row[16],
+        )
+        for row in rows
+    ]
+
+
 # =====================
 # Endpoint HTML + HTMX
 # =====================
@@ -436,6 +523,20 @@ async def ui_pnl_by_symbol(
     return templates.TemplateResponse(
         "partials/pnl_by_symbol.html",
         {"request": request, "performances": performances, "lookback_hours": lookback_hours},
+    )
+
+
+@app.get("/ui/strategy-signals", response_class=HTMLResponse)
+async def ui_strategy_signals(
+    request: Request,
+    limit: int = Query(50, ge=1, le=200),
+) -> HTMLResponse:
+    """Partial HTML con la storia dei segnali delle strategie."""
+
+    signals = get_strategy_signals(limit=limit)
+    return templates.TemplateResponse(
+        "partials/strategy_signals.html",
+        {"request": request, "signals": signals},
     )
 
 

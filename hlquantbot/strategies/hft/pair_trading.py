@@ -18,7 +18,7 @@ from ...core.models import (
     MarketContext,
     Position,
 )
-from ...core.enums import StrategyId, Side, OrderType
+from ...core.enums import StrategyId, Side, OrderType, MarketRegime
 from ...config.settings import Settings
 from .hft_base import HFTBaseStrategy
 
@@ -69,7 +69,7 @@ class PairTradingStrategy(HFTBaseStrategy):
         self._active_pairs: Dict[str, Dict] = {}  # pair_key -> {long_symbol, short_symbol, entry_zscore}
 
         # Current regime (viene aggiornato dal bot)
-        self._current_regime: Optional[str] = None
+        self._current_regime: Optional[MarketRegime] = None
 
     def _get_param(self, name: str, default: Decimal) -> Decimal:
         if self._hft_config:
@@ -90,16 +90,17 @@ class PairTradingStrategy(HFTBaseStrategy):
         # Defaults
         return [("BTC", "ETH"), ("ETH", "SOL")]
 
-    def _get_allowed_regimes(self) -> List[str]:
+    def _get_allowed_regimes(self) -> List[MarketRegime]:
         """Get allowed regimes from config (da specifica: solo range_bound)."""
         if self._hft_config:
             regimes = getattr(self._hft_config, 'allowed_regimes', None)
             if regimes:
-                return list(regimes)
+                # Convert strings to MarketRegime enums
+                return [MarketRegime(r) if isinstance(r, str) else r for r in regimes]
         # Default: solo range_bound come da specifica
-        return ["range_bound"]
+        return [MarketRegime.RANGE_BOUND]
 
-    def set_regime(self, regime: str):
+    def set_regime(self, regime: MarketRegime):
         """Imposta il regime corrente. Chiamato dal bot."""
         self._current_regime = regime
 
@@ -157,8 +158,8 @@ class PairTradingStrategy(HFTBaseStrategy):
         if not self.is_regime_allowed():
             if self._current_regime:
                 logger.debug(
-                    f"PairTrading: regime '{self._current_regime}' non permesso. "
-                    f"Allowed: {self.allowed_regimes}"
+                    f"PairTrading: regime '{self._current_regime.value}' non permesso. "
+                    f"Allowed: {[r.value for r in self.allowed_regimes]}"
                 )
             return []
 

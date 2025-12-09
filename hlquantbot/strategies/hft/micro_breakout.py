@@ -11,12 +11,25 @@ from ...core.models import (
     MarketContext,
     Position,
 )
-from ...core.enums import StrategyId, Side, TimeFrame
+from ...core.enums import StrategyId, Side, TimeFrame, MarketRegime
 from ...config.settings import Settings
 from .hft_base import HFTBaseStrategy
 
 
 logger = logging.getLogger(__name__)
+
+
+# Regime-based direction filtering
+# In TREND_UP: only LONG allowed (don't short against the trend)
+# In TREND_DOWN: only SHORT allowed (don't long against the trend)
+REGIME_ALLOWED_DIRECTIONS = {
+    MarketRegime.TREND_UP: [Side.LONG],
+    MarketRegime.TREND_DOWN: [Side.SHORT],
+    MarketRegime.RANGE_BOUND: [Side.LONG, Side.SHORT],
+    MarketRegime.LOW_VOLATILITY: [Side.LONG, Side.SHORT],
+    MarketRegime.HIGH_VOLATILITY: [],  # Disable in high vol (too noisy)
+    MarketRegime.UNCERTAIN: [],  # Disable when uncertain
+}
 
 
 class MicroBreakoutStrategy(HFTBaseStrategy):
@@ -88,6 +101,9 @@ class MicroBreakoutStrategy(HFTBaseStrategy):
         # Tracking
         self._consolidation_ranges: dict = {}  # symbol -> (low, high)
         self._oi_history: dict = {}  # symbol -> [(timestamp, oi)]
+
+        # Current market regime (set by bot)
+        self._current_regime: MarketRegime = MarketRegime.UNCERTAIN
 
         logger.info(
             f"Micro-Breakout initialized with timeframe {self.primary_timeframe.value}: "
@@ -192,6 +208,24 @@ class MicroBreakoutStrategy(HFTBaseStrategy):
         if self._hft_config:
             return int(getattr(self._hft_config, name, default))
         return default
+
+    def set_regime(self, regime: MarketRegime):
+        """Set current market regime. Called by bot."""
+        self._current_regime = regime
+
+    def is_direction_allowed(self, side: Side) -> bool:
+        """
+        Check if trade direction is allowed in current regime.
+
+        Prevents:
+        - Shorting during uptrends (TREND_UP)
+        - Longing during downtrends (TREND_DOWN)
+        - Trading in HIGH_VOLATILITY or UNCERTAIN (too noisy)
+        """
+        allowed_directions = REGIME_ALLOWED_DIRECTIONS.get(
+            self._current_regime, []
+        )
+        return side in allowed_directions
 
     async def evaluate(
         self,
@@ -465,6 +499,14 @@ class MicroBreakoutStrategy(HFTBaseStrategy):
             reason = f"Downside breakout: {current_price} < {downside_breakout:.2f}"
 
         if not side:
+            return None
+
+        # REGIME FILTER: Check if direction is allowed in current regime
+        if not self.is_direction_allowed(side):
+            logger.debug(
+                f"Micro-Breakout: {symbol} {side.value} blocked by regime filter "
+                f"(regime={self._current_regime.value})"
+            )
             return None
 
         # Phase 2 Validation: Volume confirmation (>= 2x average 20 bars)

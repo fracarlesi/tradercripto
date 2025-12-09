@@ -45,6 +45,16 @@
                 <!-- P&L per simbolo caricato via HTMX con refresh ogni 30s -->
             </div>
         </article>
+
+        <article class="card">
+            <div style="margin-bottom:0.5rem;">
+                <h2><span class="accent-dot"></span> Decisioni di Trading</h2>
+                <p class="card-subtitle">Storia dei segnali delle strategie con ragionamento decisionale (accettati e rifiutati).</p>
+            </div>
+            <div id="strategy-signals-panel" hx-get="/ui/strategy-signals" hx-trigger="load, every 15s">
+                <!-- Segnali strategie caricati via HTMX con refresh ogni 15s -->
+            </div>
+        </article>
     </div>
 
     <!-- Colonna destra: ultime operazioni dell'agente -->
