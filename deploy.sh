@@ -40,7 +40,7 @@ ssh root@$VPS_IP "cd $DEPLOY_DIR && docker compose down && docker compose build 
 
 # Step 5: Wait for postgres
 echo "Waiting for PostgreSQL to be ready..."
-sleep 10
+sleep 60
 
 # Step 6: Start dashboard and app (daemon mode)
 echo "Starting dashboard and trading bot..."

@@ -1,7 +1,20 @@
-"""Momentum Scalping Strategy - Trend following for HFT.
+"""Momentum Scalping Strategy - Trend following for HFT (Context Pack 2.0).
 
 This strategy trades momentum in trending markets, using EMA crossovers,
 RSI confirmation, and volume analysis to identify high-probability entries.
+
+BOOSTER STRATEGY - Active ONLY in TREND_UP / TREND_DOWN regimes.
+
+Key Features (Context Pack 2.0):
+- Regime restriction: ONLY trades in trend_up or trend_down
+- EMA confirmation: Price > EMA20 > EMA50 (long) or Price < EMA20 < EMA50 (short)
+- RSI filter: RSI > 60 (long) or RSI < 40 (short)
+- Volume confirmation: >= 1.2x average volume
+- TP/SL constraints:
+  - TP: 0.35-0.45%
+  - SL: 0.15-0.20%
+  - Min RR ratio: 1.5
+- Fee-aware: TP_net >= 0.20% after roundtrip fees (0.04%)
 """
 
 import logging
@@ -41,20 +54,39 @@ class MomentumScalpingStrategy(HFTBaseStrategy):
     def __init__(self, settings: Settings):
         super().__init__(settings, StrategyId.MOMENTUM_SCALPING)
 
-        # Load config parameters
-        self.min_rsi_up = self._get_param('min_rsi_up', Decimal("60"))
-        self.max_rsi_down = self._get_param('max_rsi_down', Decimal("40"))
-        self.min_volume_ratio = self._get_param('min_volume_ratio', Decimal("1.2"))
-        self.ema_fast = self._get_param('ema_fast', 20)
-        self.ema_slow = self._get_param('ema_slow', 50)
+        # Context Pack 2.0: Load config parameters with updated defaults
+        self.min_rsi_up = self._get_param('min_rsi_up', Decimal("60"))      # Long: RSI > 60
+        self.max_rsi_down = self._get_param('max_rsi_down', Decimal("40"))  # Short: RSI < 40
+        self.min_volume_ratio = self._get_param('min_volume_ratio', Decimal("1.2"))  # Vol >= 1.2x
+
+        # EMA periods for trend confirmation
+        self.ema_fast = int(self._get_param('ema_fast', 20))   # EMA20
+        self.ema_slow = int(self._get_param('ema_slow', 50))   # EMA50
+
+        # TP/SL constraints (Context Pack 2.0)
+        # TP: 0.35-0.45%, SL: 0.15-0.20%, Min RR: 1.5
+        self.min_tp_pct = Decimal("0.0035")   # 0.35% minimum TP
+        self.max_tp_pct = Decimal("0.0045")   # 0.45% maximum TP
+        self.min_sl_pct = Decimal("0.0015")   # 0.15% minimum SL
+        self.max_sl_pct = Decimal("0.0020")   # 0.20% maximum SL
+        self.min_rr_ratio = Decimal("1.5")    # Minimum Risk/Reward ratio
+
+        # Fee awareness: TP_gross - fee_roundtrip >= 0.20%
+        # fee_roundtrip = 0.02% + 0.02% = 0.04%
+        # So TP_net >= 0.20% means TP_gross >= 0.24%
+        self.min_tp_net_after_fees = Decimal("0.0020")  # 0.20% net profit minimum
+        self.fee_roundtrip = Decimal("0.0004")           # 0.04% (maker + maker)
 
         # Max volatility threshold (skip extreme volatility)
         self.max_volatility_pct = Decimal("0.05")  # 5%
 
         logger.info(
-            f"MomentumScalpingStrategy initialized: "
+            f"MomentumScalpingStrategy initialized (Context Pack 2.0): "
             f"RSI_up>{self.min_rsi_up}, RSI_down<{self.max_rsi_down}, "
-            f"vol_ratio>{self.min_volume_ratio}"
+            f"vol_ratio>={self.min_volume_ratio}, "
+            f"TP: {self.min_tp_pct:.4%}-{self.max_tp_pct:.4%}, "
+            f"SL: {self.min_sl_pct:.4%}-{self.max_sl_pct:.4%}, "
+            f"Min RR: {self.min_rr_ratio}"
         )
 
     def _get_param(self, name: str, default):
@@ -135,7 +167,8 @@ class MomentumScalpingStrategy(HFTBaseStrategy):
                     f"RSI={rsi:.1f}, Vol={volume_ratio:.2f}x, conf={confidence:.2f}"
                 )
 
-                return self.create_hft_proposal(
+                # Create proposal with custom TP/SL (Context Pack 2.0 compliant)
+                return self._create_momentum_proposal(
                     symbol=symbol,
                     side=Side.LONG,
                     entry_price=current_price,
@@ -160,7 +193,8 @@ class MomentumScalpingStrategy(HFTBaseStrategy):
                     f"RSI={rsi:.1f}, Vol={volume_ratio:.2f}x, conf={confidence:.2f}"
                 )
 
-                return self.create_hft_proposal(
+                # Create proposal with custom TP/SL (Context Pack 2.0 compliant)
+                return self._create_momentum_proposal(
                     symbol=symbol,
                     side=Side.SHORT,
                     entry_price=current_price,
@@ -265,3 +299,101 @@ class MomentumScalpingStrategy(HFTBaseStrategy):
 
         # Cap at 0.9
         return min(confidence, Decimal("0.9"))
+
+    def _create_momentum_proposal(
+        self,
+        symbol: str,
+        side: Side,
+        entry_price: Decimal,
+        context: MarketContext,
+        confidence: Decimal,
+        reason: str,
+    ) -> Optional[ProposedTrade]:
+        """
+        Create a momentum scalping proposal with Context Pack 2.0 compliant TP/SL.
+
+        Constraints:
+        - MIN_TP = 0.35% (0.0035)
+        - MAX_TP = 0.45% (0.0045)
+        - MIN_SL = 0.15% (0.0015)
+        - MAX_SL = 0.20% (0.0020)
+        - MIN_RR = 1.5
+        - Fee-awareness: TP_net >= 0.20% after roundtrip fees (0.04%)
+
+        Strategy:
+        Use default TP/SL from base class but clamp to our ranges and validate RR.
+        """
+        from ...core.enums import OrderType
+
+        # Get base TP/SL from parent class (may come from config)
+        base_tp_pct = self.take_profit_pct  # From HFTBaseStrategy
+        base_sl_pct = self.stop_loss_pct    # From HFTBaseStrategy
+
+        # Clamp TP to our range (0.35%-0.45%)
+        tp_pct = max(self.min_tp_pct, min(base_tp_pct, self.max_tp_pct))
+
+        # Clamp SL to our range (0.15%-0.20%)
+        sl_pct = max(self.min_sl_pct, min(base_sl_pct, self.max_sl_pct))
+
+        # Validate Risk/Reward ratio (must be >= 1.5)
+        rr_ratio = tp_pct / sl_pct if sl_pct > 0 else Decimal("0")
+        if rr_ratio < self.min_rr_ratio:
+            # Adjust TP to meet minimum RR (keep SL fixed)
+            tp_pct = sl_pct * self.min_rr_ratio
+            # Re-clamp to max TP
+            if tp_pct > self.max_tp_pct:
+                # If we can't meet RR with max TP, reduce SL
+                sl_pct = self.max_tp_pct / self.min_rr_ratio
+                tp_pct = self.max_tp_pct
+
+            logger.info(
+                f"[MOMENTUM] {symbol} adjusted TP/SL for RR >= {self.min_rr_ratio}: "
+                f"TP={tp_pct:.4%}, SL={sl_pct:.4%}, RR={tp_pct/sl_pct:.2f}"
+            )
+
+        # Fee-awareness check: TP_net >= 0.20%
+        tp_net = tp_pct - self.fee_roundtrip
+        if tp_net < self.min_tp_net_after_fees:
+            logger.warning(
+                f"[MOMENTUM] {symbol} TP net after fees ({tp_net:.4%}) below minimum "
+                f"({self.min_tp_net_after_fees:.4%}), skipping trade"
+            )
+            return None
+
+        # Calculate actual prices
+        if side == Side.LONG:
+            tp_price = entry_price * (1 + tp_pct)
+            sl_price = entry_price * (1 - sl_pct)
+        else:
+            tp_price = entry_price * (1 - tp_pct)
+            sl_price = entry_price * (1 + sl_pct)
+
+        # Record signal
+        self.record_signal_hft(symbol)
+
+        # Get allocation from config
+        allocation_pct = Decimal("0.01")  # Default 1%
+        if self._hft_config:
+            allocation_pct = Decimal(str(getattr(self._hft_config, 'max_position_pct', 0.01)))
+
+        logger.info(
+            f"[MOMENTUM] {symbol} {side.value} proposal: "
+            f"Entry={entry_price:.2f}, TP={tp_price:.2f} ({tp_pct:.4%}), "
+            f"SL={sl_price:.2f} ({sl_pct:.4%}), RR={rr_ratio:.2f}, "
+            f"TP_net={tp_net:.4%}"
+        )
+
+        return ProposedTrade(
+            strategy_id=self.strategy_id,
+            symbol=symbol,
+            side=side,
+            notional_usd=Decimal("1000"),  # Will be overridden by position sizer
+            risk_per_trade=Decimal("70"),   # 0.7% of $10k = $70
+            entry_type=OrderType.LIMIT_GTX, # Post-only maker order
+            entry_price=entry_price,
+            stop_loss_price=sl_price,
+            take_profit_price=tp_price,
+            confidence=confidence,
+            reason=f"[HFT-MOMENTUM] {reason}",
+            market_context=context,
+        )

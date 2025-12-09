@@ -9,10 +9,83 @@ from typing import Dict, Optional, List
 
 from openai import AsyncOpenAI
 
-from ..core.models import RegimeAnalysis, AccountState, MarketContext, StrategyMetrics
+from ..core.models import RegimeAnalysis, AccountState, MarketContext, StrategyMetrics, Bar
 from ..core.enums import MarketRegime, StrategyId
 from ..config.settings import Settings
 from .prompts import REGIME_DETECTION_SYSTEM_PROMPT, REGIME_DETECTION_USER_TEMPLATE
+
+
+def calculate_atr(bars: List, period: int = 14) -> Decimal:
+    """Calculate Average True Range from bars."""
+    if not bars or len(bars) < period + 1:
+        return Decimal("0")
+
+    tr_values = []
+    for i in range(-period, 0):
+        high = bars[i].high if hasattr(bars[i], 'high') else Decimal(str(bars[i].get('high', 0)))
+        low = bars[i].low if hasattr(bars[i], 'low') else Decimal(str(bars[i].get('low', 0)))
+        prev_close = bars[i - 1].close if hasattr(bars[i - 1], 'close') else Decimal(str(bars[i - 1].get('close', 0)))
+
+        tr = max(
+            high - low,
+            abs(high - prev_close),
+            abs(low - prev_close)
+        )
+        tr_values.append(tr)
+
+    return sum(tr_values) / len(tr_values) if tr_values else Decimal("0")
+
+
+def calculate_volatility_percentile(bars: List, lookback: int = 100) -> float:
+    """Calculate current volatility percentile (0-100)."""
+    if not bars or len(bars) < lookback:
+        return 50.0  # Default to median
+
+    # Calculate rolling standard deviations
+    returns = []
+    for i in range(-lookback, -1):
+        if i - 1 >= -len(bars):
+            close = bars[i].close if hasattr(bars[i], 'close') else Decimal(str(bars[i].get('close', 0)))
+            prev_close = bars[i - 1].close if hasattr(bars[i - 1], 'close') else Decimal(str(bars[i - 1].get('close', 0)))
+            if prev_close > 0:
+                ret = float((close - prev_close) / prev_close)
+                returns.append(ret)
+
+    if len(returns) < 20:
+        return 50.0
+
+    # Calculate rolling std
+    import statistics
+    window = 20
+    stds = []
+    for i in range(len(returns) - window + 1):
+        stds.append(statistics.stdev(returns[i:i + window]))
+
+    if not stds:
+        return 50.0
+
+    current_std = stds[-1]
+    sorted_stds = sorted(stds)
+    percentile = (sorted_stds.index(current_std) / len(sorted_stds)) * 100
+    return percentile
+
+
+def get_price_history_summary(bars: List, periods: List[int] = [5, 15, 60]) -> Dict:
+    """Get price change summary over different periods."""
+    if not bars:
+        return {}
+
+    current_price = bars[-1].close if hasattr(bars[-1], 'close') else Decimal(str(bars[-1].get('close', 0)))
+    summary = {}
+
+    for period in periods:
+        if len(bars) > period:
+            past_price = bars[-period - 1].close if hasattr(bars[-period - 1], 'close') else Decimal(str(bars[-period - 1].get('close', 0)))
+            if past_price > 0:
+                change_pct = float((current_price - past_price) / past_price * 100)
+                summary[f"{period}m_change_pct"] = round(change_pct, 2)
+
+    return summary
 
 
 logger = logging.getLogger(__name__)
@@ -60,6 +133,7 @@ class RegimeDetector:
         contexts: Dict[str, MarketContext],
         account: AccountState,
         strategy_metrics: Optional[Dict[StrategyId, StrategyMetrics]] = None,
+        bars_data: Optional[Dict[str, List]] = None,
         force: bool = False,
     ) -> RegimeAnalysis:
         """
@@ -69,6 +143,7 @@ class RegimeDetector:
             contexts: Market context for each symbol
             account: Current account state
             strategy_metrics: Recent strategy performance metrics
+            bars_data: Historical bars per symbol for ATR/volatility calculation
             force: Force new analysis even if cache is valid
 
         Returns:
@@ -82,7 +157,7 @@ class RegimeDetector:
             return self._default_analysis()
 
         try:
-            analysis = await self._run_analysis(contexts, account, strategy_metrics)
+            analysis = await self._run_analysis(contexts, account, strategy_metrics, bars_data)
             self._last_analysis = analysis
             self._last_run = datetime.now(timezone.utc)
             return analysis
@@ -115,6 +190,7 @@ class RegimeDetector:
         contexts: Dict[str, MarketContext],
         account: AccountState,
         strategy_metrics: Optional[Dict[StrategyId, StrategyMetrics]],
+        bars_data: Optional[Dict[str, List]] = None,
     ) -> RegimeAnalysis:
         """Run GPT analysis."""
         client = await self._get_client()
@@ -130,6 +206,30 @@ class RegimeDetector:
                 f"- 24h Volume: ${ctx.volume_24h:,.0f}\n"
             )
         asset_data = "\n".join(asset_data_lines)
+
+        # Build technical data string (Context Pack 2.0: ATR, volatility, price history)
+        technical_data_lines = []
+        if bars_data:
+            for symbol, bars in bars_data.items():
+                if bars and len(bars) > 15:
+                    atr = calculate_atr(bars)
+                    vol_pct = calculate_volatility_percentile(bars)
+                    price_history = get_price_history_summary(bars)
+
+                    current_price = bars[-1].close if hasattr(bars[-1], 'close') else Decimal(str(bars[-1].get('close', 0)))
+                    atr_pct = float(atr / current_price * 100) if current_price > 0 else 0
+
+                    tech_line = f"### {symbol}\n"
+                    tech_line += f"- ATR (14): {atr:.2f} ({atr_pct:.2f}%)\n"
+                    tech_line += f"- Volatility Percentile: {vol_pct:.1f}%\n"
+
+                    if price_history:
+                        for key, val in price_history.items():
+                            tech_line += f"- {key}: {val:+.2f}%\n"
+
+                    technical_data_lines.append(tech_line)
+
+        technical_data = "\n".join(technical_data_lines) if technical_data_lines else "No technical data available (insufficient bar history)"
 
         # Build strategy performance string
         if strategy_metrics:
@@ -157,6 +257,7 @@ class RegimeDetector:
             timestamp=datetime.now(timezone.utc).isoformat(),
             environment="TESTNET" if self.settings.is_testnet else "PRODUCTION",
             asset_data=asset_data,
+            technical_data=technical_data,
             daily_pnl_pct=float(account.daily_pnl_pct),
             total_drawdown=float(total_drawdown),
             position_count=account.position_count,
@@ -178,22 +279,40 @@ class RegimeDetector:
             ],
             "temperature": self.config.temperature,
             "max_tokens": self.config.max_tokens,
-            "timeout": 90.0,  # SDK-level timeout
+            "timeout": 30.0,  # SDK-level timeout for deepseek-chat (5-15s typical)
         }
 
         # Only add response_format for OpenAI (not DeepSeek)
         if not is_deepseek:
             call_params["response_format"] = {"type": "json_object"}
 
-        # Add timeout to prevent indefinite blocking
-        try:
-            response = await asyncio.wait_for(
-                client.chat.completions.create(**call_params),
-                timeout=90.0  # 90 second asyncio timeout
-            )
-        except asyncio.TimeoutError:
-            logger.warning("Regime detection API call timed out after 90s")
-            raise Exception("API timeout")
+        # Add timeout to prevent indefinite blocking with retry logic
+        max_retries = 2
+        last_error = None
+
+        for attempt in range(max_retries):
+            try:
+                response = await asyncio.wait_for(
+                    client.chat.completions.create(**call_params),
+                    timeout=30.0  # 30 second asyncio timeout for deepseek-chat
+                )
+                break  # Success - exit retry loop
+            except asyncio.TimeoutError:
+                last_error = Exception("API timeout")
+                logger.warning(f"Regime detection API call timed out after 30s (attempt {attempt + 1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(1)  # Short delay before retry
+                    continue
+                else:
+                    raise last_error
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Regime detection API call failed: {e} (attempt {attempt + 1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(1)  # Short delay before retry
+                    continue
+                else:
+                    raise
 
         # Parse response
         content = response.choices[0].message.content
@@ -247,6 +366,9 @@ class RegimeDetector:
             f"(confidence: {analysis.confidence:.2f}, "
             f"risk adj: {analysis.risk_adjustment:.2f})"
         )
+        # Log the AI analysis for debugging
+        if analysis.analysis:
+            logger.info(f"AI analysis: {analysis.analysis[:200]}")
 
         return analysis
 

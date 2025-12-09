@@ -69,7 +69,7 @@ hlquantbot/
 openai:
   enabled: true
   model: deepseek-reasoner
-  base_url: https://api.deepseek.com/v3.2_speciale_expires_on_20251215
+  base_url: https://api.deepseek.com
   regime_detection_interval_minutes: 5
   max_tokens: 4000
   temperature: 0.3
@@ -77,9 +77,7 @@ openai:
 
 **Regime Output**: `trend_up | trend_down | range_bound | high_volatility | low_volatility | uncertain`
 
-**API Key**: `OPENAI_API_KEY` nel .env (sk-cbd31...)
-
-**Scadenza endpoint**: 15 Dicembre 2025
+**API Key**: `DEEPSEEK_API_KEY` nel .env (sk-cbd31...)
 
 ## Risk Management
 
@@ -183,8 +181,8 @@ ssh root@<VPS_IP_REDACTED> "cd /opt/trader_bitcoin && docker compose restart app
 
 ### Verificare API key DeepSeek
 ```bash
-ssh root@<VPS_IP_REDACTED> "docker exec trader_mainnet_app env | grep OPENAI"
-# Deve mostrare: OPENAI_API_KEY=sk-cbd31...
+ssh root@<VPS_IP_REDACTED> "docker exec trader_mainnet_app env | grep DEEPSEEK"
+# Deve mostrare: DEEPSEEK_API_KEY=sk-cbd31...
 ```
 
 ---
@@ -195,7 +193,7 @@ ssh root@<VPS_IP_REDACTED> "docker exec trader_mainnet_app env | grep OPENAI"
 ENVIRONMENT=production
 PRIVATE_KEY=0x...
 WALLET_ADDRESS=0x...
-OPENAI_API_KEY=sk-cbd31...  # DeepSeek V3.2-Speciale
+DEEPSEEK_API_KEY=sk-cbd31...  # DeepSeek V3.2-Speciale
 CMC_PRO_API_KEY=...
 DATABASE_URL=postgresql://trader:password@postgres:5432/trader_db
 ```

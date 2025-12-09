@@ -1,4 +1,10 @@
-"""Pair Trading Strategy - Long strongest / Short weakest."""
+"""Pair Trading Strategy - Long strongest / Short weakest.
+
+AGGIORNATO (da specifica consigli.md):
+- Priorità bassa rispetto altre strategie
+- Attivo SOLO in regime range_bound
+- TP/SL aggiornati per rispettare vincoli globali (MIN_TP=0.35%, MAX_SL=0.20%)
+"""
 
 import logging
 from decimal import Decimal
@@ -50,6 +56,9 @@ class PairTradingStrategy(HFTBaseStrategy):
         self.zscore_exit_threshold = self._get_param('zscore_exit_threshold', Decimal("0.5"))
         self.rebalance_interval_seconds = self._get_param_int('rebalance_interval_seconds', 60)
 
+        # NUOVO: Regime restriction (da specifica - solo range_bound)
+        self.allowed_regimes = self._get_allowed_regimes()
+
         # Define pairs from config or defaults
         self.pairs = self._get_pairs()
 
@@ -58,6 +67,9 @@ class PairTradingStrategy(HFTBaseStrategy):
 
         # Active pair positions
         self._active_pairs: Dict[str, Dict] = {}  # pair_key -> {long_symbol, short_symbol, entry_zscore}
+
+        # Current regime (viene aggiornato dal bot)
+        self._current_regime: Optional[str] = None
 
     def _get_param(self, name: str, default: Decimal) -> Decimal:
         if self._hft_config:
@@ -77,6 +89,25 @@ class PairTradingStrategy(HFTBaseStrategy):
                 return [tuple(p) for p in pairs_config]
         # Defaults
         return [("BTC", "ETH"), ("ETH", "SOL")]
+
+    def _get_allowed_regimes(self) -> List[str]:
+        """Get allowed regimes from config (da specifica: solo range_bound)."""
+        if self._hft_config:
+            regimes = getattr(self._hft_config, 'allowed_regimes', None)
+            if regimes:
+                return list(regimes)
+        # Default: solo range_bound come da specifica
+        return ["range_bound"]
+
+    def set_regime(self, regime: str):
+        """Imposta il regime corrente. Chiamato dal bot."""
+        self._current_regime = regime
+
+    def is_regime_allowed(self) -> bool:
+        """Verifica se il regime corrente permette il trading."""
+        if not self._current_regime:
+            return False  # Se regime non noto, non operare
+        return self._current_regime in self.allowed_regimes
 
     def _pair_key(self, pair: Tuple[str, str]) -> str:
         """Create unique key for a pair."""
@@ -115,8 +146,20 @@ class PairTradingStrategy(HFTBaseStrategy):
         Evaluate all pairs and generate signals.
 
         This should be called instead of evaluate_all for pair trading.
+
+        AGGIORNATO: Verifica regime prima di generare segnali (da specifica).
+        Attivo SOLO in range_bound.
         """
         if not self.is_enabled:
+            return []
+
+        # NUOVO: Verifica regime - strategia attiva solo in range_bound (da specifica)
+        if not self.is_regime_allowed():
+            if self._current_regime:
+                logger.debug(
+                    f"PairTrading: regime '{self._current_regime}' non permesso. "
+                    f"Allowed: {self.allowed_regimes}"
+                )
             return []
 
         proposals = []

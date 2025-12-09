@@ -1,4 +1,15 @@
-"""MMR-HFT: Micro Mean Reversion Strategy (multi-timeframe)."""
+"""MMR-HFT: Micro Mean Reversion Strategy (multi-timeframe) - Context Pack 2.0.
+
+REGIME RESTRICTION: ONLY active in RANGE_BOUND or LOW_VOLATILITY regimes.
+Completely disabled in trend/high_volatility markets.
+
+Updated Parameters (Context Pack 2.0):
+- deviation_threshold: 0.05% (more conservative than before)
+- SL max: 0.15%
+- TP min: 0.35%
+- Min RR ratio: 1.5
+- Fee-aware: all trades ensure profitability after 0.04% roundtrip fees
+"""
 
 import logging
 from decimal import Decimal
@@ -77,28 +88,29 @@ class MMRHFTStrategy(HFTBaseStrategy):
         """Load parameters for each timeframe."""
         params = {}
 
-        # Default parameters per timeframe - AGGRESSIVE for HFT
-        # Lowered thresholds to generate more signals (200-400 trades/day target)
+        # Default parameters per timeframe - Context Pack 2.0 (Conservative Mean Reversion)
+        # UPDATED: deviation_threshold = 0.05%, SL max = 0.15%, TP min = 0.35%, RR >= 1.5
+        # More conservative than before to reduce false signals in ranging markets
         defaults = {
             TimeFrame.M1: {
-                'deviation_threshold_pct': Decimal("0.0002"),  # 0.02% (was 0.03%)
-                'max_deviation_pct': Decimal("0.002"),         # 0.2% (was 0.1%)
-                'take_profit_pct': Decimal("0.0004"),
-                'stop_loss_pct': Decimal("0.0008"),
+                'deviation_threshold_pct': Decimal("0.0005"),  # 0.05% - INCREASED from 0.02%
+                'max_deviation_pct': Decimal("0.003"),         # 0.3% max deviation
+                'take_profit_pct': Decimal("0.0035"),          # 0.35% - MINIMUM for profitability
+                'stop_loss_pct': Decimal("0.0015"),            # 0.15% - MAXIMUM risk
                 'vwap_periods': 20,
             },
             TimeFrame.M5: {
-                'deviation_threshold_pct': Decimal("0.0005"),  # 0.05% (was 0.1%)
-                'max_deviation_pct': Decimal("0.005"),         # 0.5% (was 0.3%)
-                'take_profit_pct': Decimal("0.001"),
-                'stop_loss_pct': Decimal("0.002"),
+                'deviation_threshold_pct': Decimal("0.0005"),  # 0.05% - SAME as spec
+                'max_deviation_pct': Decimal("0.005"),         # 0.5% max deviation
+                'take_profit_pct': Decimal("0.0035"),          # 0.35% TP minimum
+                'stop_loss_pct': Decimal("0.0015"),            # 0.15% SL maximum
                 'vwap_periods': 15,
             },
             TimeFrame.M15: {
-                'deviation_threshold_pct': Decimal("0.001"),   # 0.1% (was 0.3%)
-                'max_deviation_pct': Decimal("0.01"),          # 1% (was 0.8%)
-                'take_profit_pct': Decimal("0.003"),
-                'stop_loss_pct': Decimal("0.004"),
+                'deviation_threshold_pct': Decimal("0.0005"),  # 0.05% - even for M15
+                'max_deviation_pct': Decimal("0.008"),         # 0.8% max deviation
+                'take_profit_pct': Decimal("0.0045"),          # 0.45% TP for wider timeframe
+                'stop_loss_pct': Decimal("0.002"),             # 0.20% SL max
                 'vwap_periods': 12,
             },
         }
@@ -164,17 +176,40 @@ class MMRHFTStrategy(HFTBaseStrategy):
         """
         Evaluate MMR strategy.
 
+        REGIME RESTRICTION (Context Pack 2.0):
+        - ONLY active in range_bound OR low_volatility regimes
+        - Completely disabled in all trend/high_volatility regimes
+
         Entry conditions:
-        1. Price deviates from VWAP by > deviation_threshold
-        2. Deviation < max_deviation (avoid catching falling knife)
-        3. No existing position
-        4. Signal cooldown passed
+        1. Regime check: MUST be range_bound OR low_volatility
+        2. Price deviates from VWAP by > 0.05% (was 0.005%)
+        3. Deviation < max_deviation (avoid catching falling knife)
+        4. No existing position
+        5. Signal cooldown passed
+
+        Updated parameters:
+        - deviation_threshold: 0.05% (more conservative)
+        - SL max: 0.15%
+        - TP min: 0.35%
+        - Min RR: 1.5
 
         Exit conditions (handled by SL/TP):
         1. Price returns to VWAP (TP)
         2. Price continues away from VWAP (SL)
         """
-        logger.info(f"MMR-HFT EVAL: {symbol} bars={len(bars)}")
+        # CRITICAL: Regime check - ONLY trade in range-bound or low volatility
+        from ...core.enums import MarketRegime
+        current_regime = getattr(self, '_current_regime', None)
+
+        if current_regime not in (MarketRegime.RANGE_BOUND, MarketRegime.LOW_VOLATILITY):
+            # MMR-HFT is DISABLED in non-range regimes
+            logger.debug(
+                f"MMR-HFT: {symbol} SKIPPED - regime={current_regime} "
+                f"(only active in RANGE_BOUND/LOW_VOLATILITY)"
+            )
+            return None
+
+        logger.info(f"MMR-HFT EVAL: {symbol} bars={len(bars)} regime={current_regime}")
 
         # Need enough bars for VWAP
         if len(bars) < self.vwap_periods:

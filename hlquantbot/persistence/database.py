@@ -172,6 +172,56 @@ class Database:
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
                 );
 
+                -- Strategy signals table (NUOVO - da specifica consigli.md)
+                -- Traccia ogni segnale generato con contesto completo per analisi P&L
+                CREATE TABLE IF NOT EXISTS strategy_signals (
+                    id SERIAL PRIMARY KEY,
+                    timestamp TIMESTAMP WITH TIME ZONE NOT NULL,
+                    strategy_id VARCHAR(50) NOT NULL,
+                    symbol VARCHAR(20) NOT NULL,
+                    side VARCHAR(10) NOT NULL,
+
+                    -- Contesto regime e aggressività (da specifica)
+                    regime VARCHAR(30),
+                    aggression_level VARCHAR(20),
+
+                    -- Parametri effettivi applicati
+                    leverage_effective DECIMAL(5, 2),
+                    tp_pct DECIMAL(10, 6),
+                    sl_pct DECIMAL(10, 6),
+                    notional_usd DECIMAL(20, 8),
+                    risk_per_trade_pct DECIMAL(10, 6),
+
+                    -- Stato del segnale
+                    accepted BOOLEAN NOT NULL,
+                    reason_for_reject VARCHAR(255),  -- Da risk engine se rigettato
+
+                    -- Metriche per analisi
+                    confidence DECIMAL(5, 4),
+                    signal_reason TEXT,
+
+                    -- Tracciamento esecuzione
+                    order_id VARCHAR(100),
+                    fill_price DECIMAL(20, 8),
+                    fill_time TIMESTAMP WITH TIME ZONE,
+
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                );
+
+                -- Aggression history table (NUOVO - da specifica)
+                -- Traccia i cambi di livello aggressività nel tempo
+                CREATE TABLE IF NOT EXISTS aggression_history (
+                    id SERIAL PRIMARY KEY,
+                    timestamp TIMESTAMP WITH TIME ZONE NOT NULL,
+                    level VARCHAR(20) NOT NULL,
+                    previous_level VARCHAR(20),
+                    trigger_reason VARCHAR(255),
+                    win_rate_100 DECIMAL(5, 4),
+                    daily_pnl_pct DECIMAL(10, 6),
+                    regime VARCHAR(30),
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                );
+
                 -- Create indexes
                 CREATE INDEX IF NOT EXISTS idx_trades_strategy ON trades(strategy_id);
                 CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
@@ -179,6 +229,13 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_account_snapshots_timestamp ON account_snapshots(timestamp);
                 CREATE INDEX IF NOT EXISTS idx_strategy_metrics_strategy ON strategy_metrics(strategy_id);
                 CREATE INDEX IF NOT EXISTS idx_alerts_timestamp ON alerts(timestamp);
+
+                -- Nuovi indici per strategy_signals e aggression_history (da specifica)
+                CREATE INDEX IF NOT EXISTS idx_strategy_signals_timestamp ON strategy_signals(timestamp);
+                CREATE INDEX IF NOT EXISTS idx_strategy_signals_strategy ON strategy_signals(strategy_id);
+                CREATE INDEX IF NOT EXISTS idx_strategy_signals_regime ON strategy_signals(regime);
+                CREATE INDEX IF NOT EXISTS idx_strategy_signals_aggression ON strategy_signals(aggression_level);
+                CREATE INDEX IF NOT EXISTS idx_aggression_history_timestamp ON aggression_history(timestamp);
             """)
         logger.info("Database schema initialized")
 
@@ -575,3 +632,204 @@ class Database:
         metrics.calculate_ratios()
 
         return metrics
+
+    # -------------------------------------------------------------------------
+    # Strategy Signals (NUOVO - da specifica consigli.md)
+    # Traccia ogni segnale per analisi P&L per regime/aggression
+    # -------------------------------------------------------------------------
+    async def save_strategy_signal(
+        self,
+        strategy_id: str,
+        symbol: str,
+        side: str,
+        accepted: bool,
+        regime: Optional[str] = None,
+        aggression_level: Optional[str] = None,
+        leverage_effective: Optional[float] = None,
+        tp_pct: Optional[float] = None,
+        sl_pct: Optional[float] = None,
+        notional_usd: Optional[float] = None,
+        risk_per_trade_pct: Optional[float] = None,
+        reason_for_reject: Optional[str] = None,
+        confidence: Optional[float] = None,
+        signal_reason: Optional[str] = None,
+        order_id: Optional[str] = None,
+    ):
+        """
+        Save a strategy signal with full context for P&L analysis.
+
+        Questo permette di analizzare:
+        - P&L per regime
+        - P&L per aggressiveness
+        - P&L per strategia
+        - Distribuzione SL/TP
+        - Rejection rate dal risk engine
+        """
+        async with self._pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO strategy_signals (
+                    timestamp, strategy_id, symbol, side,
+                    regime, aggression_level, leverage_effective,
+                    tp_pct, sl_pct, notional_usd, risk_per_trade_pct,
+                    accepted, reason_for_reject, confidence, signal_reason, order_id
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+            """,
+                datetime.now(timezone.utc),
+                strategy_id,
+                symbol,
+                side,
+                regime,
+                aggression_level,
+                leverage_effective,
+                tp_pct,
+                sl_pct,
+                notional_usd,
+                risk_per_trade_pct,
+                accepted,
+                reason_for_reject,
+                confidence,
+                signal_reason,
+                order_id,
+            )
+
+    async def update_signal_fill(
+        self,
+        order_id: str,
+        fill_price: float,
+        fill_time: Optional[datetime] = None,
+    ):
+        """Update signal with fill information."""
+        if fill_time is None:
+            fill_time = datetime.now(timezone.utc)
+
+        async with self._pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE strategy_signals
+                SET fill_price = $2, fill_time = $3
+                WHERE order_id = $1
+            """, order_id, fill_price, fill_time)
+
+    async def get_signals_by_regime(
+        self,
+        regime: str,
+        start_time: Optional[datetime] = None,
+        limit: int = 1000,
+    ) -> List[Dict]:
+        """Get signals filtered by regime for P&L analysis."""
+        query = "SELECT * FROM strategy_signals WHERE regime = $1"
+        params = [regime]
+        param_num = 2
+
+        if start_time:
+            query += f" AND timestamp >= ${param_num}"
+            params.append(start_time)
+            param_num += 1
+
+        query += f" ORDER BY timestamp DESC LIMIT ${param_num}"
+        params.append(limit)
+
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(query, *params)
+
+        return [dict(row) for row in rows]
+
+    async def get_signals_by_aggression(
+        self,
+        aggression_level: str,
+        start_time: Optional[datetime] = None,
+        limit: int = 1000,
+    ) -> List[Dict]:
+        """Get signals filtered by aggression level for P&L analysis."""
+        query = "SELECT * FROM strategy_signals WHERE aggression_level = $1"
+        params = [aggression_level]
+        param_num = 2
+
+        if start_time:
+            query += f" AND timestamp >= ${param_num}"
+            params.append(start_time)
+            param_num += 1
+
+        query += f" ORDER BY timestamp DESC LIMIT ${param_num}"
+        params.append(limit)
+
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(query, *params)
+
+        return [dict(row) for row in rows]
+
+    # -------------------------------------------------------------------------
+    # Aggression History (NUOVO - da specifica consigli.md)
+    # Traccia i cambi di livello aggressività
+    # -------------------------------------------------------------------------
+    async def save_aggression_change(
+        self,
+        level: str,
+        previous_level: Optional[str] = None,
+        trigger_reason: Optional[str] = None,
+        win_rate_100: Optional[float] = None,
+        daily_pnl_pct: Optional[float] = None,
+        regime: Optional[str] = None,
+    ):
+        """Save aggression level change for analysis."""
+        async with self._pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO aggression_history (
+                    timestamp, level, previous_level, trigger_reason,
+                    win_rate_100, daily_pnl_pct, regime
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+            """,
+                datetime.now(timezone.utc),
+                level,
+                previous_level,
+                trigger_reason,
+                win_rate_100,
+                daily_pnl_pct,
+                regime,
+            )
+
+    async def get_aggression_history(
+        self,
+        start_time: Optional[datetime] = None,
+        limit: int = 100,
+    ) -> List[Dict]:
+        """Get aggression level history."""
+        query = "SELECT * FROM aggression_history WHERE 1=1"
+        params = []
+        param_num = 1
+
+        if start_time:
+            query += f" AND timestamp >= ${param_num}"
+            params.append(start_time)
+            param_num += 1
+
+        query += f" ORDER BY timestamp DESC LIMIT ${param_num}"
+        params.append(limit)
+
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(query, *params)
+
+        return [dict(row) for row in rows]
+
+    async def get_win_rate_last_n_trades(self, n: int = 100) -> Optional[float]:
+        """
+        Calculate win rate for last N trades.
+
+        Usato dall'AggressionController per decidere se alzare il livello
+        (win rate > 58% -> +1 livello).
+        """
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT
+                    COUNT(*) FILTER (WHERE pnl > 0) as wins,
+                    COUNT(*) as total
+                FROM (
+                    SELECT pnl FROM trades
+                    WHERE exit_time IS NOT NULL
+                    ORDER BY exit_time DESC
+                    LIMIT $1
+                ) t
+            """, n)
+
+        if row and row["total"] > 0:
+            return float(row["wins"]) / float(row["total"])
+        return None

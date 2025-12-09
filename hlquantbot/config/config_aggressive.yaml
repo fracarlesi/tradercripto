@@ -129,7 +129,7 @@ telegram:
 openai:
   enabled: true
   model: deepseek-reasoner
-  base_url: https://api.deepseek.com/v3.2_speciale_expires_on_20251215
+  base_url: https://api.deepseek.com
   regime_detection_interval_minutes: 10  # Was 15 - more frequent
   param_tuning_interval_hours: 12  # Was 24 - more frequent
   max_tokens: 4000

@@ -147,7 +147,7 @@ hlquantbot/
 ENVIRONMENT=production
 PRIVATE_KEY=0x...
 WALLET_ADDRESS=0x...
-OPENAI_API_KEY=sk-...  # DeepSeek API key
+DEEPSEEK_API_KEY=sk-...  # DeepSeek API key
 DATABASE_URL=postgresql://trader:password@postgres:5432/trader_db
 ```
 

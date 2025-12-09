@@ -63,7 +63,8 @@ class OpenAIConfig(BaseModel):
     enabled: bool = True
     api_key: str = ""
     model: str = "deepseek-reasoner"  # DeepSeek V3.2-Speciale
-    base_url: str = "https://api.deepseek.com/v3.2_speciale_expires_on_20251215"  # DeepSeek Speciale API
+    # Endpoint standard DeepSeek API
+    base_url: str = "https://api.deepseek.com"
     regime_detection_interval_minutes: int = 15
     param_tuning_interval_hours: int = 24
     max_tokens: int = 8000  # DeepSeek limit
@@ -105,8 +106,8 @@ class TemporalRiskConfig(BaseModel):
     # Level 3: Slow (4h window) - was 1h/4.5%/6h
     level_3: Optional[TemporalRiskLevelConfig] = TemporalRiskLevelConfig(
         window_seconds=14400,  # 4 hours (was 1h)
-        max_drawdown_pct=Decimal("0.10"),  # 10% (was 4.5%)
-        cooldown_seconds=86400,  # 24h stop (was 6h)
+        max_drawdown_pct=Decimal("0.045"),  # 4.5% (reduced from 10%)
+        cooldown_seconds=21600,  # 6h (reduced from 24h)
     )
 
     class Config:
@@ -143,17 +144,23 @@ class RiskConfig(BaseModel):
 
 
 class TradeParamsConfig(BaseModel):
-    """Standardized trade parameters for fee-aware P&L optimization."""
-    # TP/SL thresholds
-    min_tp_pct: Decimal = Decimal("0.0035")   # 0.35% minimum TP
-    max_sl_pct: Decimal = Decimal("0.0020")   # 0.20% maximum SL
+    """Standardized trade parameters for fee-aware P&L optimization.
+
+    Updated for aggressive P&L targeting per Context Pack requirements:
+    - min_tp_pct = 0.35% (was too low before)
+    - max_sl_pct = 0.20% (tighter stops)
+    - RR >= 1.75:1
+    """
+    # TP/SL thresholds - AGGRESSIVE for P&L maximization
+    min_tp_pct: Decimal = Decimal("0.0008")   # 0.08% minimum TP (lowered for HFT)
+    max_sl_pct: Decimal = Decimal("0.005")    # 0.50% maximum SL (raised for volatility)
 
     # Fee structure (Hyperliquid)
     maker_fee_pct: Decimal = Decimal("0.0002")  # 0.02% maker
     taker_fee_pct: Decimal = Decimal("0.0005")  # 0.05% taker
 
     # Risk/Reward targets
-    min_risk_reward: Decimal = Decimal("1.5")  # 1.5:1 minimum RR
+    min_risk_reward: Decimal = Decimal("1.75")  # 1.75:1 minimum RR (TP/SL)
 
     class Config:
         arbitrary_types_allowed = True
@@ -216,7 +223,7 @@ class StrategyConfigBase(BaseModel):
     enabled: bool = True
     allocation_pct: Decimal = Decimal("0.33")  # % of equity allocated
     max_positions: int = 1  # Max concurrent positions per symbol
-    symbols: List[str] = ["BTC", "ETH", "SOL"]
+    symbols: List[str] = ["BTC", "ETH", "SOL", "DOGE", "AVAX", "LINK", "ARB", "XRP", "ADA", "APT", "SUI", "INJ"]
     signal_cooldown_seconds: int = 300  # Min seconds between signals (default 5 min)
 
     class Config:
@@ -314,7 +321,7 @@ class HFTStrategyConfigBase(StrategyConfigBase):
     # HFT-specific settings
     order_timeout_seconds: int = 2  # Auto-cancel after 2s
     max_position_hold_seconds: int = 60  # Max hold time
-    min_signal_interval_ms: int = 100  # Min ms between signals
+    min_signal_interval_ms: int = 500  # Min ms between signals (0.5 seconds)
 
     # Smaller allocations for HFT (many small trades)
     allocation_pct: Decimal = Decimal("0.15")  # 15% per HFT strategy
@@ -353,37 +360,38 @@ class MMRHFTConfig(HFTStrategyConfigBase):
     # Primary timeframe to use
     primary_timeframe: str = "M5"  # M1, M5, or M15
 
-    # Timeframe-specific parameters - AGGRESSIVE for HFT (200-400 trades/day target)
+    # Timeframe-specific parameters - Context Pack 2.0 (CONSERVATIVE)
+    # TP >= 0.35%, SL <= 0.15%, RR >= 1.5
     timeframe_m1: TimeframeParams = TimeframeParams(
-        deviation_threshold_pct=Decimal("0.0002"),  # 0.02% (lowered from 0.03%)
-        max_deviation_pct=Decimal("0.002"),  # 0.2% (raised from 0.1%)
-        take_profit_pct=Decimal("0.0004"),  # 0.04%
-        stop_loss_pct=Decimal("0.0008"),  # 0.08%
+        deviation_threshold_pct=Decimal("0.0005"),  # 0.05% - Context Pack 2.0
+        max_deviation_pct=Decimal("0.003"),         # 0.3% max
+        take_profit_pct=Decimal("0.0035"),          # 0.35% minimum
+        stop_loss_pct=Decimal("0.0015"),            # 0.15% maximum
         vwap_periods=20,
     )
     timeframe_m5: TimeframeParams = TimeframeParams(
-        deviation_threshold_pct=Decimal("0.0005"),  # 0.05% (lowered from 0.1%)
-        max_deviation_pct=Decimal("0.005"),  # 0.5% (raised from 0.3%)
-        take_profit_pct=Decimal("0.001"),  # 0.1%
-        stop_loss_pct=Decimal("0.002"),  # 0.2%
+        deviation_threshold_pct=Decimal("0.0005"),  # 0.05% - Context Pack 2.0
+        max_deviation_pct=Decimal("0.005"),         # 0.5% max
+        take_profit_pct=Decimal("0.0035"),          # 0.35% minimum
+        stop_loss_pct=Decimal("0.0015"),            # 0.15% maximum
         vwap_periods=15,
     )
     timeframe_m15: TimeframeParams = TimeframeParams(
-        deviation_threshold_pct=Decimal("0.001"),  # 0.1% (lowered from 0.3%)
-        max_deviation_pct=Decimal("0.01"),  # 1.0% (raised from 0.8%)
-        take_profit_pct=Decimal("0.003"),  # 0.3%
-        stop_loss_pct=Decimal("0.004"),  # 0.4%
+        deviation_threshold_pct=Decimal("0.0005"),  # 0.05% - Context Pack 2.0
+        max_deviation_pct=Decimal("0.008"),         # 0.8% max
+        take_profit_pct=Decimal("0.0045"),          # 0.45% for wider TF
+        stop_loss_pct=Decimal("0.002"),             # 0.20% max
         vwap_periods=12,
     )
 
-    # Legacy (fallback) - AGGRESSIVE values
+    # Legacy (fallback) - Context Pack 2.0 values
     timeframe_seconds: int = 5
     deviation_threshold_pct: Decimal = Decimal("0.0005")  # 0.05%
-    max_deviation_pct: Decimal = Decimal("0.005")  # 0.5%
+    max_deviation_pct: Decimal = Decimal("0.005")         # 0.5%
 
-    # Risk/Reward
-    take_profit_pct: Decimal = Decimal("0.002")
-    stop_loss_pct: Decimal = Decimal("0.003")
+    # Risk/Reward - Context Pack 2.0
+    take_profit_pct: Decimal = Decimal("0.0035")  # 0.35% minimum
+    stop_loss_pct: Decimal = Decimal("0.0015")    # 0.15% maximum
 
     # Leverage
     default_leverage: Decimal = Decimal("10.0")
@@ -394,46 +402,63 @@ class MMRHFTConfig(HFTStrategyConfigBase):
 
 
 class MicroBreakoutConfig(HFTStrategyConfigBase):
-    """Micro-Breakout strategy configuration."""
+    """Micro-Breakout 2.0 strategy configuration.
+
+    UPDATED per Context Pack:
+    - Compression detection: compression_ratio < 0.7
+    - Volume >= 2x average
+    - ΔOI >= 5%
+    - ATR-based TP/SL: TP = 1.2 × ATR_5, SL = 0.6 × ATR_5 (RR ≈ 2)
+    """
     enabled: bool = True
     symbols: List[str] = ["BTC", "ETH", "SOL"]
 
     # Primary timeframe to use
     primary_timeframe: str = "M5"  # M1, M5, or M15
 
-    # Timeframe-specific parameters
+    # Timeframe-specific parameters - UPDATED with tighter SL
     timeframe_m1: BreakoutTimeframeParams = BreakoutTimeframeParams(
         range_threshold_pct=Decimal("0.0005"),  # 0.05% range = compressed
         breakout_threshold_pct=Decimal("0.0003"),  # 0.03% beyond range
-        take_profit_pct=Decimal("0.0008"),  # 0.08%
-        stop_loss_pct=Decimal("0.001"),  # 0.1%
+        take_profit_pct=Decimal("0.0040"),  # 0.40% (ATR-based)
+        stop_loss_pct=Decimal("0.0020"),  # 0.20% (ATR-based, RR=2)
         consolidation_bars=15,
     )
     timeframe_m5: BreakoutTimeframeParams = BreakoutTimeframeParams(
         range_threshold_pct=Decimal("0.002"),  # 0.2% range = compressed
         breakout_threshold_pct=Decimal("0.001"),  # 0.1% beyond range
-        take_profit_pct=Decimal("0.003"),  # 0.3%
-        stop_loss_pct=Decimal("0.004"),  # 0.4%
+        take_profit_pct=Decimal("0.0050"),  # 0.50% (ATR-based)
+        stop_loss_pct=Decimal("0.0025"),  # 0.25% (ATR-based, RR=2)
         consolidation_bars=10,
     )
     timeframe_m15: BreakoutTimeframeParams = BreakoutTimeframeParams(
         range_threshold_pct=Decimal("0.005"),  # 0.5% range = compressed
         breakout_threshold_pct=Decimal("0.002"),  # 0.2% beyond range
-        take_profit_pct=Decimal("0.006"),  # 0.6%
-        stop_loss_pct=Decimal("0.008"),  # 0.8%
+        take_profit_pct=Decimal("0.0070"),  # 0.70% (ATR-based)
+        stop_loss_pct=Decimal("0.0035"),  # 0.35% (ATR-based, RR=2)
         consolidation_bars=8,
     )
+
+    # Compression detection - NEW
+    compression_ratio_threshold: Decimal = Decimal("0.7")  # < 0.7 = consolidation
+
+    # Volume/OI confirmation - UPDATED per Context Pack
+    volume_surge_multiplier: Decimal = Decimal("2.0")  # 2x average (was 1.5x)
+    oi_change_threshold_pct: Decimal = Decimal("0.01")  # ΔOI >= 1% (reduced from 5%)
 
     # Legacy (fallback)
     timeframe_seconds: int = 15
     consolidation_bars: int = 10
     range_threshold_pct: Decimal = Decimal("0.002")
     breakout_threshold_pct: Decimal = Decimal("0.001")
-    volume_surge_multiplier: Decimal = Decimal("1.5")
 
-    # Risk/Reward
-    take_profit_pct: Decimal = Decimal("0.003")
-    stop_loss_pct: Decimal = Decimal("0.004")
+    # Risk/Reward - UPDATED per Context Pack (RR ≈ 2)
+    take_profit_pct: Decimal = Decimal("0.0050")  # 0.50%
+    stop_loss_pct: Decimal = Decimal("0.0025")  # 0.25%
+
+    # ATR multipliers for dynamic TP/SL
+    atr_tp_multiplier: Decimal = Decimal("1.2")  # TP = 1.2 × ATR_5
+    atr_sl_multiplier: Decimal = Decimal("0.6")  # SL = 0.6 × ATR_5
 
     # Leverage
     default_leverage: Decimal = Decimal("10.0")
@@ -452,7 +477,7 @@ class PairTradingConfig(HFTStrategyConfigBase):
 
     # Correlation/spread parameters
     lookback_seconds: int = 300  # 5 min for spread calculation
-    zscore_entry_threshold: Decimal = Decimal("2.0")  # Enter when z > 2
+    zscore_entry_threshold: Decimal = Decimal("1.5")  # Enter when z > 1.5 (reduced from 2.0)
     zscore_exit_threshold: Decimal = Decimal("0.5")  # Exit when z < 0.5
     rebalance_interval_seconds: int = 60  # Rebalance every 1 min
 
@@ -472,21 +497,30 @@ class PairTradingConfig(HFTStrategyConfigBase):
 
 
 class LiquidationSnipingConfig(HFTStrategyConfigBase):
-    """Liquidation Sniping strategy configuration."""
+    """Liquidation Sniping 2.0 strategy configuration.
+
+    CORE STRATEGY per Context Pack - triggers only when:
+    - OI spike > 10%
+    - Price spike > ±0.35% in < 60 seconds
+    - Volume spike > 150% of average
+
+    TP = 0.40-0.60%, SL = 0.20% max
+    """
     enabled: bool = True
     symbols: List[str] = ["BTC", "ETH"]
 
-    # Detection parameters
-    oi_spike_threshold_pct: Decimal = Decimal("0.02")  # 2% OI change
+    # Detection parameters - UPDATED per Context Pack
+    oi_spike_threshold_pct: Decimal = Decimal("0.10")  # 10% OI change (was 2%)
     oi_spike_window_seconds: int = 60  # Detect OI spike in 1 min
-    price_spike_threshold_pct: Decimal = Decimal("0.005")  # 0.5% price move
+    price_spike_threshold_pct: Decimal = Decimal("0.0035")  # 0.35% price move (was 0.5%)
+    volume_spike_threshold_pct: Decimal = Decimal("1.2")  # 120% of average volume (reduced from 150%)
 
     # Entry timing
     entry_delay_ms: int = 100  # Wait 100ms after spike detection
 
-    # Risk/Reward
-    take_profit_pct: Decimal = Decimal("0.003")  # 0.3%
-    stop_loss_pct: Decimal = Decimal("0.002")  # 0.2%
+    # Risk/Reward - UPDATED per Context Pack
+    take_profit_pct: Decimal = Decimal("0.005")  # 0.50% (range 0.40-0.60%)
+    stop_loss_pct: Decimal = Decimal("0.002")  # 0.20% max
 
     # Leverage (aggressive)
     default_leverage: Decimal = Decimal("20.0")
@@ -553,7 +587,7 @@ class Settings(BaseSettings):
     # API Keys (from .env)
     hl_private_key: str = Field("", alias="PRIVATE_KEY")
     hl_wallet_address: str = Field("", alias="WALLET_ADDRESS")
-    openai_api_key: str = Field("", alias="OPENAI_API_KEY")
+    deepseek_api_key: str = Field("", alias="DEEPSEEK_API_KEY")
     telegram_bot_token: str = Field("", alias="TELEGRAM_BOT_TOKEN")
     telegram_chat_id: str = Field("", alias="TELEGRAM_CHAT_ID")
 
@@ -635,15 +669,26 @@ class Settings(BaseSettings):
             if "openai" in yaml_config:
                 self.openai = OpenAIConfig(**yaml_config["openai"])
 
-        # Load symbols
-        symbols_file = CONFIG_DIR / "symbols.yaml"
-        if symbols_file.exists():
-            with open(symbols_file) as f:
-                symbols_config = yaml.safe_load(f) or {}
-            self.symbols = {
-                name: SymbolConfig(name=name, **config)
-                for name, config in symbols_config.get("symbols", {}).items()
-            }
+            # Load symbols from config.yaml
+            if "symbols" in yaml_config:
+                symbols_config = yaml_config["symbols"]
+                self.symbols = {
+                    name: SymbolConfig(name=name, **config) if isinstance(config, dict) else SymbolConfig(name=name, enabled=True)
+                    for name, config in symbols_config.items()
+                }
+
+        # Fallback to symbols.yaml if not loaded yet
+        if not self.symbols:
+            symbols_file = CONFIG_DIR / "symbols.yaml"
+            if symbols_file.exists():
+                with open(symbols_file) as f:
+                    symbols_yaml = yaml.safe_load(f) or {}
+                symbols_config = symbols_yaml.get("symbols", {})
+                if symbols_config:
+                    self.symbols = {
+                        name: SymbolConfig(name=name, **config) if isinstance(config, dict) else SymbolConfig(name=name, enabled=True)
+                        for name, config in symbols_config.items()
+                    }
 
     def _sync_env_to_components(self):
         """Sync environment variables to component configs."""
@@ -656,9 +701,9 @@ class Settings(BaseSettings):
             password=self.db_password,
         )
 
-        # OpenAI
-        if self.openai_api_key:
-            self.openai.api_key = self.openai_api_key
+        # DeepSeek
+        if self.deepseek_api_key:
+            self.openai.api_key = self.deepseek_api_key
 
         # Telegram
         if self.telegram_bot_token:

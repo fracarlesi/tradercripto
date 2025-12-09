@@ -45,6 +45,10 @@ class MarketDataLayer:
         self._account_state: Optional[AccountState] = None
         self._last_account_update: Optional[datetime] = None
 
+        # Locks for thread-safe access
+        self._contexts_lock = asyncio.Lock()
+        self._account_lock = asyncio.Lock()
+
         # Update intervals
         self._context_update_interval = 5  # seconds
         self._account_update_interval = 2  # seconds
@@ -147,7 +151,9 @@ class MarketDataLayer:
         while self._running:
             try:
                 await asyncio.sleep(self._context_update_interval)
-                self._market_contexts = await self.rest.get_all_market_contexts(self.symbols)
+                contexts = await self.rest.get_all_market_contexts(self.symbols)
+                async with self._contexts_lock:
+                    self._market_contexts = contexts
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -158,8 +164,10 @@ class MarketDataLayer:
         while self._running:
             try:
                 await asyncio.sleep(self._account_update_interval)
-                self._account_state = await self.rest.get_account_state()
-                self._last_account_update = datetime.now(timezone.utc)
+                account_state = await self.rest.get_account_state()
+                async with self._account_lock:
+                    self._account_state = account_state
+                    self._last_account_update = datetime.now(timezone.utc)
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -250,6 +258,8 @@ class MarketDataLayer:
     # -------------------------------------------------------------------------
     def get_market_context(self, symbol: str) -> Optional[MarketContext]:
         """Get market context for a symbol."""
+        # Note: Reading dict.get() is atomic in Python, but for consistency
+        # with the locking pattern, we could add a lock here too if needed
         return self._market_contexts.get(symbol)
 
     def get_all_market_contexts(self) -> Dict[str, MarketContext]:
@@ -304,13 +314,17 @@ class MarketDataLayer:
     # -------------------------------------------------------------------------
     def get_account_state(self) -> Optional[AccountState]:
         """Get current account state."""
+        # Note: Reading reference is atomic in Python, but the object itself
+        # may be in the process of being replaced during updates
         return self._account_state
 
     async def refresh_account_state(self) -> AccountState:
         """Force refresh account state."""
-        self._account_state = await self.rest.get_account_state()
-        self._last_account_update = datetime.now(timezone.utc)
-        return self._account_state
+        account_state = await self.rest.get_account_state()
+        async with self._account_lock:
+            self._account_state = account_state
+            self._last_account_update = datetime.now(timezone.utc)
+        return account_state
 
     def get_equity(self) -> Decimal:
         """Get current account equity."""

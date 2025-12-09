@@ -1,4 +1,11 @@
-"""Portfolio-level risk management engine with HFT and temporal risk support."""
+"""Portfolio-level risk management engine with HFT and temporal risk support.
+
+UPDATED per requisiti 3.1-3.3:
+- Nuovi limiti di rischio: 1.2% per trade, 5x leverage default, 8x max portfolio, 65% max exposure
+- Circuit breaker 4 livelli con stati RUNNING/PAUSED/STOP_TRADING/HARD_STOP
+- Position sizing dinamico con formula obbligatoria: risk_amount = equity × (risk_pct × aggression_factor)
+- Fee-awareness obbligatoria: TP_lordo - fee_roundtrip >= 0.20%
+"""
 
 import asyncio
 import logging
@@ -6,6 +13,7 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import List, Dict, Optional, Tuple
+from enum import Enum
 
 from ..core.models import (
     ProposedTrade,
@@ -17,11 +25,24 @@ from ..core.models import (
 from ..core.enums import Side, OrderType, OrderStatus, StrategyId, AlertSeverity
 from ..core.exceptions import RiskLimitExceededError
 from ..config.settings import Settings
-from .position_sizer import PositionSizer, HFT_STRATEGIES
+from .position_sizer import PositionSizer, HFT_STRATEGIES, MAKER_FEE_PCT
 from .circuit_breaker import CircuitBreaker
 
 
 logger = logging.getLogger(__name__)
+
+
+# Stati del main loop per il nuovo Circuit Breaker 4 livelli
+class TradingState(str, Enum):
+    """Stati del trading loop."""
+    RUNNING = "running"                # Trading attivo
+    PAUSED = "paused"                  # Pausa temporanea (livelli 1-2)
+    STOP_TRADING = "stop_trading"      # Stop fino al giorno successivo (livello 3)
+    HARD_STOP = "hard_stop"            # Stop definitivo (livello 4)
+
+
+# Fee roundtrip minimo richiesto per HFT (0.20%)
+MIN_NET_PROFIT_AFTER_FEES_PCT = Decimal("0.0020")  # 0.20%
 
 
 # Strategy priority mapping (higher = more priority)
@@ -43,23 +64,30 @@ class RiskEngine:
     """
     Portfolio-level risk management engine with HFT support.
 
+    UPDATED per requisiti 3.1-3.3:
+
     Responsibilities:
-    - Validate proposed trades against risk limits
-    - Calculate position sizes (standard and HFT fee-aware)
+    - Validate proposed trades against risk limits (1.2% per trade, 65% max exposure, 8x max leverage)
+    - Calculate position sizes con formula dinamica: risk_amount = equity × (risk_pct × aggression_factor)
+    - Position sizing dinamico con clamp per max_exposure_per_asset e max_portfolio_leverage
+    - Fee-awareness obbligatoria: TP_lordo - fee_roundtrip >= 0.20% (altrimenti reject)
     - Handle strategy allocation
     - Resolve conflicts between strategies
     - Enforce portfolio-level constraints
-    - Temporal kill-switch management (soft cooldowns)
+    - Circuit breaker 4 livelli con stati RUNNING/PAUSED/STOP_TRADING/HARD_STOP
     - HFT profitability validation (fee-aware)
     """
 
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, aggression_controller=None):
         self.settings = settings
         self.risk_config = settings.risk
 
         # Components
         self.position_sizer = PositionSizer(settings)
         self.circuit_breaker = CircuitBreaker(settings)
+
+        # Aggression controller (opzionale, per dynamic risk adjustment)
+        self._aggression_controller = aggression_controller
 
         # Use global priority mapping
         self.strategy_priority = STRATEGY_PRIORITY
@@ -75,6 +103,16 @@ class RiskEngine:
         self._hft_trade_count = 0
         self._last_hft_reset = datetime.now(timezone.utc)
 
+        # Trading state (per nuovo Circuit Breaker 4 livelli)
+        self._trading_state = TradingState.RUNNING
+
+        logger.info(
+            f"RiskEngine initialized - max_risk_per_trade={self.risk_config.max_risk_per_trade_pct:.2%}, "
+            f"default_leverage={self.risk_config.default_leverage}x, "
+            f"max_portfolio_leverage={self.risk_config.max_portfolio_leverage}x, "
+            f"max_exposure_per_asset={self.risk_config.max_exposure_per_asset_pct:.1%}"
+        )
+
     async def initialize(self, account: AccountState):
         """Initialize risk engine with current account state."""
         await self.circuit_breaker.initialize(account.equity)
@@ -89,6 +127,11 @@ class RiskEngine:
         """
         Process proposed trades and return approved orders.
 
+        UPDATED per requisiti 3.2-3.3:
+        - Verifica trading state (RUNNING/PAUSED/STOP_TRADING/HARD_STOP)
+        - Fee-awareness obbligatoria: TP_lordo - fee_roundtrip >= 0.20%
+        - Position sizing dinamico con aggression_factor
+
         Args:
             proposals: List of trade proposals from strategies
             account: Current account state
@@ -98,21 +141,19 @@ class RiskEngine:
         Returns:
             List of approved orders ready for execution
         """
-        # Update circuit breaker (includes temporal kill-switch)
+        # 1. Update circuit breaker (includes temporal kill-switch + nuovo 4-livelli)
         can_trade = await self.circuit_breaker.update(account.equity)
-        if not can_trade:
-            # Check if it's a temporal cooldown vs hard circuit breaker
-            if self.circuit_breaker.is_temporal_cooldown():
-                cooldown_remaining = self.circuit_breaker.get_temporal_cooldown_remaining()
-                logger.warning(
-                    f"Temporal kill-switch active - cooldown {cooldown_remaining}s remaining. "
-                    "Rejecting new proposals."
-                )
-            else:
-                logger.warning("Hard circuit breaker triggered - rejecting all proposals")
+
+        # Determina trading state dal circuit breaker
+        self._update_trading_state(account)
+
+        # Se non possiamo fare trading, rigetta tutte le proposte
+        if not can_trade or self._trading_state != TradingState.RUNNING:
+            state_msg = self._get_state_message()
+            logger.warning(f"Trading not allowed - {state_msg}. Rejecting all proposals.")
             return []
 
-        # Check position count limit
+        # 2. Check position count limit
         if account.position_count >= self.risk_config.max_open_positions:
             logger.warning(
                 f"Max positions ({self.risk_config.max_open_positions}) reached - "
@@ -125,20 +166,23 @@ class RiskEngine:
 
         atrs = atrs or {}
 
-        # 1. Filter out invalid proposals
+        # 3. Filter out invalid proposals
         valid_proposals = self._filter_valid_proposals(proposals, prices)
 
-        # 2. Resolve conflicts (same symbol, opposite directions)
-        resolved_proposals = self._resolve_conflicts(valid_proposals, account)
+        # 4. Fee-awareness obbligatoria: filtra proposte con TP insufficiente
+        fee_valid_proposals = self._filter_fee_aware_proposals(valid_proposals, prices)
 
-        # 3. Sort by priority
+        # 5. Resolve conflicts (same symbol, opposite directions)
+        resolved_proposals = self._resolve_conflicts(fee_valid_proposals, account)
+
+        # 6. Sort by priority
         sorted_proposals = sorted(
             resolved_proposals,
             key=lambda p: self.strategy_priority.get(p.strategy_id, 0),
             reverse=True,
         )
 
-        # 4. Process each proposal
+        # 7. Process each proposal con nuovo position sizing dinamico
         approved_orders = []
         simulated_account = self._clone_account(account)
 
@@ -160,8 +204,108 @@ class RiskEngine:
             except Exception as e:
                 logger.error(f"Error processing proposal: {e}")
 
-        logger.info(f"Processed {len(proposals)} proposals -> {len(approved_orders)} approved")
+        logger.info(
+            f"Processed {len(proposals)} proposals -> {len(approved_orders)} approved "
+            f"(state: {self._trading_state.value})"
+        )
         return approved_orders
+
+    def _update_trading_state(self, account: AccountState):
+        """
+        Aggiorna trading state basandosi sul circuit breaker.
+
+        Nuovo modello 4 livelli:
+        - RUNNING: tutto OK, trading attivo
+        - PAUSED: livello 1-2 attivo (pausa temporanea)
+        - STOP_TRADING: livello 3 attivo (stop fino al giorno successivo)
+        - HARD_STOP: livello 4 attivo (stop definitivo, -35% drawdown)
+        """
+        cb_state = self.circuit_breaker.state
+
+        # Livello 4: Hard stop (-35% total drawdown)
+        if cb_state.total_drawdown_pct >= self.risk_config.max_total_drawdown_pct:
+            self._trading_state = TradingState.HARD_STOP
+            return
+
+        # Livello 3: Stop trading (-10% in 4h)
+        if cb_state.temporal_kill_switch_active and cb_state.active_kill_switch_level:
+            level_name = cb_state.active_kill_switch_level.value
+            if level_name == "level_3":
+                self._trading_state = TradingState.STOP_TRADING
+                return
+
+        # Livelli 1-2: Pausa temporanea
+        if cb_state.temporal_kill_switch_active:
+            self._trading_state = TradingState.PAUSED
+            return
+
+        # Tutto OK
+        self._trading_state = TradingState.RUNNING
+
+    def _get_state_message(self) -> str:
+        """Ottieni messaggio descrittivo dello stato attuale."""
+        if self._trading_state == TradingState.RUNNING:
+            return "Trading active"
+        elif self._trading_state == TradingState.PAUSED:
+            cooldown = self.circuit_breaker.get_cooldown_remaining()
+            return f"Paused (cooldown: {cooldown}s)"
+        elif self._trading_state == TradingState.STOP_TRADING:
+            return "Stop trading until next day (level 3 triggered)"
+        elif self._trading_state == TradingState.HARD_STOP:
+            return "Hard stop (level 4: -35% drawdown)"
+        return "Unknown state"
+
+    def _filter_fee_aware_proposals(
+        self,
+        proposals: List[ProposedTrade],
+        prices: Dict[str, Decimal],
+    ) -> List[ProposedTrade]:
+        """
+        Filtra proposte con TP insufficiente per coprire le fee.
+
+        Fee-awareness obbligatoria per requisito 3.3:
+        TP_lordo - fee_roundtrip >= 0.20%
+
+        Altrimenti il trade è rigettato dal Risk Engine.
+        """
+        valid = []
+        for p in proposals:
+            if not p.take_profit_price or p.take_profit_price <= 0:
+                logger.warning(f"Proposal {p.symbol} rejected: no TP price")
+                continue
+
+            current_price = prices.get(p.symbol)
+            if not current_price or current_price <= 0:
+                continue
+
+            # Calcola TP lordo in %
+            if p.side == Side.LONG:
+                tp_gross_pct = (p.take_profit_price - current_price) / current_price
+            else:
+                tp_gross_pct = (current_price - p.take_profit_price) / current_price
+
+            # Fee roundtrip = 2 × maker_fee (assumiamo maker-only ALO)
+            fee_roundtrip_pct = MAKER_FEE_PCT * 2  # 0.0002 * 2 = 0.0004 (0.04%)
+
+            # TP netto dopo fee
+            tp_net_pct = tp_gross_pct - fee_roundtrip_pct
+
+            # Verifica soglia minima: 0.20%
+            if tp_net_pct < MIN_NET_PROFIT_AFTER_FEES_PCT:
+                logger.warning(
+                    f"Proposal {p.symbol} rejected by fee-awareness: "
+                    f"TP_net={tp_net_pct:.4%} < min_required={MIN_NET_PROFIT_AFTER_FEES_PCT:.2%} "
+                    f"(TP_gross={tp_gross_pct:.4%}, fees={fee_roundtrip_pct:.4%})"
+                )
+                continue
+
+            valid.append(p)
+
+        logger.debug(
+            f"Fee-aware filter: {len(proposals)} -> {len(valid)} proposals "
+            f"(rejected {len(proposals) - len(valid)} with insufficient TP)"
+        )
+        return valid
 
     def _filter_valid_proposals(
         self,
@@ -252,7 +396,13 @@ class RiskEngine:
         prices: Dict[str, Decimal],
         atrs: Dict[str, Decimal],
     ) -> Optional[ApprovedOrder]:
-        """Process a single proposal into an approved order."""
+        """
+        Process a single proposal into an approved order.
+
+        UPDATED per requisito 3.3 - Position sizing dinamico:
+        Formula obbligatoria: risk_amount = equity × (risk_per_trade_pct × aggression_factor)
+        Con clamp per max_exposure_per_asset e max_portfolio_leverage.
+        """
         current_price = prices[proposal.symbol]
         atr = atrs.get(proposal.symbol)
         is_hft = self.position_sizer.is_hft_strategy(proposal.strategy_id)
@@ -266,12 +416,17 @@ class RiskEngine:
                 # Need to close first (or flip)
                 return self._create_close_order(existing_pos, proposal)
 
-            # Same direction - check if we should add
-            # For now, don't add to existing positions
-            logger.info(f"Already have {existing_pos.side.value} position on {proposal.symbol}")
-            return None
+            # Same direction - allow pyramid scaling (scale into winning positions)
+            # NOTE: Pyramid scaling enabled - allows adding to existing same-direction positions
+            # This can increase profits in trending markets but also amplifies risk
+            logger.info(
+                f"Already have {existing_pos.side.value} position on {proposal.symbol} - "
+                f"allowing pyramid scaling for additional entry"
+            )
+            # Continue processing to allow the trade (removed return None)
 
-        # HFT-specific validation: check profitability after fees
+        # HFT-specific validation: check profitability after fees (già fatto in _filter_fee_aware_proposals)
+        # Ma double-check per sicurezza
         if is_hft:
             if not self.position_sizer.validate_hft_profitability(proposal, current_price):
                 logger.warning(
@@ -292,26 +447,78 @@ class RiskEngine:
                 limit_value=float(account.equity),
             )
 
-        # 2. Calculate position size (use HFT sizing for HFT strategies)
-        if is_hft:
-            size = self.position_sizer.calculate_hft_size(
-                proposal,
-                account,
-                current_price,
-            )
+        # 2. NUOVO: Calcola aggression_factor dall'aggression controller (se disponibile)
+        aggression_factor = Decimal("1.0")
+        if self._aggression_controller:
+            aggression_factor = self._aggression_controller.get_strategy_risk_multiplier(proposal.strategy_id)
+            logger.debug(f"Using aggression_factor={aggression_factor} for {proposal.strategy_id.value}")
+
+        # 3. NUOVO: Position sizing dinamico con formula obbligatoria
+        # risk_amount = equity × (risk_per_trade_pct × aggression_factor)
+        base_risk_pct = self.risk_config.max_risk_per_trade_pct
+        adjusted_risk_pct = base_risk_pct * aggression_factor
+        risk_amount = account.equity * adjusted_risk_pct
+
+        # 4. Calcola SL percentage
+        if proposal.stop_loss_price and proposal.stop_loss_price > 0:
+            sl_pct = abs(current_price - proposal.stop_loss_price) / current_price
         else:
-            size = self.position_sizer.calculate_size(
-                proposal,
-                account,
-                current_price,
-                atr=atr,
+            # Default 0.5% SL per HFT (max_sl_pct dalla config)
+            trade_params = getattr(self.settings, 'trade_params', None)
+            if trade_params:
+                sl_pct = trade_params.max_sl_pct
+            else:
+                sl_pct = Decimal("0.005")  # 0.5%
+
+        # 5. NUOVO: Calcola notional con formula: notional = risk_amount / SL_pct
+        if sl_pct > 0:
+            notional = risk_amount / sl_pct
+        else:
+            logger.warning(f"SL_pct is 0 for {proposal.symbol}, using fallback sizing")
+            notional = account.equity * Decimal("0.02")  # Fallback: 2% of equity
+
+        # 6. CLAMP: Applica max_exposure_per_asset
+        max_exposure = account.equity * self.risk_config.max_exposure_per_asset_pct
+        asset_exposure = self._get_asset_exposure(proposal.symbol, account)
+        available_exposure = max_exposure - asset_exposure
+
+        if available_exposure <= 0:
+            raise RiskLimitExceededError(
+                f"Max exposure for {proposal.symbol} reached",
+                limit_type="asset_concentration",
+                current_value=float(asset_exposure),
+                limit_value=float(max_exposure),
             )
 
-        if size <= 0:
-            logger.warning(f"Calculated size is 0 for {proposal.symbol}")
-            return None
+        # Clamp notional to available exposure
+        notional = min(notional, available_exposure)
 
-        # 3. Adjust for correlation
+        # 7. CLAMP: Applica max_portfolio_leverage
+        # Calcola leverage implicito
+        portfolio_notional = account.total_position_value + notional
+        if account.equity > 0:
+            implied_leverage = portfolio_notional / account.equity
+        else:
+            implied_leverage = Decimal(0)
+
+        if implied_leverage > self.risk_config.max_portfolio_leverage:
+            # Riduci notional per rispettare max portfolio leverage
+            max_additional_notional = (
+                account.equity * self.risk_config.max_portfolio_leverage - account.total_position_value
+            )
+            if max_additional_notional <= 0:
+                raise RiskLimitExceededError(
+                    "Would exceed max portfolio leverage",
+                    limit_type="portfolio_leverage",
+                    current_value=float(account.current_leverage),
+                    limit_value=float(self.risk_config.max_portfolio_leverage),
+                )
+            notional = min(notional, max_additional_notional)
+
+        # 8. Calcola size da notional
+        size = notional / current_price
+
+        # 9. Adjust for correlation
         size = self.position_sizer.adjust_for_correlation(
             size,
             proposal,
@@ -319,51 +526,52 @@ class RiskEngine:
             self._get_correlations_for_symbol(proposal.symbol),
         )
 
-        # 4. Check portfolio leverage
-        if not self.position_sizer.check_portfolio_leverage(size, current_price, account):
-            raise RiskLimitExceededError(
-                "Would exceed max portfolio leverage",
-                limit_type="portfolio_leverage",
-                current_value=float(account.current_leverage),
-                limit_value=float(self.risk_config.max_portfolio_leverage),
-            )
+        # 10. Apply confidence scaling
+        size *= proposal.confidence
 
-        # 5. Check asset concentration
-        asset_exposure = self._get_asset_exposure(proposal.symbol, account)
-        new_exposure = asset_exposure + (size * current_price)
-        max_exposure = account.equity * self.risk_config.max_exposure_per_asset_pct
+        # 11. Round to symbol decimals
+        symbol_config = self.settings.symbols.get(proposal.symbol)
+        if symbol_config:
+            from decimal import ROUND_DOWN
+            decimals = symbol_config.size_decimals
+            quantizer = Decimal(10) ** -decimals
+            size = size.quantize(quantizer, rounding=ROUND_DOWN)
 
-        if new_exposure > max_exposure:
-            # Reduce size to fit
-            available_exposure = max_exposure - asset_exposure
-            if available_exposure <= 0:
-                raise RiskLimitExceededError(
-                    f"Max exposure for {proposal.symbol} reached",
-                    limit_type="asset_concentration",
-                    current_value=float(asset_exposure),
-                    limit_value=float(max_exposure),
+            # Check minimum size
+            if size < symbol_config.min_size:
+                logger.warning(
+                    f"Calculated size {size} below minimum {symbol_config.min_size} for {proposal.symbol}"
                 )
-            size = available_exposure / current_price
+                return None
 
-        # 6. Calculate leverage used (use HFT leverage for HFT strategies)
-        if is_hft:
-            leverage = self.position_sizer.get_hft_leverage(proposal.strategy_id)
-            max_leverage = self.position_sizer.get_max_hft_leverage(proposal.strategy_id)
-            leverage = min(leverage, max_leverage)
+        if size <= 0:
+            logger.warning(f"Calculated size is 0 for {proposal.symbol}")
+            return None
+
+        # 12. Calculate leverage used
+        final_notional = size * current_price
+        if account.equity > 0:
+            leverage = final_notional / account.equity
         else:
-            leverage = self.position_sizer.calculate_leverage(
-                size, current_price, account, proposal.symbol
-            )
+            leverage = self.risk_config.default_leverage
 
-        # 7. Calculate risk amount
+        # Cap leverage at configured limits
+        max_leverage = self.risk_config.default_leverage
+        if is_hft:
+            hft_config = self.position_sizer.get_hft_config(proposal.strategy_id)
+            if hft_config:
+                max_leverage = getattr(hft_config, 'default_leverage', max_leverage)
+
+        leverage = min(leverage, max_leverage)
+
+        # 13. Calculate final risk amount based on actual size
         if proposal.stop_loss_price:
             stop_distance = abs(current_price - proposal.stop_loss_price)
-            risk_amount = size * stop_distance
+            final_risk_amount = size * stop_distance
         else:
-            # Estimate 2% as default stop
-            risk_amount = size * current_price * Decimal("0.02")
+            final_risk_amount = size * current_price * sl_pct
 
-        # 8. Create approved order
+        # 14. Create approved order
         order = ApprovedOrder(
             order_id=str(uuid.uuid4())[:8],
             strategy_id=proposal.strategy_id,
@@ -376,12 +584,13 @@ class RiskEngine:
             take_profit_price=proposal.take_profit_price,
             status=OrderStatus.PENDING,
             leverage_used=leverage,
-            risk_amount=risk_amount,
+            risk_amount=final_risk_amount,
         )
 
         logger.info(
-            f"Approved: {order.side.value} {order.size} {order.symbol} "
-            f"@ {current_price} (leverage: {leverage:.1f}x, risk: ${risk_amount:.2f})"
+            f"Approved: {order.side.value} {order.size} {order.symbol} @ {current_price} | "
+            f"leverage={leverage:.1f}x, risk=${final_risk_amount:.2f} ({adjusted_risk_pct:.2%}), "
+            f"aggression={aggression_factor}, notional=${final_notional:.2f}"
         )
 
         return order
@@ -465,17 +674,35 @@ class RiskEngine:
     # -------------------------------------------------------------------------
     # Utility Methods
     # -------------------------------------------------------------------------
+    def get_trading_state(self) -> TradingState:
+        """Get current trading state."""
+        return self._trading_state
+
+    def can_trade(self) -> bool:
+        """Check if trading is allowed based on current state."""
+        return self._trading_state == TradingState.RUNNING
+
     def get_portfolio_metrics(self, account: AccountState) -> Dict:
-        """Get current portfolio risk metrics."""
+        """
+        Get current portfolio risk metrics.
+
+        UPDATED per requisito 3.1-3.2: include nuovi limiti e trading state.
+        """
         return {
             "equity": float(account.equity),
             "total_position_value": float(account.total_position_value),
             "current_leverage": float(account.current_leverage),
             "max_leverage": float(self.risk_config.max_portfolio_leverage),
+            "default_leverage": float(self.risk_config.default_leverage),
+            "max_risk_per_trade_pct": float(self.risk_config.max_risk_per_trade_pct),
+            "max_exposure_per_asset_pct": float(self.risk_config.max_exposure_per_asset_pct),
             "position_count": account.position_count,
+            "max_open_positions": self.risk_config.max_open_positions,
             "unrealized_pnl": float(account.total_unrealized_pnl),
             "daily_pnl_pct": float(account.daily_pnl_pct),
             "circuit_breaker": self.circuit_breaker.get_risk_metrics(),
+            "trading_state": self._trading_state.value,
+            "trading_state_message": self._get_state_message(),
         }
 
     def get_strategy_exposure(self, account: AccountState) -> Dict[str, float]:
@@ -560,14 +787,28 @@ class RiskEngine:
         """
         Validate HFT proposal before processing.
 
+        UPDATED per requisito 3.3: include fee-awareness check (0.20% min net profit).
+
         Returns (is_valid, reason) tuple.
         """
         if not self.is_hft_strategy(proposal.strategy_id):
             return True, "Not HFT strategy"
 
-        # Check profitability
-        if not self.position_sizer.validate_hft_profitability(proposal, current_price):
-            return False, "TP too small to cover fees"
+        # Check profitability after fees (0.20% min)
+        if not proposal.take_profit_price or proposal.take_profit_price <= 0:
+            return False, "No TP price"
+
+        # Calcola TP netto
+        if proposal.side == Side.LONG:
+            tp_gross_pct = (proposal.take_profit_price - current_price) / current_price
+        else:
+            tp_gross_pct = (current_price - proposal.take_profit_price) / current_price
+
+        fee_roundtrip_pct = MAKER_FEE_PCT * 2
+        tp_net_pct = tp_gross_pct - fee_roundtrip_pct
+
+        if tp_net_pct < MIN_NET_PROFIT_AFTER_FEES_PCT:
+            return False, f"TP_net {tp_net_pct:.4%} < 0.20% (after fees)"
 
         # Check strategy is enabled
         strategy_config = self.settings.get_strategy_config(proposal.strategy_id)
@@ -575,3 +816,8 @@ class RiskEngine:
             return False, f"Strategy {proposal.strategy_id.value} disabled"
 
         return True, "Valid"
+
+    def set_aggression_controller(self, aggression_controller):
+        """Set aggression controller for dynamic risk adjustment."""
+        self._aggression_controller = aggression_controller
+        logger.info("Aggression controller connected to RiskEngine")

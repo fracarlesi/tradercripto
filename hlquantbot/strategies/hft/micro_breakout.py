@@ -21,23 +21,46 @@ logger = logging.getLogger(__name__)
 
 class MicroBreakoutStrategy(HFTBaseStrategy):
     """
-    Micro-Breakout HFT Strategy (Multi-Timeframe).
+    Breakout Strategy 2.0 - HFT Compression Breakout with ATR-based TP/SL.
 
-    Logic:
-    - Detect price consolidation (low range compression)
-    - Wait for breakout with volume confirmation
-    - Enter in breakout direction
-    - Parameters adjust based on timeframe (M1, M5, M15)
+    PHASE 1 - Compression Detection:
+    --------------------------------
+    Identifies tight consolidation using compression ratio:
+    - range_30 = max_high_30 - min_low_30
+    - compression_ratio = range_30 / EMA(range_30, 30)
+    - Trigger: ratio < 0.7 (tight compression)
+
+    PHASE 2 - Breakout Validation:
+    --------------------------------
+    A breakout is valid ONLY if ALL conditions are met:
+    1. Volume >= 2x media 20 barre (200% volume surge)
+    2. ΔOI >= 5% (Open Interest change confirms momentum)
+
+    TP/SL CALCULATION:
+    -----------------
+    Dynamic ATR-based risk/reward:
+    - TP = entry ± 1.2 × ATR_5 (approx 0.35%+)
+    - SL = entry ∓ 0.6 × ATR_5 (approx 0.20% max)
+    - Target RR ≈ 2.0
+
+    GLOBAL CONSTRAINTS:
+    ------------------
+    All trades must satisfy:
+    - MIN_TP = 0.35% (gross)
+    - MAX_SL = 0.20%
+    - MIN_RR = 1.5
+    - Fee-aware: TP_net = TP_gross - 0.04% >= 0.20%
 
     Timeframe-specific behavior:
-    - M1: Tight ranges (0.05%), fast breakouts
-    - M5: Medium ranges (0.2%), balanced
-    - M15: Wider ranges (0.5%), swing-like
+    - M1: Ultra-fast breakouts, tight compression
+    - M5: Balanced breakouts (default)
+    - M15: Swing-style breakouts
 
     Ideal conditions:
-    - After consolidation periods
-    - High volume on breakout
-    - Clear support/resistance levels
+    - Compression ratio < 0.7 (tight range)
+    - Volume spike >= 2x average
+    - OI increase >= 5%
+    - Clear directional move after consolidation
     """
 
     def __init__(self, settings: Settings):
@@ -54,10 +77,17 @@ class MicroBreakoutStrategy(HFTBaseStrategy):
         self.consolidation_bars = params['consolidation_bars']
         self.range_threshold_pct = params['range_threshold_pct']
         self.breakout_threshold_pct = params['breakout_threshold_pct']
-        self.volume_surge_multiplier = self._get_param('volume_surge_multiplier', Decimal("1.5"))
+        self.volume_surge_multiplier = self._get_param('volume_surge_multiplier', Decimal("2.0"))
+
+        # Breakout Strategy 2.0 parameters
+        self.oi_change_threshold_pct = self._get_param('oi_change_threshold_pct', Decimal("0.05"))  # ΔOI >= 5% (exact)
+        self.compression_ratio_threshold = self._get_param('compression_ratio_threshold', Decimal("0.7"))  # Compression < 0.7
+        self.atr_tp_multiplier = self._get_param('atr_tp_multiplier', Decimal("1.2"))  # TP = 1.2 × ATR_5
+        self.atr_sl_multiplier = self._get_param('atr_sl_multiplier', Decimal("0.6"))  # SL = 0.6 × ATR_5
 
         # Tracking
         self._consolidation_ranges: dict = {}  # symbol -> (low, high)
+        self._oi_history: dict = {}  # symbol -> [(timestamp, oi)]
 
         logger.info(
             f"Micro-Breakout initialized with timeframe {self.primary_timeframe.value}: "
@@ -172,16 +202,21 @@ class MicroBreakoutStrategy(HFTBaseStrategy):
         position: Optional[Position] = None,
     ) -> Optional[ProposedTrade]:
         """
-        Evaluate Micro-Breakout strategy.
+        Evaluate Breakout Strategy 2.0.
 
-        Phase 1: Detect consolidation
-        - Range over N bars < threshold
-        - Store consolidation range
+        Phase 1: Compression Detection
+        - Calculate 30-bar range: range_30 = max_high_30 - min_low_30
+        - Calculate EMA of historical ranges
+        - compression_ratio = range_30 / EMA(range_30, 30)
+        - Trigger when ratio < 0.7 (tight compression)
 
-        Phase 2: Detect breakout
+        Phase 2: Breakout Validation
         - Price breaks above/below consolidation range
-        - Volume confirms breakout
-        - Enter in breakout direction
+        - Volume >= 2x media 20 barre (200% surge)
+        - ΔOI >= 5% (Open Interest confirms momentum)
+        - Calculate ATR_5 based TP/SL
+        - Validate global constraints (MIN_TP, MAX_SL, MIN_RR, fee-aware)
+        - Enter in breakout direction if all conditions met
         """
         # Need enough bars
         if len(bars) < self.consolidation_bars + 2:
@@ -203,6 +238,11 @@ class MicroBreakoutStrategy(HFTBaseStrategy):
         if not current_price or current_price == 0:
             return None
 
+        # Track OI history for ΔOI check
+        open_interest = getattr(context, 'open_interest', None)
+        if open_interest:
+            self._update_oi_history(symbol, open_interest)
+
         # Check for consolidation
         consolidation = self._detect_consolidation(bars, symbol)
         if consolidation:
@@ -214,36 +254,165 @@ class MicroBreakoutStrategy(HFTBaseStrategy):
 
         return None
 
+    def _update_oi_history(self, symbol: str, oi: Decimal):
+        """Track OI history for ΔOI calculation."""
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+
+        if symbol not in self._oi_history:
+            self._oi_history[symbol] = []
+
+        self._oi_history[symbol].append((now, oi))
+
+        # Keep last 10 minutes of data
+        cutoff = now.timestamp() - 600
+        self._oi_history[symbol] = [
+            (ts, o) for ts, o in self._oi_history[symbol]
+            if ts.timestamp() >= cutoff
+        ]
+
+    def _check_oi_change(self, symbol: str) -> bool:
+        """
+        Breakout Strategy 2.0 - Phase 2: OI Validation.
+
+        A breakout is valid only if:
+        - ΔOI >= 5% (absolute change, directional)
+
+        Returns True if OI change confirms breakout momentum.
+        """
+        oi_history = self._oi_history.get(symbol, [])
+        if len(oi_history) < 2:
+            logger.debug(f"OI check: Not enough data for {symbol}, allowing trade")
+            return True  # Not enough data, allow trade
+
+        oldest_oi = oi_history[0][1]
+        current_oi = oi_history[-1][1]
+
+        if oldest_oi == 0:
+            result = current_oi > 0
+            logger.debug(f"OI check: oldest_oi=0, current_oi={current_oi}, result={result}")
+            return result
+
+        # Calculate absolute OI change percentage
+        oi_change_pct = abs((current_oi - oldest_oi) / oldest_oi)
+        is_valid = oi_change_pct >= Decimal("0.05")  # Exactly 5%
+
+        logger.debug(
+            f"OI check: oldest={oldest_oi}, current={current_oi}, "
+            f"change={oi_change_pct:.2%}, valid={is_valid} (need >=5%)"
+        )
+
+        return is_valid
+
+    def _calculate_atr(self, bars: List[Bar], period: int = 5) -> Decimal:
+        """
+        Calculate Average True Range for dynamic TP/SL.
+
+        Breakout Strategy 2.0 uses ATR_5 (5-period ATR) for:
+        - TP = 1.2 × ATR_5
+        - SL = 0.6 × ATR_5
+        - Target RR ≈ 2
+        """
+        if len(bars) < period + 1:
+            return Decimal("0")
+
+        tr_values = []
+        for i in range(-period, 0):
+            high = bars[i].high
+            low = bars[i].low
+            prev_close = bars[i - 1].close
+
+            tr = max(
+                high - low,
+                abs(high - prev_close),
+                abs(low - prev_close)
+            )
+            tr_values.append(tr)
+
+        return sum(tr_values) / len(tr_values)
+
+    def _calculate_ema(self, values: List[Decimal], period: int) -> Decimal:
+        """
+        Calculate Exponential Moving Average.
+
+        Used for compression ratio calculation (EMA of range_30).
+        """
+        if len(values) < period:
+            # Fallback to SMA if not enough data
+            return sum(values) / len(values) if values else Decimal(0)
+
+        multiplier = Decimal("2") / (period + 1)
+        ema = values[0]  # Start with first value
+
+        for value in values[1:]:
+            ema = (value * multiplier) + (ema * (1 - multiplier))
+
+        return ema
+
     def _detect_consolidation(
         self,
         bars: List[Bar],
         symbol: str,
     ) -> Optional[Tuple[Decimal, Decimal]]:
         """
-        Detect if we're in a consolidation pattern.
+        Breakout Strategy 2.0 - Phase 1: Compression Detection.
+
+        Detects consolidation using compression ratio:
+        - range_30 = max_high_30 - min_low_30
+        - compression_ratio = range_30 / EMA(range_30, 30)
+        - Trigger when ratio < 0.7 (tight compression)
 
         Returns (low, high) of consolidation range if detected.
         """
-        # Use consolidation_bars for range detection
-        recent_bars = bars[-self.consolidation_bars:]
+        # Need at least 30 bars for compression detection
+        if len(bars) < 30:
+            return None
 
-        range_high = max(b.high for b in recent_bars)
-        range_low = min(b.low for b in recent_bars)
+        # Phase 1: Calculate 30-bar range
+        lookback_30 = bars[-30:]
+        max_high_30 = max(b.high for b in lookback_30)
+        min_low_30 = min(b.low for b in lookback_30)
+        range_30 = max_high_30 - min_low_30
 
-        # Check if range is tight enough
-        range_pct = (range_high - range_low) / range_low if range_low > 0 else Decimal(0)
+        # Calculate historical ranges for EMA
+        range_history = []
+        for i in range(len(bars) - 30, len(bars)):
+            if i < 30:
+                continue
+            window = bars[i-30:i]
+            window_high = max(b.high for b in window)
+            window_low = min(b.low for b in window)
+            range_history.append(window_high - window_low)
+
+        if not range_history:
+            return None
+
+        # Calculate EMA of range_30
+        ema_range = self._calculate_ema(range_history, min(30, len(range_history)))
+
+        # Calculate compression ratio
+        if ema_range == 0:
+            return None
+
+        compression_ratio = range_30 / ema_range
 
         # Log periodically for debugging (every ~30 calls per symbol)
         if hash(f"{symbol}{int(bars[-1].timestamp.timestamp()) // 30}") % 30 == 0:
             logger.info(
-                f"Micro-Breakout Check [{self.primary_timeframe.value}]: {symbol} | "
-                f"Range: {range_pct:.4%} | Threshold: {self.range_threshold_pct:.4%}"
+                f"Micro-Breakout Compression Check [{self.primary_timeframe.value}]: {symbol} | "
+                f"Range_30: {range_30:.2f} | EMA_Range: {ema_range:.2f} | "
+                f"Compression Ratio: {compression_ratio:.3f} | Threshold: {self.compression_ratio_threshold:.3f}"
             )
 
-        if range_pct <= self.range_threshold_pct:
-            # Store consolidation range
-            self._consolidation_ranges[symbol] = (range_low, range_high)
-            return (range_low, range_high)
+        # Trigger compression when ratio < 0.7
+        if compression_ratio < self.compression_ratio_threshold:
+            # Store consolidation range (30-bar high/low)
+            self._consolidation_ranges[symbol] = (min_low_30, max_high_30)
+            logger.info(
+                f"Micro-Breakout: {symbol} COMPRESSION DETECTED | "
+                f"Ratio: {compression_ratio:.3f} | Range: [{min_low_30:.2f}, {max_high_30:.2f}]"
+            )
+            return (min_low_30, max_high_30)
 
         # Check if we have a stored consolidation that's still valid
         stored = self._consolidation_ranges.get(symbol)
@@ -269,7 +438,14 @@ class MicroBreakoutStrategy(HFTBaseStrategy):
         cons_high: Decimal,
         context: MarketContext,
     ) -> Optional[ProposedTrade]:
-        """Check if price has broken out of consolidation range."""
+        """
+        Breakout Strategy 2.0 - Phase 2: Breakout Detection and Validation.
+
+        Validates breakout with:
+        1. Volume >= 2x media 20 barre
+        2. ΔOI >= 5%
+        3. ATR-based TP/SL with global constraints
+        """
         # Calculate breakout thresholds
         range_size = cons_high - cons_low
         breakout_amount = (cons_high + cons_low) / 2 * self.breakout_threshold_pct
@@ -291,9 +467,71 @@ class MicroBreakoutStrategy(HFTBaseStrategy):
         if not side:
             return None
 
-        # Volume confirmation
+        # Phase 2 Validation: Volume confirmation (>= 2x average 20 bars)
         if not self._check_volume_surge(bars):
-            logger.debug(f"Micro-Breakout: {symbol} breakout without volume, skipping")
+            logger.debug(f"Micro-Breakout: {symbol} breakout without volume surge, skipping")
+            return None
+
+        # Phase 2 Validation: OI change confirmation (ΔOI >= 5%)
+        if not self._check_oi_change(symbol):
+            logger.debug(f"Micro-Breakout: {symbol} breakout without OI change, skipping")
+            return None
+
+        # Calculate ATR_5 for dynamic TP/SL
+        atr_5 = self._calculate_atr(bars, period=5)
+        if atr_5 == 0:
+            logger.warning(f"Micro-Breakout: {symbol} ATR_5 is zero, skipping")
+            return None
+
+        # Calculate ATR-based TP/SL
+        # TP = 1.2 × ATR_5, SL = 0.6 × ATR_5 (RR ≈ 2)
+        if side == Side.LONG:
+            tp_price = current_price + (atr_5 * self.atr_tp_multiplier)
+            sl_price = current_price - (atr_5 * self.atr_sl_multiplier)
+        else:
+            tp_price = current_price - (atr_5 * self.atr_tp_multiplier)
+            sl_price = current_price + (atr_5 * self.atr_sl_multiplier)
+
+        # Calculate TP/SL percentages
+        tp_pct = abs((tp_price - current_price) / current_price)
+        sl_pct = abs((sl_price - current_price) / current_price)
+
+        # Global Constraints Validation
+        MIN_TP = Decimal("0.0035")  # 0.35%
+        MAX_SL = Decimal("0.0020")  # 0.20%
+        MIN_RR = Decimal("1.5")
+        MAKER_FEE_ROUNDTRIP = Decimal("0.0004")  # 0.02% × 2 = 0.04%
+        MIN_NET_TP = Decimal("0.0020")  # 0.20% net after fees
+
+        # Check MIN_TP constraint
+        if tp_pct < MIN_TP:
+            logger.debug(
+                f"Micro-Breakout: {symbol} TP too small: {tp_pct:.4%} < {MIN_TP:.4%}, skipping"
+            )
+            return None
+
+        # Check MAX_SL constraint
+        if sl_pct > MAX_SL:
+            logger.debug(
+                f"Micro-Breakout: {symbol} SL too large: {sl_pct:.4%} > {MAX_SL:.4%}, skipping"
+            )
+            return None
+
+        # Check MIN_RR constraint
+        risk_reward = tp_pct / sl_pct if sl_pct > 0 else Decimal("0")
+        if risk_reward < MIN_RR:
+            logger.debug(
+                f"Micro-Breakout: {symbol} RR too low: {risk_reward:.2f} < {MIN_RR:.2f}, skipping"
+            )
+            return None
+
+        # Check fee-awareness: TP_gross - fees >= MIN_NET_TP
+        net_tp = tp_pct - MAKER_FEE_ROUNDTRIP
+        if net_tp < MIN_NET_TP:
+            logger.debug(
+                f"Micro-Breakout: {symbol} Net TP too small after fees: "
+                f"{net_tp:.4%} < {MIN_NET_TP:.4%}, skipping"
+            )
             return None
 
         # Clear stored consolidation
@@ -311,10 +549,12 @@ class MicroBreakoutStrategy(HFTBaseStrategy):
         logger.info(
             f"Micro-Breakout Signal: {symbol} {side.value} | "
             f"Price: {current_price} | Range: [{cons_low:.2f}, {cons_high:.2f}] | "
-            f"Strength: {breakout_strength:.2%}"
+            f"Strength: {breakout_strength:.2%} | ATR_5: {atr_5:.4f} | "
+            f"TP: {tp_pct:.4%} | SL: {sl_pct:.4%} | RR: {risk_reward:.2f} | "
+            f"Net TP: {net_tp:.4%}"
         )
 
-        return self.create_hft_proposal(
+        proposal = self.create_hft_proposal(
             symbol=symbol,
             side=side,
             entry_price=current_price,
@@ -323,18 +563,43 @@ class MicroBreakoutStrategy(HFTBaseStrategy):
             reason=reason,
         )
 
+        # Override TP/SL with ATR-based values
+        if proposal:
+            proposal.take_profit_price = tp_price
+            proposal.stop_loss_price = sl_price
+
+        return proposal
+
     def _check_volume_surge(self, bars: List[Bar]) -> bool:
-        """Check if current bar has volume surge."""
-        if len(bars) < 5:
+        """
+        Breakout Strategy 2.0 - Phase 2: Volume Confirmation.
+
+        A breakout is valid only if:
+        - Volume >= 2x media 20 barre
+
+        Uses exactly 20 bars for average calculation.
+        """
+        if len(bars) < 21:  # Need current bar + 20 previous bars
             return True  # Not enough data, allow trade
 
         current_vol = bars[-1].volume
-        avg_vol = sum(b.volume for b in bars[-6:-1]) / 5
+        # Calculate average of previous 20 bars (not including current bar)
+        avg_vol_20 = sum(b.volume for b in bars[-21:-1]) / 20
 
-        if avg_vol == 0:
+        if avg_vol_20 == 0:
             return current_vol > 0
 
-        return current_vol >= avg_vol * self.volume_surge_multiplier
+        # Volume must be >= 2x average (200%)
+        volume_ratio = current_vol / avg_vol_20
+        is_surge = volume_ratio >= Decimal("2.0")
+
+        if not is_surge:
+            logger.debug(
+                f"Volume check failed: current={current_vol:.0f}, "
+                f"avg_20={avg_vol_20:.0f}, ratio={volume_ratio:.2f}x (need 2.0x)"
+            )
+
+        return is_surge
 
     def _create_close_proposal(
         self,

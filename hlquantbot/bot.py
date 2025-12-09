@@ -23,6 +23,7 @@ from .risk.risk_engine import RiskEngine
 from .execution.execution_engine import ExecutionEngine
 from .ai.regime_detector import RegimeDetector
 from .ai.param_tuner import ParameterTuner
+from .ai.aggression_controller import AggressionController
 from .persistence.database import Database
 from .monitoring.telegram_alerter import TelegramAlerter
 from .monitoring.logger import setup_logging
@@ -57,6 +58,7 @@ class HLQuantBot:
         self.execution: Optional[ExecutionEngine] = None
         self.regime_detector: Optional[RegimeDetector] = None
         self.param_tuner: Optional[ParameterTuner] = None
+        self.aggression_controller: Optional[AggressionController] = None
         self.database: Optional[Database] = None
         self.telegram: Optional[TelegramAlerter] = None
         self.health_server: Optional[HealthServer] = None
@@ -122,6 +124,7 @@ class HLQuantBot:
             await self.health_server.stop()
         if self.execution:
             await self.execution.stop_timeout_monitor()
+            await self.execution.stop_tpsl_monitor()  # REQUISITO 4.3: Stop TP/SL monitor
         if self.market_data:
             await self.market_data.stop()
         if self.database:
@@ -184,9 +187,18 @@ class HLQuantBot:
         # Start execution engine's timeout monitor for HFT orders
         await self.execution.start_timeout_monitor()
 
+        # REQUISITO 4.3: Start bot-side TP/SL monitor
+        await self.execution.start_tpsl_monitor()
+
         # AI layer
         self.regime_detector = RegimeDetector(self.settings)
         self.param_tuner = ParameterTuner(self.settings)
+
+        # Aggression Controller (da specifica consigli.md - sezione 5)
+        # Influenza rischio e leva in base a win rate, P&L, regime
+        self.aggression_controller = AggressionController(self.settings)
+        self.risk_engine.set_aggression_controller(self.aggression_controller)
+        logger.info(f"AggressionController initialized, level: {self.aggression_controller.current_state.level.value}")
 
         # Health server for Docker/K8s monitoring
         self.health_server = HealthServer(self, port=8080)
@@ -274,8 +286,9 @@ class HLQuantBot:
 
                     # Filter out proposals for symbols with pending orders (prevent spam)
                     if proposals:
+                        pending_orders = await self.execution.get_pending_hft_orders()
                         pending_symbols = {
-                            p.order.symbol for p in self.execution.get_pending_hft_orders()
+                            p.order.symbol for p in pending_orders
                         }
                         if pending_symbols:
                             original_count = len(proposals)
@@ -472,8 +485,18 @@ class HLQuantBot:
         self._last_regime_check = now
         contexts = self.market_data.get_all_market_contexts()
 
+        # Gather bars data for technical analysis
+        bars_data = {}
+        for symbol in self.settings.active_symbols:
+            try:
+                bars = self.market_data.get_bars(symbol, TimeFrame.M5, 120)  # 10 hours of 5m bars
+                if bars and len(bars) > 15:
+                    bars_data[symbol] = bars
+            except Exception as e:
+                logger.debug(f"Could not get bars for {symbol}: {e}")
+
         try:
-            analysis = await self.regime_detector.detect_regime(contexts, account)
+            analysis = await self.regime_detector.detect_regime(contexts, account, bars_data=bars_data)
 
             # Record regime detection in HFT metrics
             self.hft_metrics.record_regime_detection()
@@ -489,6 +512,32 @@ class HLQuantBot:
                 if last_saved != analysis.timestamp:
                     await self.database.save_regime_analysis(analysis)
                     self._last_saved_regime_timestamp = analysis.timestamp
+
+            # Aggiorna AggressionController con regime e metriche (da specifica)
+            if self.aggression_controller and self.database:
+                try:
+                    win_rate = await self.database.get_win_rate_last_n_trades(100)
+                    daily_pnl = await self.database.get_daily_pnl()
+                    daily_pnl_pct = float(daily_pnl / account.equity) if account.equity > 0 else 0
+
+                    # Check circuit breaker level
+                    cb_level = self.risk_engine.circuit_breaker.get_current_level() if hasattr(self.risk_engine.circuit_breaker, 'get_current_level') else 0
+
+                    await self.aggression_controller.update(
+                        regime=analysis.regime,
+                        win_rate=win_rate,
+                        recent_pnl_pct=daily_pnl_pct,
+                        circuit_breaker_triggered=cb_level >= 2,
+                        circuit_breaker_level=cb_level,
+                    )
+
+                    win_rate_str = f"{win_rate:.2%}" if win_rate else "N/A"
+                    logger.info(
+                        f"AggressionController updated: level={self.aggression_controller.current_state.level.value}, "
+                        f"win_rate={win_rate_str}, daily_pnl={daily_pnl_pct:.2%}"
+                    )
+                except Exception as e:
+                    logger.debug(f"Could not update aggression controller: {e}")
 
         except Exception as e:
             logger.error(f"Regime detection failed: {e}")

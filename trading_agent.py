@@ -5,9 +5,9 @@ import json
 
 load_dotenv()
 
-# OpenAI direct API
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-client = OpenAI(api_key=OPENAI_API_KEY)
+# DeepSeek API (OpenAI-compatible)
+DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
+client = OpenAI(api_key=DEEPSEEK_API_KEY)
 
 TRADE_SCHEMA = {
     "type": "object",
