@@ -110,8 +110,8 @@ class KillSwitchService(BaseService):
             loop_interval_seconds=self._ks_config.check_interval_seconds,
         )
 
-        # State
-        self._status = KillSwitchStatus.OK
+        # Kill switch state (use _ks_status to avoid collision with BaseService._status)
+        self._ks_status = KillSwitchStatus.OK
         self._resume_time: Optional[datetime] = None
 
         # Equity tracking
@@ -163,7 +163,7 @@ class KillSwitchService(BaseService):
             return
 
         # Check if paused and can resume
-        if self._status in (KillSwitchStatus.DAILY_PAUSE, KillSwitchStatus.WEEKLY_PAUSE):
+        if self._ks_status in (KillSwitchStatus.DAILY_PAUSE, KillSwitchStatus.WEEKLY_PAUSE):
             if self._resume_time and datetime.utcnow() >= self._resume_time:
                 await self._resume_trading()
                 return
@@ -237,7 +237,7 @@ class KillSwitchService(BaseService):
 
     async def _check_daily_loss(self) -> None:
         """Check daily loss limit."""
-        if self._status != KillSwitchStatus.OK:
+        if self._ks_status != KillSwitchStatus.OK:
             return
 
         if self._start_of_day_equity <= 0:
@@ -253,7 +253,7 @@ class KillSwitchService(BaseService):
 
     async def _check_weekly_loss(self) -> None:
         """Check weekly loss limit."""
-        if self._status not in (KillSwitchStatus.OK, KillSwitchStatus.DAILY_PAUSE):
+        if self._ks_status not in (KillSwitchStatus.OK, KillSwitchStatus.DAILY_PAUSE):
             return
 
         if self._start_of_week_equity <= 0:
@@ -286,7 +286,7 @@ class KillSwitchService(BaseService):
 
     async def _trigger_daily_pause(self, loss_pct: float) -> None:
         """Trigger daily pause."""
-        self._status = KillSwitchStatus.DAILY_PAUSE
+        self._ks_status = KillSwitchStatus.DAILY_PAUSE
 
         # Resume tomorrow at market open
         now = datetime.utcnow()
@@ -314,7 +314,7 @@ class KillSwitchService(BaseService):
 
     async def _trigger_weekly_pause(self, loss_pct: float) -> None:
         """Trigger weekly pause."""
-        self._status = KillSwitchStatus.WEEKLY_PAUSE
+        self._ks_status = KillSwitchStatus.WEEKLY_PAUSE
 
         # Resume in 3 days
         self._resume_time = datetime.utcnow() + timedelta(days=3)
@@ -340,7 +340,7 @@ class KillSwitchService(BaseService):
 
     async def _trigger_max_drawdown(self, drawdown_pct: float) -> None:
         """Trigger max drawdown stop."""
-        self._status = KillSwitchStatus.STOPPED
+        self._ks_status = KillSwitchStatus.STOPPED
         self._resume_time = None  # Manual intervention required
 
         event = KillSwitchEvent(
@@ -372,7 +372,7 @@ class KillSwitchService(BaseService):
         if self.bus:
             await self.publish(Topic.RISK_ALERTS, {
                 "type": "kill_switch",
-                "status": self._status.value,
+                "status": self._ks_status.value,
                 "timestamp": datetime.utcnow().isoformat(),
                 "resume_time": self._resume_time.isoformat() if self._resume_time else None,
             })
@@ -386,8 +386,8 @@ class KillSwitchService(BaseService):
 
     async def _resume_trading(self) -> None:
         """Resume trading after pause."""
-        old_status = self._status
-        self._status = KillSwitchStatus.OK
+        old_status = self._ks_status
+        self._ks_status = KillSwitchStatus.OK
         self._resume_time = None
 
         self._logger.info(
@@ -429,11 +429,11 @@ class KillSwitchService(BaseService):
 
     def is_trading_allowed(self) -> bool:
         """Check if trading is currently allowed."""
-        return self._status == KillSwitchStatus.OK
+        return self._ks_status == KillSwitchStatus.OK
 
     def get_status(self) -> KillSwitchStatus:
         """Get current kill switch status."""
-        return self._status
+        return self._ks_status
 
     def get_resume_time(self) -> Optional[datetime]:
         """Get time when trading will resume (if paused)."""
@@ -450,8 +450,8 @@ class KillSwitchService(BaseService):
         Returns:
             True if resumed, False if not in STOPPED status
         """
-        if self._status == KillSwitchStatus.STOPPED:
-            self._status = KillSwitchStatus.OK
+        if self._ks_status == KillSwitchStatus.STOPPED:
+            self._ks_status = KillSwitchStatus.OK
             self._resume_time = None
             self._logger.warning("Manual resume from STOPPED status")
             return True
@@ -488,7 +488,7 @@ class KillSwitchService(BaseService):
     def metrics(self) -> Dict[str, Any]:
         """Get service metrics."""
         return {
-            "status": self._status.value,
+            "status": self._ks_status.value,
             "is_trading_allowed": self.is_trading_allowed(),
             "current_equity": float(self._current_equity),
             "peak_equity": float(self._peak_equity),
