@@ -759,50 +759,69 @@ def partial_account():
 def partial_overview():
     """Overview summary partial."""
     async def _get_data():
+        db = await get_db()
+
+        # Fetch each piece of data separately to avoid one failure breaking all
+        account = None
+        positions = []
+        services = []
+        rankings_data = None
+        stats = {"total_trades": 0, "wins": 0, "losses": 0, "win_rate": 0, "total_pnl": 0, "total_fees": 0}
+        decisions = []
+        market_regime = None
+
         try:
-            db = await get_db()
-
-            # Gather all data
             account = await db.get_account()
-            positions = await db.get_positions()
-            services = await db.get_service_health()
-            rankings_data = await db.get_latest_rankings()
-            stats = await db.get_stats()
-            decisions = await db.get_strategy_decisions(limit=10)
-
-            # Get market regime from market_states (conservative system)
-            market_regime = None
-            try:
-                btc_states = await db.fetch("""
-                    SELECT regime FROM market_states
-                    WHERE symbol = 'BTC'
-                    ORDER BY timestamp DESC LIMIT 1
-                """)
-                if btc_states and len(btc_states) > 0:
-                    market_regime = btc_states[0]["regime"]
-            except Exception as e:
-                print(f"[Dashboard] Error fetching market regime: {e}")
-
-            return {
-                "account": account,
-                "positions": positions,
-                "services": services,
-                "rankings_data": rankings_data,
-                "stats": stats,
-                "decisions": decisions,
-                "market_regime": market_regime,
-            }
         except Exception as e:
-            print(f"[Dashboard] Error fetching overview data: {e}")
-            return {
-                "account": None,
-                "positions": [],
-                "services": [],
-                "rankings_data": None,
-                "stats": {"total_trades": 0, "wins": 0, "losses": 0, "win_rate": 0, "total_pnl": 0, "total_fees": 0},
-                "decisions": [],
-                "market_regime": None,
-            }
+            print(f"[Dashboard] Error fetching account: {e}")
+
+        try:
+            positions = await db.get_positions()
+        except Exception as e:
+            print(f"[Dashboard] Error fetching positions: {e}")
+
+        try:
+            services = await db.get_service_health()
+        except Exception as e:
+            print(f"[Dashboard] Error fetching services: {e}")
+
+        try:
+            rankings_data = await db.get_latest_rankings()
+        except Exception as e:
+            # This is expected for conservative system (no opportunity_rankings table)
+            pass
+
+        try:
+            stats = await db.get_stats()
+        except Exception as e:
+            print(f"[Dashboard] Error fetching stats: {e}")
+
+        try:
+            decisions = await db.get_strategy_decisions(limit=10)
+        except Exception as e:
+            print(f"[Dashboard] Error fetching decisions: {e}")
+
+        # Get market regime from market_states (conservative system)
+        try:
+            btc_states = await db.fetch("""
+                SELECT regime FROM market_states
+                WHERE symbol = 'BTC'
+                ORDER BY timestamp DESC LIMIT 1
+            """)
+            if btc_states and len(btc_states) > 0:
+                market_regime = btc_states[0]["regime"]
+        except Exception as e:
+            print(f"[Dashboard] Error fetching market regime: {e}")
+
+        return {
+            "account": account,
+            "positions": positions,
+            "services": services,
+            "rankings_data": rankings_data,
+            "stats": stats,
+            "decisions": decisions,
+            "market_regime": market_regime,
+        }
 
     data = safe_run_async(_get_data(), default={
         "account": None,
