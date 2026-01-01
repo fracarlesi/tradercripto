@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+
+{% block title %}LLM Decisions - HLQuantBot{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Header -->
+    <div class="flex justify-between items-center">
+        <div>
+            <h1 class="text-2xl font-bold text-white">LLM Decisions</h1>
+            <p class="text-gray-400 text-sm mt-1">Trade veto decisions and accuracy tracking</p>
+        </div>
+    </div>
+
+    <!-- Stats Cards -->
+    <div id="llm-stats"
+         class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4"
+         hx-get="/api/llm-stats"
+         hx-trigger="load, every 60s"
+         hx-swap="innerHTML">
+        <div class="card">
+            <div class="card-body">
+                <div class="stat-label">Total Decisions</div>
+                <div class="stat-value">-</div>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-body">
+                <div class="stat-label">Allowed</div>
+                <div class="stat-value text-green-400">-</div>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-body">
+                <div class="stat-label">Denied</div>
+                <div class="stat-value text-red-400">-</div>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-body">
+                <div class="stat-label">Allow Rate</div>
+                <div class="stat-value">-%</div>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-body">
+                <div class="stat-label">Accuracy</div>
+                <div class="stat-value">-%</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Rate Limit Status -->
+    <div class="card">
+        <div class="card-header">
+            <div class="card-title">API Rate Limit</div>
+            <span id="calls-remaining" class="text-sm text-gray-400">- calls remaining today</span>
+        </div>
+        <div class="card-body">
+            <div class="w-full bg-gray-700 rounded-full h-3 overflow-hidden">
+                <div id="rate-limit-bar"
+                     class="h-full bg-blue-500 transition-all duration-500"
+                     style="width: 100%"></div>
+            </div>
+            <div class="flex justify-between text-xs text-gray-500 mt-1">
+                <span>0</span>
+                <span>Max: 6/day</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Decisions Table -->
+    <div class="card">
+        <div class="card-header">
+            <div class="card-title">Recent Decisions</div>
+            <div class="flex gap-2">
+                <select id="decision-filter" class="text-xs bg-gray-700 border border-gray-600 rounded px-2 py-1 text-gray-300">
+                    <option value="all">All</option>
+                    <option value="allow">Allowed</option>
+                    <option value="deny">Denied</option>
+                </select>
+            </div>
+        </div>
+        <div class="card-body p-0">
+            <div id="llm-decisions-table"
+                 hx-get="/api/llm-decisions"
+                 hx-trigger="load, every 30s"
+                 hx-swap="innerHTML">
+                <div class="loading">Loading decisions...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Accuracy by Regime -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title">TREND Regime</div>
+            </div>
+            <div class="card-body">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <div class="stat-label">Decisions</div>
+                        <div class="stat-value text-lg" id="trend-decisions">-</div>
+                    </div>
+                    <div>
+                        <div class="stat-label">Accuracy</div>
+                        <div class="stat-value text-lg text-green-400" id="trend-accuracy">-%</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title">RANGE Regime</div>
+            </div>
+            <div class="card-body">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <div class="stat-label">Decisions</div>
+                        <div class="stat-value text-lg" id="range-decisions">-</div>
+                    </div>
+                    <div>
+                        <div class="stat-label">Accuracy</div>
+                        <div class="stat-value text-lg text-yellow-400" id="range-accuracy">-%</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title">CHAOS Regime</div>
+            </div>
+            <div class="card-body">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <div class="stat-label">Auto-Denied</div>
+                        <div class="stat-value text-lg" id="chaos-denied">-</div>
+                    </div>
+                    <div class="text-gray-500 text-xs">
+                        Always denied in CHAOS
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

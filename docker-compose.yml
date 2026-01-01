@@ -1,61 +1,61 @@
 services:
   postgres:
-    image: postgres:15-alpine
-    container_name: trader_mainnet_postgres
+    image: postgres:15
+    container_name: hlquantbot_postgres
     environment:
       POSTGRES_USER: trader
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: trader_db
+      POSTGRES_PASSWORD: trader_password
+      POSTGRES_DB: trading_db
     volumes:
-      - postgres_data_mainnet:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
     ports:
       - "5432:5432"
-    restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U trader -d trader_db"]
-      interval: 5s
+      test: ["CMD-SHELL", "pg_isready -U trader -d trading_db"]
+      interval: 10s
       timeout: 5s
-      retries: 20
-      start_period: 60s
+      retries: 5
+    restart: unless-stopped
 
-  app:
+  bot:
     build: .
-    container_name: trader_mainnet_app
-    env_file: .env
-    environment:
-      - DATABASE_URL=postgresql://trader:password@postgres:5432/trader_db
-      - CONFIG_PROFILE=${CONFIG_PROFILE:-default}
+    container_name: hlquantbot_bot
     depends_on:
       postgres:
         condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql://trader:trader_password@postgres:5432/trading_db
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=trading_db
+      - DB_USER=trader
+      - DB_PASSWORD=trader_password
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
     restart: unless-stopped
-    ports:
-      - "8081:8080"
-    command: ["python", "main_daemon.py"]
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "5"
 
   dashboard:
-    build: ./frontend
-    container_name: trader_mainnet_dashboard
-    environment:
-      - DATABASE_URL=postgresql://trader:password@postgres:5432/trader_db
-      - BOT_URL=http://app:8080
-    ports:
-      - "5611:5611"
+    build: .
+    container_name: hlquantbot_dashboard
+    command: ["python", "-m", "simple_bot.dashboard.app"]
     depends_on:
       postgres:
         condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql://trader:trader_password@postgres:5432/trading_db
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=trading_db
+      - DB_USER=trader
+      - DB_PASSWORD=trader_password
+    env_file:
+      - .env
+    ports:
+      - "5000:5611"
     restart: unless-stopped
 
 volumes:
-  postgres_data_mainnet:
+  postgres_data:

@@ -1,0 +1,57 @@
+# =============================================================================
+# Docker Compose - PostgreSQL per HLQuantBot
+# =============================================================================
+# Uso: docker compose up -d
+# =============================================================================
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: hlquantbot_postgres
+    restart: unless-stopped
+    
+    environment:
+      POSTGRES_USER: trader
+      POSTGRES_PASSWORD: trader_password
+      POSTGRES_DB: trading_db
+      # Timezone Italia
+      TZ: Europe/Rome
+      PGTZ: Europe/Rome
+    
+    ports:
+      - "5432:5432"
+    
+    volumes:
+      # Persistenza dati
+      - postgres_data:/var/lib/postgresql/data
+      # Init script (esegue schema.sql al primo avvio)
+      - ./schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    
+    # Health check
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trader -d trading_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    
+    # Configurazione PostgreSQL ottimizzata per trading bot
+    command: >
+      postgres
+      -c shared_buffers=256MB
+      -c effective_cache_size=512MB
+      -c maintenance_work_mem=128MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=16MB
+      -c default_statistics_target=100
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c work_mem=16MB
+      -c min_wal_size=1GB
+      -c max_wal_size=4GB
+      -c max_connections=100
+      -c log_statement=none
+      -c log_min_duration_statement=1000
+
+volumes:
+  postgres_data:
+    name: hlquantbot_postgres_data

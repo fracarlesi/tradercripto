@@ -1,0 +1,96 @@
+{% set status = kill_switch.status %}
+{% set is_ok = status == 'ok' %}
+{% set is_warning = status == 'warning' %}
+{% set is_paused = status in ['daily_pause', 'weekly_pause'] %}
+{% set is_stopped = status == 'stopped' %}
+
+<div class="card {% if is_stopped %}border-red-500{% elif is_paused %}border-yellow-500{% elif is_warning %}border-yellow-400{% else %}border-green-500{% endif %} border-2">
+    <div class="card-body">
+        <div class="flex items-center justify-between">
+            <div class="flex items-center gap-4">
+                <!-- Status Indicator -->
+                <div class="w-16 h-16 rounded-full flex items-center justify-center
+                    {% if is_stopped %}
+                        bg-red-500/20 text-red-500
+                    {% elif is_paused %}
+                        bg-yellow-500/20 text-yellow-500
+                    {% elif is_warning %}
+                        bg-yellow-400/20 text-yellow-400
+                    {% else %}
+                        bg-green-500/20 text-green-500
+                    {% endif %}">
+                    {% if is_stopped %}
+                        <span class="text-3xl">&#9888;</span>
+                    {% elif is_paused %}
+                        <span class="text-3xl">&#9208;</span>
+                    {% elif is_warning %}
+                        <span class="text-3xl">&#9888;</span>
+                    {% else %}
+                        <span class="text-3xl">&#10003;</span>
+                    {% endif %}
+                </div>
+
+                <div>
+                    <div class="text-2xl font-bold
+                        {% if is_stopped %}text-red-500
+                        {% elif is_paused %}text-yellow-500
+                        {% elif is_warning %}text-yellow-400
+                        {% else %}text-green-500{% endif %}">
+                        {% if is_stopped %}
+                            STOPPED
+                        {% elif is_paused %}
+                            PAUSED
+                        {% elif is_warning %}
+                            WARNING
+                        {% else %}
+                            TRADING OK
+                        {% endif %}
+                    </div>
+                    <div class="text-sm text-gray-400 mt-1">
+                        {% if is_stopped %}
+                            Max drawdown exceeded - Manual intervention required
+                        {% elif status == 'daily_pause' %}
+                            Daily loss limit hit - Resumes tomorrow
+                        {% elif status == 'weekly_pause' %}
+                            Weekly loss limit hit - Resumes in 3 days
+                        {% elif is_warning %}
+                            Approaching loss limits
+                        {% else %}
+                            All risk limits within acceptable range
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            {% if is_paused and kill_switch.resume_time %}
+            <div class="text-right">
+                <div class="text-xs text-gray-500">Resume Time</div>
+                <div class="text-sm text-gray-300">{{ kill_switch.resume_time }}</div>
+            </div>
+            {% endif %}
+
+            {% if is_stopped %}
+            <button class="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-md text-sm font-medium"
+                    onclick="manualResume()">
+                Manual Resume
+            </button>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<script>
+function manualResume() {
+    if (confirm('Are you sure you want to manually resume trading? This should only be done after reviewing the situation.')) {
+        fetch('/api/kill-switch/resume', { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    location.reload();
+                } else {
+                    alert('Failed to resume: ' + data.error);
+                }
+            });
+    }
+}
+</script>

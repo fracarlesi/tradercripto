@@ -1,0 +1,247 @@
+<!-- Overview Dashboard Summary -->
+<div class="grid gap-6">
+    <!-- Top Row: Key Metrics -->
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="stat-label">Equity</div>
+            <div class="stat-value">${{ "%.2f"|format(account.equity|default(0)) }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Available Balance</div>
+            <div class="stat-value">${{ "%.2f"|format(account.available_balance|default(0)) }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Active Positions</div>
+            <div class="stat-value">{{ positions|length }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Unrealized PnL</div>
+            {% set unrealized = positions|sum(attribute='unrealized_pnl')|default(0) %}
+            <div class="stat-value {% if unrealized >= 0 %}positive{% else %}negative{% endif %}">
+                {{ "+$" if unrealized >= 0 else "-$" }}{{ "%.2f"|format(unrealized|abs) }}
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Total PnL</div>
+            {% set total_pnl = stats.total_pnl|default(0)|float %}
+            <div class="stat-value {% if total_pnl >= 0 %}positive{% else %}negative{% endif %}">
+                {{ "+$" if total_pnl >= 0 else "-$" }}{{ "%.2f"|format(total_pnl|abs) }}
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Win Rate</div>
+            <div class="stat-value {% if stats.win_rate|default(0) >= 50 %}positive{% else %}negative{% endif %}">
+                {{ "%.1f"|format(stats.win_rate|default(0)) }}%
+            </div>
+        </div>
+    </div>
+
+    <!-- Second Row: System Status & Market Regime -->
+    <div class="grid md:grid-cols-2 gap-6">
+        <!-- Service Health -->
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">
+                    <span style="color: var(--accent);">&#9889;</span> Service Health
+                </span>
+                <span class="tag {% if healthy_count == total_services %}tag-success{% elif healthy_count > 0 %}tag-warning{% else %}tag-danger{% endif %}">
+                    {{ healthy_count }}/{{ total_services }} healthy
+                </span>
+            </div>
+            <div class="card-body">
+                {% if services %}
+                <div class="space-y-2">
+                    {% for s in services[:6] %}
+                    <div class="flex items-center justify-between text-sm">
+                        <div class="flex items-center gap-2">
+                            <span class="w-2 h-2 rounded-full
+                                {% if s.status == 'healthy' %}bg-green-500
+                                {% elif s.status == 'degraded' %}bg-yellow-500
+                                {% else %}bg-red-500{% endif %}">
+                            </span>
+                            <span class="text-gray-300">{{ s.service_name|replace('_', ' ')|title }}</span>
+                        </div>
+                        <span class="text-xs text-gray-500">
+                            {% if s.last_heartbeat %}{{ s.last_heartbeat|ago }}{% else %}Never{% endif %}
+                        </span>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% if services|length > 6 %}
+                <div class="mt-3 text-center">
+                    <a href="/services" class="text-xs text-blue-400 hover:text-blue-300">
+                        View all {{ services|length }} services
+                    </a>
+                </div>
+                {% endif %}
+                {% else %}
+                <div class="empty-state py-4">
+                    <p class="text-sm text-gray-500">No services running</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Market Regime -->
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">
+                    <span style="color: var(--warning);">&#127919;</span> Market Regime
+                </span>
+            </div>
+            <div class="card-body">
+                <div class="flex items-center justify-center py-4">
+                    <div class="text-center">
+                        <div class="text-4xl mb-2">
+                            {% if market_regime == 'bullish' %}&#128200;
+                            {% elif market_regime == 'bearish' %}&#128201;
+                            {% elif market_regime == 'volatile' %}&#9889;
+                            {% else %}&#10132;{% endif %}
+                        </div>
+                        <div class="text-2xl font-bold text-white mb-1">
+                            {{ market_regime|title }}
+                        </div>
+                        <div class="text-sm text-gray-400">
+                            Current market condition
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Third Row: Recent Activity -->
+    <div class="grid md:grid-cols-2 gap-6">
+        <!-- Active Positions Summary -->
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">
+                    <span style="color: var(--success);">&#128179;</span> Active Positions
+                </span>
+                <a href="/positions" class="text-xs text-blue-400 hover:text-blue-300">View all</a>
+            </div>
+            <div class="card-body p-0">
+                {% if positions %}
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Symbol</th>
+                            <th>Side</th>
+                            <th class="text-right">PnL</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for p in positions[:5] %}
+                        {% set pnl = p.unrealized_pnl|default(0)|float %}
+                        <tr>
+                            <td class="font-medium text-white">{{ p.symbol }}</td>
+                            <td>
+                                <span class="tag {% if p.side == 'long' %}tag-success{% else %}tag-danger{% endif %} text-xs">
+                                    {{ p.side|upper }}
+                                </span>
+                            </td>
+                            <td class="text-right font-mono {% if pnl >= 0 %}text-green-400{% else %}text-red-400{% endif %}">
+                                {{ "+$" if pnl >= 0 else "-$" }}{{ "%.2f"|format(pnl|abs) }}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                <div class="empty-state py-4">
+                    <p class="text-sm text-gray-500">No open positions</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Recent Decisions -->
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">
+                    <span style="color: var(--purple);">&#128161;</span> Recent Signals
+                </span>
+                <a href="/signals" class="text-xs text-blue-400 hover:text-blue-300">View all</a>
+            </div>
+            <div class="card-body p-0">
+                {% if decisions %}
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Symbol</th>
+                            <th>Strategy</th>
+                            <th>Outcome</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for d in decisions[:5] %}
+                        <tr>
+                            <td class="font-medium text-white">{{ d.symbol }}</td>
+                            <td>
+                                <span class="tag tag-info text-xs">{{ d.selected_strategy|replace('_', ' ')|title }}</span>
+                            </td>
+                            <td>
+                                <span class="tag
+                                    {% if d.outcome == 'win' %}tag-success
+                                    {% elif d.outcome == 'loss' %}tag-danger
+                                    {% elif d.outcome == 'pending' %}tag-warning
+                                    {% else %}tag-info{% endif %} text-xs">
+                                    {{ d.outcome }}
+                                </span>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                <div class="empty-state py-4">
+                    <p class="text-sm text-gray-500">No recent signals</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Trading Stats -->
+    <div class="card">
+        <div class="card-header">
+            <span class="card-title">
+                <span style="color: var(--cyan);">&#128176;</span> Trading Performance
+            </span>
+            <a href="/performance" class="text-xs text-blue-400 hover:text-blue-300">View details</a>
+        </div>
+        <div class="card-body">
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-label">Total Trades</div>
+                    <div class="stat-value">{{ stats.total_trades|default(0) }}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Wins</div>
+                    <div class="stat-value positive">{{ stats.wins|default(0) }}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Losses</div>
+                    <div class="stat-value negative">{{ stats.losses|default(0) }}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Win Rate</div>
+                    <div class="stat-value {% if stats.win_rate|default(0) >= 50 %}positive{% else %}negative{% endif %}">
+                        {{ "%.1f"|format(stats.win_rate|default(0)) }}%
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Total Fees</div>
+                    <div class="stat-value" style="color: var(--danger);">
+                        -${{ "%.2f"|format(stats.total_fees|default(0)|float|abs) }}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Update timestamp -->
+<div class="text-right text-xs text-gray-500 mt-4">
+    Updated: {{ updated_at.strftime("%H:%M:%S") }}
+</div>

@@ -1,0 +1,220 @@
+# =============================================================================
+# HLQuantBot Conservative Trading Configuration
+# =============================================================================
+# Objective: "Boring but scalable" system on 2-3 liquid assets
+# Target: 1-3% monthly, max 5-15 trades/month, strict risk control
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Universe: Only highly liquid assets
+# -----------------------------------------------------------------------------
+universe:
+  assets:
+    - symbol: "BTC"
+      enabled: true
+      min_notional: 100      # Min trade size in USD
+      max_notional: 50000    # Max trade size in USD
+
+    - symbol: "ETH"
+      enabled: true
+      min_notional: 100
+      max_notional: 30000
+
+    - symbol: "SOL"
+      enabled: false         # Disabled until validated
+      min_notional: 50
+      max_notional: 10000
+
+# -----------------------------------------------------------------------------
+# Timeframes
+# -----------------------------------------------------------------------------
+timeframes:
+  primary: "4h"              # Main decision timeframe
+  secondary: "1h"            # For confirmation (optional)
+  bars_to_fetch: 200         # History depth for indicators
+
+# -----------------------------------------------------------------------------
+# Risk Management - CRITICAL SECTION
+# -----------------------------------------------------------------------------
+risk:
+  # Per-trade risk
+  per_trade_pct: 0.5         # Risk 0.5% of equity per trade
+  max_per_trade_pct: 1.0     # Absolute max per trade
+
+  # Position limits
+  max_positions: 2           # Max concurrent positions
+  max_exposure_pct: 100      # Max total notional as % of equity
+
+  # Leverage
+  leverage: 1                # Keep at 1 for conservative approach
+  max_leverage: 2            # Absolute max leverage allowed
+
+  # Correlation control
+  correlation_limit: 0.7     # Don't open BTC+ETH if corr > 0.7
+
+# -----------------------------------------------------------------------------
+# Kill Switch - NON-NEGOTIABLE
+# -----------------------------------------------------------------------------
+kill_switch:
+  enabled: true
+
+  # Daily protection
+  daily_loss_pct: 2.0        # Pause trading if daily loss > 2%
+  daily_loss_action: "pause_until_tomorrow"
+
+  # Weekly protection
+  weekly_loss_pct: 5.0       # Pause 3 days if weekly loss > 5%
+  weekly_loss_action: "pause_3_days"
+
+  # Max drawdown
+  max_drawdown_pct: 15.0     # STOP EVERYTHING if DD > 15%
+  max_drawdown_action: "stop_all"
+
+  # Equity monitoring interval
+  check_interval_seconds: 60
+
+# -----------------------------------------------------------------------------
+# Stop Loss Configuration
+# -----------------------------------------------------------------------------
+stops:
+  initial_atr_mult: 2.5      # Initial stop = 2.5 ATR from entry
+  trailing_atr_mult: 2.5     # Trail at 2.5 ATR from favorable extreme
+  use_server_side: true      # Place stop on exchange
+  trailing_update_interval: 300  # Update trailing every 5 min
+
+# -----------------------------------------------------------------------------
+# Regime Detection
+# -----------------------------------------------------------------------------
+regime:
+  # ADX thresholds
+  trend_adx_min: 25          # ADX > 25 = TREND
+  range_adx_max: 20          # ADX < 20 = RANGE
+  # Between 20-25 = CHAOS (no trade)
+
+  # EMA slope thresholds (normalized)
+  ema_slope_threshold: 0.001
+
+  # Choppiness index (optional)
+  choppiness_range_min: 60   # CI > 60 = RANGE confirmation
+
+  # Hysteresis: require N bars of confirmation before regime change
+  confirmation_bars: 2
+
+# -----------------------------------------------------------------------------
+# Strategy: Trend Following (Primary)
+# -----------------------------------------------------------------------------
+strategies:
+  trend_follow:
+    enabled: true
+    regime_required: "trend"
+
+    # Entry conditions
+    breakout_period: 20        # Breakout of N-bar high/low
+    price_above_ema200: true   # Price must be above EMA200 for long
+    atr_filter: true           # ATR must be above average
+    atr_lookback: 14
+
+    # Volume confirmation (optional)
+    volume_confirmation: false
+    volume_mult: 1.5
+
+  mean_reversion:
+    enabled: false             # DISABLED until validated
+    regime_required: "range"
+
+    # Bollinger Bands
+    bb_period: 20
+    bb_std: 2.0
+
+    # RSI extremes
+    rsi_oversold: 30
+    rsi_overbought: 70
+
+    # Exit at mid-band
+    exit_at_mid: true
+
+# -----------------------------------------------------------------------------
+# LLM Veto Configuration
+# -----------------------------------------------------------------------------
+llm:
+  enabled: true
+  role: "veto_only"            # Only ALLOW/DENY, no strategy selection
+
+  provider: "deepseek"
+  model: "deepseek-chat"
+  api_key_env: "DEEPSEEK_API_KEY"
+
+  # Rate limiting
+  max_calls_per_day: 6         # 1 call per 4h window
+  timeout_seconds: 30
+
+  # Fallback behavior
+  fallback_on_error: "allow"   # If LLM fails, allow trade (rules already filtered)
+  fallback_on_chaos: "deny"    # Always deny in CHAOS regime
+
+  # Decision thresholds
+  min_confidence: 0.6          # Require 60% confidence to ALLOW
+
+# -----------------------------------------------------------------------------
+# Execution
+# -----------------------------------------------------------------------------
+execution:
+  # Order preference
+  prefer_limit: true
+  limit_timeout_seconds: 60    # Cancel limit after 60s, use market
+
+  # Slippage protection
+  max_slippage_pct: 0.1        # Max 0.1% slippage on market orders
+
+  # Retry logic
+  max_retries: 3
+  retry_delay_seconds: 5
+
+  # Server-side stops
+  place_stop_immediately: true
+
+# -----------------------------------------------------------------------------
+# Monitoring & Alerts
+# -----------------------------------------------------------------------------
+monitoring:
+  # Equity snapshots
+  equity_snapshot_interval: 300  # Every 5 min
+
+  # Telegram alerts
+  telegram:
+    enabled: true
+    alert_on:
+      - "trade_open"
+      - "trade_close"
+      - "kill_switch_trigger"
+      - "daily_summary"
+      - "error"
+
+  # Logging
+  log_level: "INFO"
+  log_trades: true
+  log_decisions: true
+
+# -----------------------------------------------------------------------------
+# Performance Metrics (for offline analysis)
+# -----------------------------------------------------------------------------
+metrics:
+  track:
+    - "win_rate"
+    - "profit_factor"
+    - "average_r"              # Average R-multiple
+    - "max_drawdown"
+    - "sharpe_ratio"
+    - "calmar_ratio"
+    - "avg_trade_duration"
+    - "slippage_avg"
+    - "fees_total"
+
+  # Regime-specific metrics
+  track_by_regime: true
+
+# -----------------------------------------------------------------------------
+# Environment
+# -----------------------------------------------------------------------------
+environment: "testnet"         # "testnet" or "mainnet"
+dry_run: false                 # If true, simulate trades only

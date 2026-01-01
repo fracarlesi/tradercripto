@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+
+{% block title %}Positions - HLQuantBot v2.0{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <h1 class="text-2xl font-bold text-white mb-2">Active Positions</h1>
+    <p class="text-gray-400 text-sm">Current open positions with unrealized PnL</p>
+</div>
+
+<!-- Positions Content (loaded via HTMX) -->
+<div id="positions-content"
+     hx-get="/partials/positions"
+     hx-trigger="load, every 5s"
+     hx-swap="innerHTML">
+    <div class="loading">
+        <span class="spinner mr-2"></span> Loading positions...
+    </div>
+</div>
+{% endblock %}

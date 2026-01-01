@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+
+{% block title %}Trade History - HLQuantBot{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Header -->
+    <div class="flex justify-between items-center">
+        <div>
+            <h1 class="text-2xl font-bold text-white">Trade History</h1>
+            <p class="text-gray-400 text-sm mt-1">Closed trades and performance metrics</p>
+        </div>
+        <div class="flex gap-2">
+            <select id="asset-filter" class="text-sm bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-gray-300">
+                <option value="all">All Assets</option>
+                <option value="BTC">BTC</option>
+                <option value="ETH">ETH</option>
+            </select>
+            <select id="strategy-filter" class="text-sm bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-gray-300">
+                <option value="all">All Strategies</option>
+                <option value="trend_follow">Trend Follow</option>
+                <option value="mean_reversion">Mean Reversion</option>
+            </select>
+        </div>
+    </div>
+
+    <!-- Aggregate Stats -->
+    <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+        <div class="card">
+            <div class="card-body">
+                <div class="stat-label">Total Trades</div>
+                <div class="stat-value" id="total-trades">0</div>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-body">
+                <div class="stat-label">Win Rate</div>
+                <div class="stat-value text-green-400" id="win-rate">0%</div>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-body">
+                <div class="stat-label">Profit Factor</div>
+                <div class="stat-value" id="profit-factor">0.00</div>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-body">
+                <div class="stat-label">Avg R</div>
+                <div class="stat-value" id="avg-r">0.00R</div>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-body">
+                <div class="stat-label">Gross P&L</div>
+                <div class="stat-value" id="gross-pnl">$0.00</div>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-body">
+                <div class="stat-label">Net P&L</div>
+                <div class="stat-value" id="net-pnl">$0.00</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Trades Table -->
+    <div class="card">
+        <div class="card-header">
+            <div class="card-title">Closed Trades</div>
+            <span class="text-xs text-gray-500" id="trades-count">0 trades</span>
+        </div>
+        <div class="card-body p-0 overflow-x-auto">
+            <div id="trades-table"
+                 hx-get="/api/trade-history"
+                 hx-trigger="load"
+                 hx-swap="innerHTML">
+                <div class="loading">Loading trades...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Performance by Strategy -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title">Trend Follow Performance</div>
+            </div>
+            <div class="card-body">
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-label">Trades</div>
+                        <div class="stat-value text-lg" id="tf-trades">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Win Rate</div>
+                        <div class="stat-value text-lg" id="tf-winrate">0%</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Avg R</div>
+                        <div class="stat-value text-lg" id="tf-avgr">0.00R</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Net P&L</div>
+                        <div class="stat-value text-lg" id="tf-pnl">$0</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title">Mean Reversion Performance</div>
+            </div>
+            <div class="card-body">
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-label">Trades</div>
+                        <div class="stat-value text-lg" id="mr-trades">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Win Rate</div>
+                        <div class="stat-value text-lg" id="mr-winrate">0%</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Avg R</div>
+                        <div class="stat-value text-lg" id="mr-avgr">0.00R</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Net P&L</div>
+                        <div class="stat-value text-lg" id="mr-pnl">$0</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

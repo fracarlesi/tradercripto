@@ -1,206 +1,97 @@
-# HLQuantBot - Guida Deploy e Sviluppo
+# Claude Code Resources
 
-## Note per Claude Code
+---
+## ⚠️ AZIONE OBBLIGATORIA - INIZIO SESSIONE ⚠️
 
-**REGOLA IMPORTANTE**: MAI prendere iniziativa su modifiche tecniche (cambiare modelli AI, endpoint, configurazioni critiche) senza prima condividere e chiedere conferma all'utente.
+**CLAUDE: ESEGUI QUESTI COMANDI PRIMA DI QUALSIASI ALTRA AZIONE!**
 
-Per ricerche semantiche nella codebase, usare l'MCP `claude-context`:
-- `mcp__claude-context__search_code` - ricerca semantica nel codice
-- `mcp__claude-context__index_codebase` - indicizza la codebase (se necessario)
-
-## Ambiente Attivo
-
-**SIAMO SU MAINNET - SOLDI VERI!**
-
-| Parametro | Valore |
-|-----------|--------|
-| Environment | **PRODUCTION (MAINNET)** |
-| Directory server | `/opt/trader_bitcoin` |
-| Dashboard | http://<VPS_IP_REDACTED>:5611/ |
-| PostgreSQL | porta 5432 |
-| Health | porta 8081 |
-| API | https://hyperliquid.xyz |
-
-## Repository GitHub
-https://github.com/fracarlesi/tradercripto2
-
-## Architettura
-
-Bot di trading HFT quantitativo per Hyperliquid con AI DeepSeek V3.2-Speciale per regime detection.
-
-### Main Loop (ogni 1 secondo)
-
+### 1. Aggiorna conoscenze Claude Code
 ```
-1. Check circuit breaker (temporal + hard)
-2. Get account state (REST)
-3. Detect market regime (AI ogni 5 min, cached)
-4. Get market data (WebSocket + BarAggregator)
-5. Evaluate strategies (5 HFT strategies)
-6. Risk engine (validate, size, leverage check)
-7. Execute orders (maker-only ALO)
-8. Save metrics + snapshots
+WebFetch: https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md
 ```
 
-### Componenti Principali
-
+### 2. Verifica MCP Servers installati
+Controlla nel system prompt la sezione "MCP Server Instructions" per vedere quali server sono attivi.
+Oppure leggi il file di configurazione:
 ```
-hlquantbot/
-├── bot.py               # Main orchestrator
-├── config/
-│   ├── settings.py      # Pydantic settings + YAML
-│   └── config.yaml      # Parametri strategie e risk
-├── strategies/hft/
-│   ├── mmr_hft.py       # Micro Mean Reversion (VWAP)
-│   ├── micro_breakout.py    # Breakout BB compression
-│   ├── pair_trading.py      # Spread trading BTC/ETH, ETH/SOL
-│   └── liquidation_sniping.py  # Liquidation cascade
-├── ai/
-│   └── regime_detector.py   # DeepSeek V3.2-Speciale
-├── risk/
-│   ├── risk_engine.py       # Portfolio risk
-│   └── circuit_breaker.py   # Hard + temporal stops
-└── execution/
-    └── execution_engine.py  # Order execution ALO
+Read: .mcp.json
 ```
 
-## AI Layer - DeepSeek V3.2-Speciale
-
-```yaml
-openai:
-  enabled: true
-  model: deepseek-reasoner
-  base_url: https://api.deepseek.com
-  regime_detection_interval_minutes: 5
-  max_tokens: 4000
-  temperature: 0.3
+### 3. Verifica Skills disponibili
+Guarda la sezione `<available_skills>` nel system prompt, oppure usa:
+```
+Skill tool → vedi parametro "skill" per lista disponibili
 ```
 
-**Regime Output**: `trend_up | trend_down | range_bound | high_volatility | low_volatility | uncertain`
+### 4. Verifica Task Agents disponibili
+Guarda la sezione "Available agent types" nella descrizione del Task tool nel system prompt.
 
-**API Key**: `DEEPSEEK_API_KEY` nel .env (sk-cbd31...)
-
-## Risk Management
-
-### Fee Structure (MAINNET)
+### 5. Leggi memorie Serena (se disponibile)
 ```
-MAKER_FEE = 0.02%   # SEMPRE usare questo (ALO)
-TAKER_FEE = 0.05%   # MAI per HFT
+mcp__plugin_serena_serena__list_memories
 ```
 
-### Position Limits
-```
-RISK_PER_TRADE = 0.7%
-MAX_PORTFOLIO_LEVERAGE = 4x
-MAX_EXPOSURE_PER_ASSET = 40%
-MAX_OPEN_POSITIONS = 15
-```
-
-### Circuit Breaker
-- **Daily loss > 10%** → Exit process
-- **Total drawdown > 50%** → Exit process
-- Richiede restart manuale
-
-### Temporal Kill-Switch
-| Livello | Finestra | Max Drawdown | Cooldown |
-|---------|----------|--------------|----------|
-| 1 | 30s | 0.7% | 15 min |
-| 2 | 10 min | 2.0% | 1 ora |
-| 3 | 1 ora | 4.5% | 6 ore |
+**NON SALTARE QUESTI PASSAGGI.** Usa gli strumenti che hai effettivamente a disposizione.
 
 ---
 
-## Deploy su Hetzner VPS
+## Fonti Ufficiali per Aggiornamenti
 
-### Server MAINNET
-- **IP**: <VPS_IP_REDACTED>
-- **Directory**: /opt/trader_bitcoin
-- **User**: root
+| Fonte | URL | Quando Usare |
+|-------|-----|--------------|
+| **GitHub Changelog** | `github.com/anthropics/claude-code/blob/main/CHANGELOG.md` | SEMPRE a inizio sessione |
+| Platform Docs | `platform.claude.com/docs/en/release-notes/overview` | Per API, modelli, SDK |
+| Help Center | `support.claude.com/en/articles/12138966-release-notes` | Per features utente |
+| Anthropic News | `anthropic.com/news` | Per major releases |
 
-### Comandi Deploy
+---
 
-```bash
-# Deploy completo (da Mac locale)
-cd "/Users/francescocarlesi/Downloads/Progetti Python/trader_bitcoin"
-./deploy.sh
+## Come Scoprire Risorse Disponibili
+
+### MCP Servers
+```python
+# Opzione 1: Leggi config
+Read(".mcp.json")
+
+# Opzione 2: Controlla system prompt sezione "MCP Server Instructions"
+
+# Opzione 3: Prova a listare risorse
+ListMcpResourcesTool()
 ```
 
-### Gestione Container
-
-```bash
-# SSH al server
-ssh root@<VPS_IP_REDACTED>
-
-# Logs bot MAINNET
-docker logs trader_mainnet_app --tail 100 -f
-
-# Stato container
-docker ps --filter 'name=trader'
-
-# Restart bot
-cd /opt/trader_bitcoin && docker compose restart app
-
-# Health check
-curl http://localhost:8081/health
-
-# Database
-docker exec trader_mainnet_postgres psql -U trader -d trader_db
+### Skills
+```python
+# Le skills disponibili sono nel system prompt sotto <available_skills>
+# Invocare con /skill-name o tool Skill(skill="nome")
 ```
 
-### Query Database Utili
+### Task Agents
+```python
+# Gli agent types sono nella descrizione del Task tool
+# Usare: Task(subagent_type="tipo", prompt="...")
+```
 
-```sql
--- Ultime analisi AI regime
-SELECT id, timestamp, regime, confidence, analysis
-FROM regime_history ORDER BY id DESC LIMIT 5;
-
--- Account snapshots
-SELECT * FROM account_snapshots ORDER BY id DESC LIMIT 20;
-
--- Trade recenti
-SELECT * FROM trades ORDER BY id DESC LIMIT 10;
+### Serena Memories
+```python
+mcp__plugin_serena_serena__list_memories()
+mcp__plugin_serena_serena__read_memory(memory_file_name="...")
 ```
 
 ---
 
-## Troubleshooting
+## Versione di Riferimento
 
-### Bot non genera segnali
-1. Verificare regime: se "uncertain", condizioni non ottimali
-2. Controllare se ha posizioni aperte (skippa simboli con posizione)
-3. Verificare spread (troppo largo per HFT)
+**v2.0.76** (Dec 2025) - Ultima versione nota al momento della scrittura.
 
-### DeepSeek timeout
-- Timeout configurato: 90 secondi
-- Se persiste, controllare connettività API
-
-### Bot frozen/unhealthy
-```bash
-# Restart
-ssh root@<VPS_IP_REDACTED> "cd /opt/trader_bitcoin && docker compose restart app"
-```
-
-### Verificare API key DeepSeek
-```bash
-ssh root@<VPS_IP_REDACTED> "docker exec trader_mainnet_app env | grep DEEPSEEK"
-# Deve mostrare: DEEPSEEK_API_KEY=sk-cbd31...
-```
+⚠️ **NON FIDARTI** - Esegui sempre il WebFetch del changelog. Le release escono frequentemente.
 
 ---
 
-## Variabili d'Ambiente (.env)
+## Note Progetto
 
-```bash
-ENVIRONMENT=production
-PRIVATE_KEY=0x...
-WALLET_ADDRESS=0x...
-DEEPSEEK_API_KEY=sk-cbd31...  # DeepSeek V3.2-Speciale
-CMC_PRO_API_KEY=...
-DATABASE_URL=postgresql://trader:password@postgres:5432/trader_db
-```
+Questo è il progetto **HLQuantBot** - trading bot per Hyperliquid DEX.
 
----
-
-## Note
-
-- I valori dinamici (equity, posizioni, regime) cambiano continuamente - controllare sempre via dashboard o database
-- Per lo stato attuale: `docker logs trader_mainnet_app --tail 20`
+Per info specifiche del progetto, consulta:
+- Serena memories (`.serena/memories/`)
+- Codebase esistente
+- Convenzioni già in uso nel codice

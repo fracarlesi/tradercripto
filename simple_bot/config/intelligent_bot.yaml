@@ -1,0 +1,161 @@
+# HLQuantBot v2.0 - Intelligent Trading Bot Configuration
+# ========================================================
+# Environment variables can be referenced with ${ENV_VAR} syntax
+# Default values: ${ENV_VAR:default_value}
+
+system:
+  name: "HLQuantBot-v2"
+  mode: "${BOT_MODE:testnet}"  # testnet or mainnet
+  log_level: "${LOG_LEVEL:INFO}"
+  log_file: "logs/hlquantbot_v2.log"
+
+hyperliquid:
+  testnet: true
+  api_timeout: 30
+  max_retries: 3
+  rate_limit_orders_per_sec: 10
+  rate_limit_info_per_min: 100
+
+database:
+  host: "${DB_HOST:localhost}"
+  port: ${DB_PORT:5432}
+  name: "${DB_NAME:trading_db}"
+  user: "${DB_USER:trader}"
+  password: "${DB_PASSWORD:trader_password}"
+  pool_min: 2
+  pool_max: 10
+
+services:
+  market_scanner:
+    enabled: true
+    interval_seconds: 300
+    coins_limit: 200
+    min_volume_24h: 1000000
+    exclude_symbols: ["USDC", "USDT", "DAI"]
+    
+  opportunity_ranker:
+    enabled: true
+    top_n: 20
+    min_score: 0.6
+    weights:
+      trend_strength: 0.25
+      volatility: 0.20
+      volume: 0.15
+      funding: 0.15
+      liquidity: 0.15
+      momentum: 0.10
+    
+  strategy_selector:
+    enabled: true
+    use_llm: true
+    fallback_strategy: "momentum"
+    reselect_interval_minutes: 60
+    
+  capital_allocator:
+    enabled: true
+    max_positions: 5
+    reserve_pct: 0.20
+    max_position_pct: 0.20
+    max_correlated_pct: 0.30
+    rebalance_threshold_pct: 0.10
+    
+  execution_engine:
+    enabled: true
+    order_type: "smart"  # limit, market, smart
+    max_slippage_pct: 0.5
+    retry_attempts: 3
+    retry_delay_seconds: 1
+    use_reduce_only: true
+    
+  learning_module:
+    enabled: true
+    optimization_interval_hours: 1
+    min_trades_for_optimization: 10
+    performance_window_hours: 24
+    rollback_threshold_pct: -5.0
+
+risk:
+  leverage: 5
+  position_size_pct: 10
+  max_positions: 5
+  max_drawdown_pct: 15
+  daily_loss_limit_pct: 5
+  target_monthly_return: 12
+  max_correlation: 0.7
+  stop_loss_pct: 1.0
+  take_profit_pct: 1.5
+  trailing_stop_pct: 0.8
+  trailing_stop_activation_pct: 0.5
+
+llm:
+  provider: "deepseek"
+  model: "deepseek-chat"
+  api_key_env: "DEEPSEEK_API_KEY"
+  temperature: 0.3
+  max_tokens: 2000
+  timeout: 120
+  decisions_per_day: 300
+  retry_attempts: 3
+  retry_delay_seconds: 5
+
+strategies:
+  momentum:
+    enabled: true
+    weight: 0.35
+    timeframe: "4h"
+    ema_fast: 20
+    ema_slow: 50
+    adx_threshold: 25
+    adx_period: 14
+    rsi_period: 14
+    rsi_long_threshold: 55
+    rsi_short_threshold: 45
+    volume_confirmation: true
+    
+  mean_reversion:
+    enabled: true
+    weight: 0.25
+    timeframe: "15m"
+    rsi_period: 14
+    rsi_oversold: 20
+    rsi_overbought: 80
+    bb_period: 20
+    bb_std: 2.0
+    min_bb_width: 0.02
+    
+  breakout:
+    enabled: true
+    weight: 0.25
+    timeframe: "1h"
+    lookback_periods: 20
+    min_breakout_pct: 1.5
+    atr_multiplier: 2.0
+    atr_period: 14
+    volume_surge_multiplier: 1.5
+    
+  funding_arb:
+    enabled: true
+    weight: 0.15
+    min_funding_rate: 0.05
+    max_funding_rate: 0.5
+    holding_period_hours: 8
+    hedge_spot: false
+
+# Telegram notifications (optional)
+telegram:
+  enabled: false
+  bot_token_env: "TELEGRAM_BOT_TOKEN"
+  chat_id_env: "TELEGRAM_CHAT_ID"
+  notify_on:
+    - "trade_open"
+    - "trade_close"
+    - "daily_summary"
+    - "error"
+    - "drawdown_warning"
+
+# Health monitoring
+health:
+  enabled: true
+  port: 8080
+  check_interval_seconds: 30
+  unhealthy_threshold: 3

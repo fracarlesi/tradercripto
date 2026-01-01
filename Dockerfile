@@ -2,17 +2,18 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
-    gcc \
-    libpq-dev \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
+# Install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+# Copy application
+COPY simple_bot/ ./simple_bot/
+COPY database/ ./database/
+# NOTE: .env NOT copied - provided via docker-compose env_file
 
-EXPOSE 8080
+# Set Python path
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
 
-CMD ["python", "main_daemon.py"]
+# Default command - run the bot
+CMD ["python", "-m", "simple_bot.main"]

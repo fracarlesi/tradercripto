@@ -1,64 +1,66 @@
 #!/bin/bash
 
-# Deploy MAINNET trading bot to Hetzner VPS
+# Deploy HLQuantBot to Hetzner VPS
 
 set -e
 
 VPS_IP="<VPS_IP_REDACTED>"
-DEPLOY_DIR="/opt/trader_bitcoin"
+DEPLOY_DIR="/opt/hlquantbot"
 
-echo "=== Deploying MAINNET Trading Bot to $VPS_IP ==="
-echo "WARNING: This is REAL MONEY trading!"
+echo "=== Deploying HLQuantBot to $VPS_IP ==="
 echo ""
 
-# Step 1: Copy files to VPS
-echo "Copying files to VPS..."
+# Step 1: Create directory on VPS
+echo "[1/6] Creating directory on VPS..."
 ssh root@$VPS_IP "mkdir -p $DEPLOY_DIR/logs"
+
+# Step 2: Copy files to VPS
+echo "[2/6] Copying files to VPS..."
 rsync -avz --delete \
     --exclude='.git' \
     --exclude='__pycache__' \
     --exclude='*.pyc' \
     --exclude='.env' \
-    --exclude='.env.backup' \
-    --exclude='deploy.sh.backup' \
     --exclude='logs' \
     --exclude='venv' \
+    --exclude='.venv' \
     --exclude='.claude' \
+    --exclude='.serena' \
+    --exclude='.pytest_cache' \
+    --exclude='*.log' \
+    --exclude='node_modules' \
     ./ root@$VPS_IP:$DEPLOY_DIR/
 
-# Step 2: Copy .env file
-echo "Copying .env file..."
+# Step 3: Copy .env file
+echo "[3/6] Copying .env file..."
 scp .env root@$VPS_IP:$DEPLOY_DIR/.env
 
-# Step 3: Set permissions
-echo "Setting permissions..."
-ssh root@$VPS_IP "chmod +x $DEPLOY_DIR/run_bot.sh 2>/dev/null || true"
+# Step 4: Stop existing containers
+echo "[4/6] Stopping existing containers..."
+ssh root@$VPS_IP "cd $DEPLOY_DIR && docker compose down 2>/dev/null || true"
 
-# Step 4: Build and start postgres only
-echo "Building Docker image and starting PostgreSQL..."
-ssh root@$VPS_IP "cd $DEPLOY_DIR && docker compose down && docker compose build --no-cache && docker compose up -d postgres"
+# Step 5: Build and start services
+echo "[5/6] Building and starting services..."
+ssh root@$VPS_IP "cd $DEPLOY_DIR && docker compose build --no-cache && docker compose up -d"
 
-# Step 5: Wait for postgres
-echo "Waiting for PostgreSQL to be ready..."
-sleep 60
+# Step 6: Wait and show status
+echo "[6/6] Waiting for services to start..."
+sleep 10
+ssh root@$VPS_IP "cd $DEPLOY_DIR && docker compose ps"
 
-# Step 6: Start dashboard and app (daemon mode)
-echo "Starting dashboard and trading bot..."
-ssh root@$VPS_IP "cd $DEPLOY_DIR && docker compose up -d dashboard app"
-
-# Step 7: Show status
 echo ""
-echo "=== MAINNET Deployment complete! ==="
+echo "=== Deployment complete! ==="
 echo ""
-echo "Ambiente: MAINNET (Hyperliquid REAL)"
-echo "Dashboard: http://$VPS_IP:5611/"
-echo "API Status: http://$VPS_IP:8080/status"
-echo "PostgreSQL: porta 5432"
+echo "Services:"
+echo "  - Bot:        Running as daemon"
+echo "  - Dashboard:  http://$VPS_IP:5000/"
+echo "  - Frontend:   http://$VPS_IP:5611/"
+echo "  - PostgreSQL: port 5432"
 echo ""
-echo "Il bot gira come daemon (non serve cron)."
-echo ""
-echo "Comandi utili:"
+echo "Useful commands:"
 echo "  ssh root@$VPS_IP"
 echo "  cd $DEPLOY_DIR"
-echo "  docker compose logs -f app    # Vedi logs"
-echo "  docker compose restart app    # Riavvia"
+echo "  docker compose logs -f bot       # View bot logs"
+echo "  docker compose logs -f dashboard # View dashboard logs"
+echo "  docker compose restart bot       # Restart bot"
+echo "  docker compose ps                # Check status"

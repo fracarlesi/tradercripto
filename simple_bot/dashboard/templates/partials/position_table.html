@@ -1,0 +1,115 @@
+<!-- Active Positions -->
+<div class="grid gap-4">
+    <!-- Position Summary -->
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="stat-label">Total Positions</div>
+            <div class="stat-value">{{ positions|length }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Long</div>
+            <div class="stat-value positive">{{ positions|selectattr('side', 'equalto', 'long')|list|length }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Short</div>
+            <div class="stat-value negative">{{ positions|selectattr('side', 'equalto', 'short')|list|length }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Total Unrealized</div>
+            <div class="stat-value {% if total_unrealized >= 0 %}positive{% else %}negative{% endif %}">
+                {{ "+$" if total_unrealized >= 0 else "-$" }}{{ "%.2f"|format(total_unrealized|abs) }}
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Total Margin</div>
+            <div class="stat-value">${{ "%.2f"|format(total_margin) }}</div>
+        </div>
+    </div>
+
+    <!-- Positions Table -->
+    <div class="card">
+        <div class="card-header">
+            <span class="card-title">
+                <span style="color: var(--success);">&#128179;</span> Open Positions
+            </span>
+        </div>
+        <div class="card-body p-0">
+            {% if positions %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>Symbol</th>
+                        <th>Side</th>
+                        <th class="text-right">Size</th>
+                        <th class="text-right">Entry Price</th>
+                        <th class="text-right">Mark Price</th>
+                        <th class="text-right">Unrealized PnL</th>
+                        <th class="text-right">ROE</th>
+                        <th class="text-right">Leverage</th>
+                        <th class="text-right">Margin</th>
+                        <th class="text-right">Liq. Price</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for p in positions %}
+                    {% set pnl = p.unrealized_pnl|default(0)|float %}
+                    {% set entry = p.entry_price|default(0)|float %}
+                    {% set mark = p.mark_price|default(0)|float %}
+                    {% set margin = p.margin_used|default(0)|float %}
+                    {% set roe = (pnl / margin * 100) if margin > 0 else 0 %}
+                    <tr>
+                        <td>
+                            <span class="font-medium text-white">{{ p.symbol }}</span>
+                        </td>
+                        <td>
+                            <span class="tag {% if p.side == 'long' %}tag-success{% else %}tag-danger{% endif %}">
+                                {{ p.side|upper }}
+                            </span>
+                        </td>
+                        <td class="text-right font-mono">
+                            {{ "%.4f"|format(p.size) }}
+                        </td>
+                        <td class="text-right font-mono">
+                            ${{ "%.4f"|format(entry) }}
+                        </td>
+                        <td class="text-right font-mono">
+                            ${{ "%.4f"|format(mark) }}
+                        </td>
+                        <td class="text-right font-mono {% if pnl >= 0 %}text-green-400{% else %}text-red-400{% endif %}">
+                            {{ "+$" if pnl >= 0 else "-$" }}{{ "%.2f"|format(pnl|abs) }}
+                        </td>
+                        <td class="text-right font-mono {% if roe >= 0 %}text-green-400{% else %}text-red-400{% endif %}">
+                            {{ "+"|default("") if roe >= 0 else "" }}{{ "%.2f"|format(roe) }}%
+                        </td>
+                        <td class="text-right font-mono">
+                            {{ "%.1f"|format(p.leverage|default(1)) }}x
+                        </td>
+                        <td class="text-right font-mono">
+                            ${{ "%.2f"|format(margin) }}
+                        </td>
+                        <td class="text-right font-mono text-red-400">
+                            {% if p.liquidation_price %}
+                                ${{ "%.4f"|format(p.liquidation_price) }}
+                            {% else %}
+                                -
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="empty-state py-8">
+                <div class="text-4xl mb-4">&#128200;</div>
+                <div class="text-lg font-medium text-white mb-2">No Open Positions</div>
+                <p class="text-gray-400">All positions are currently closed.</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<!-- Update timestamp -->
+<div class="text-right text-xs text-gray-500 mt-2">
+    Updated: {{ updated_at.strftime("%H:%M:%S") }}
+</div>

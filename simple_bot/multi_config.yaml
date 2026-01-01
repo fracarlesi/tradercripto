@@ -1,0 +1,56 @@
+# Multi-Strategy Bot Configuration
+# =================================
+# UPDATED 2025-12-28: Fixed parameters to reduce losses
+
+# Symbol scanning
+top_symbols_count: 10
+min_volume_24h: 1000000
+
+# Global settings
+min_order_interval_seconds: 120  # Increased from 60 to reduce over-trading
+log_level: INFO
+log_file: simple_bot/multi_bot.log
+testnet: true
+
+# Default position settings - MORE CONSERVATIVE
+position_size_usd: 50.0  # Fallback if ATR sizing unavailable
+leverage: 3  # Reduced from 5 to lower risk
+
+# Volatility-based position sizing (ATR)
+risk_per_trade: 0.01  # Risk 1% of account per trade
+max_position_size_usd: 200.0  # Maximum position size cap
+atr_period: 14  # ATR calculation period
+atr_sl_multiplier: 2.0  # SL distance = ATR * multiplier
+
+# CRITICAL: TP/SL ratios - need positive expectancy
+# With 0.09% fees round-trip, we need larger moves
+tp_pct: 0.015           # 1.5% take profit (was 1.0%)
+sl_pct: 0.01            # 1.0% stop loss (was 0.5%)
+trailing_stop_pct: 0.008  # 0.8% trailing stop (activates after breakeven)
+# Risk/Reward ratio now 1.5:1 instead of 2:1 against us
+
+# Strategy configurations
+momentum:
+  enabled: true
+  position_size_usd: 50
+  ema_fast: 12      # Faster EMA for quicker signals
+  ema_slow: 26      # Standard MACD settings
+  rsi_period: 14
+  rsi_long_threshold: 55   # Slightly above neutral
+  rsi_short_threshold: 45  # Slightly below neutral
+
+mean_reversion:
+  enabled: true
+  position_size_usd: 50
+  rsi_period: 14
+  rsi_oversold: 25     # More extreme (was 35) - fewer but better signals
+  rsi_overbought: 75   # More extreme (was 65) - fewer but better signals
+  bb_period: 20
+  bb_std: 2.0          # Standard 2 std dev (was 1.5)
+
+breakout:
+  enabled: true
+  position_size_usd: 50
+  lookback_bars: 30    # Longer lookback (was 20) for stronger breakouts
+  min_breakout_pct: 0.005  # 0.5% minimum breakout (was 0.15%)
+  volatility_multiplier: 1.5  # ATR surge threshold for breakout confirmation
