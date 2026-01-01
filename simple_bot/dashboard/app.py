@@ -755,6 +755,19 @@ def partial_overview():
             stats = await db.get_stats()
             decisions = await db.get_strategy_decisions(limit=10)
 
+            # Get market regime from market_states (conservative system)
+            market_regime = None
+            try:
+                btc_states = await db.fetch("""
+                    SELECT regime FROM market_states
+                    WHERE symbol = 'BTC'
+                    ORDER BY timestamp DESC LIMIT 1
+                """)
+                if btc_states and len(btc_states) > 0:
+                    market_regime = btc_states[0]["regime"]
+            except Exception as e:
+                print(f"[Dashboard] Error fetching market regime: {e}")
+
             return {
                 "account": account,
                 "positions": positions,
@@ -762,6 +775,7 @@ def partial_overview():
                 "rankings_data": rankings_data,
                 "stats": stats,
                 "decisions": decisions,
+                "market_regime": market_regime,
             }
         except Exception as e:
             print(f"[Dashboard] Error fetching overview data: {e}")
@@ -772,6 +786,7 @@ def partial_overview():
                 "rankings_data": None,
                 "stats": {"total_trades": 0, "wins": 0, "losses": 0, "win_rate": 0, "total_pnl": 0, "total_fees": 0},
                 "decisions": [],
+                "market_regime": None,
             }
 
     data = safe_run_async(_get_data(), default={
@@ -781,6 +796,7 @@ def partial_overview():
         "rankings_data": None,
         "stats": {"total_trades": 0, "wins": 0, "losses": 0, "win_rate": 0, "total_pnl": 0, "total_fees": 0},
         "decisions": [],
+        "market_regime": None,
     })
 
     # Process data
@@ -795,8 +811,25 @@ def partial_overview():
     healthy_count = sum(1 for s in services if s.get("status") == "healthy")
     total_services = len(services)
 
-    # Market regime
-    market_regime = rankings_data.get("market_regime", "unknown")
+    # Market regime (from market_states or fallback to rankings_data)
+    market_regime = data.get("market_regime") or rankings_data.get("market_regime")
+
+    # If still no regime, try a separate fetch
+    if not market_regime:
+        async def _get_regime():
+            try:
+                db = await get_db()
+                result = await db.fetch("""
+                    SELECT regime FROM market_states
+                    WHERE symbol = 'BTC'
+                    ORDER BY timestamp DESC LIMIT 1
+                """)
+                if result and len(result) > 0:
+                    return result[0]["regime"]
+            except Exception:
+                pass
+            return "unknown"
+        market_regime = safe_run_async(_get_regime(), default="unknown")
 
     # Daily PnL (from stats or calculate)
     daily_pnl = float(stats.get("total_pnl", 0))
