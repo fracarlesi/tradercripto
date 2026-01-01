@@ -447,14 +447,14 @@ class MarketStateService(BaseService):
             interval_ms = tf_map.get(self._state_config.timeframe, 4 * 60 * 60 * 1000)
             start_time = end_time - (self._state_config.bars_to_fetch * interval_ms)
 
-            # Fetch candles
+            # Fetch candles (positional args: symbol, interval, start_time, end_time)
             candles = await loop.run_in_executor(
                 None,
                 lambda: self._info.candles_snapshot(
-                    coin=symbol,
-                    interval=self._state_config.timeframe,
-                    startTime=start_time,
-                    endTime=end_time,
+                    symbol,
+                    self._state_config.timeframe,
+                    start_time,
+                    end_time,
                 )
             )
 

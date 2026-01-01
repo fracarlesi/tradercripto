@@ -21,6 +21,7 @@ services:
   bot:
     build: .
     container_name: hlquantbot_bot
+    command: ["python", "-m", "simple_bot.main_conservative"]
     depends_on:
       postgres:
         condition: service_healthy
