@@ -70,6 +70,23 @@ class Database:
             return True
         except Exception:
             return False
+
+    async def fetch(self, query: str, *args) -> list:
+        """Execute query and return all rows."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(query, *args)
+            return rows
+
+    async def fetchrow(self, query: str, *args) -> Optional[dict]:
+        """Execute query and return single row."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(query, *args)
+            return row
+
+    async def fetchval(self, query: str, *args) -> Any:
+        """Execute query and return single value."""
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval(query, *args)
     
     # =========================================================================
     # LIVE ACCOUNT

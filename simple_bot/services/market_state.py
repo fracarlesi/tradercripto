@@ -549,20 +549,91 @@ class MarketStateService(BaseService):
     # =========================================================================
 
     async def _publish_state(self, state: MarketState) -> None:
-        """Publish market state to message bus."""
-        if not self.bus:
+        """Publish market state to message bus and persist to database."""
+        if self.bus:
+            await self.publish(Topic.MARKET_STATE, state.model_dump())
+
+            # Also publish regime separately for interested services
+            await self.publish(Topic.REGIME, {
+                "symbol": state.symbol,
+                "regime": state.regime.value,
+                "timestamp": state.timestamp.isoformat(),
+                "adx": float(state.adx),
+                "trend_direction": state.trend_direction.value,
+            })
+
+        # Persist to database for dashboard
+        await self._save_to_db(state)
+
+    async def _save_to_db(self, state: MarketState) -> None:
+        """Persist market state to database."""
+        if not self.db or not self.db.pool:
             return
 
-        await self.publish(Topic.MARKET_STATE, state.model_dump())
-
-        # Also publish regime separately for interested services
-        await self.publish(Topic.REGIME, {
-            "symbol": state.symbol,
-            "regime": state.regime.value,
-            "timestamp": state.timestamp.isoformat(),
-            "adx": float(state.adx),
-            "trend_direction": state.trend_direction.value,
-        })
+        try:
+            async with self.db.pool.acquire() as conn:
+                await conn.execute(
+                """
+                INSERT INTO market_states (
+                    timestamp, symbol, timeframe,
+                    open, high, low, close, volume,
+                    atr, atr_pct, adx, rsi, ema50, ema200, ema200_slope,
+                    choppiness, bb_lower, bb_mid, bb_upper,
+                    regime, trend_direction, bars_count
+                ) VALUES (
+                    $1, $2, $3,
+                    $4, $5, $6, $7, $8,
+                    $9, $10, $11, $12, $13, $14, $15,
+                    $16, $17, $18, $19,
+                    $20, $21, $22
+                )
+                ON CONFLICT (timestamp, symbol, timeframe)
+                DO UPDATE SET
+                    open = EXCLUDED.open,
+                    high = EXCLUDED.high,
+                    low = EXCLUDED.low,
+                    close = EXCLUDED.close,
+                    volume = EXCLUDED.volume,
+                    atr = EXCLUDED.atr,
+                    atr_pct = EXCLUDED.atr_pct,
+                    adx = EXCLUDED.adx,
+                    rsi = EXCLUDED.rsi,
+                    ema50 = EXCLUDED.ema50,
+                    ema200 = EXCLUDED.ema200,
+                    ema200_slope = EXCLUDED.ema200_slope,
+                    choppiness = EXCLUDED.choppiness,
+                    bb_lower = EXCLUDED.bb_lower,
+                    bb_mid = EXCLUDED.bb_mid,
+                    bb_upper = EXCLUDED.bb_upper,
+                    regime = EXCLUDED.regime,
+                    trend_direction = EXCLUDED.trend_direction,
+                    bars_count = EXCLUDED.bars_count
+                """,
+                state.timestamp,
+                state.symbol,
+                state.timeframe,
+                float(state.open),
+                float(state.high),
+                float(state.low),
+                float(state.close),
+                float(state.volume),
+                float(state.atr),
+                float(state.atr_pct),
+                float(state.adx),
+                float(state.rsi),
+                float(state.ema50),
+                float(state.ema200),
+                float(state.ema200_slope),
+                float(state.choppiness) if state.choppiness else None,
+                float(state.bb_lower) if state.bb_lower else None,
+                float(state.bb_mid) if state.bb_mid else None,
+                float(state.bb_upper) if state.bb_upper else None,
+                state.regime.value,
+                state.trend_direction.value,
+                state.bars_count,
+            )
+        except Exception as e:
+            self._logger.error("Failed to save market state to DB: %s", e)
 
     # =========================================================================
     # Public API
