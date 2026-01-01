@@ -42,59 +42,43 @@ app = Flask(
 app.config["SECRET_KEY"] = os.getenv("FLASK_SECRET_KEY", "hlquantbot-v2-secret")
 app.config["JSON_SORT_KEYS"] = False
 
-# Database instance (lazy initialization)
-_db: Optional[Database] = None
-
-
 # =============================================================================
-# Async Helpers
+# Async Helpers - Thread-safe implementation
 # =============================================================================
 
-_db_loop = None  # Track the event loop the db pool was created in
+import threading
+import atexit
+
+# Dedicated background event loop for all async operations
+_bg_loop: Optional[asyncio.AbstractEventLoop] = None
+_bg_thread: Optional[threading.Thread] = None
+_db_instance: Optional[Database] = None
+_db_lock = threading.Lock()
 
 
-def get_event_loop():
-    """Get or create event loop."""
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_closed():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        return loop
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        return loop
+def _start_background_loop(loop: asyncio.AbstractEventLoop) -> None:
+    """Run event loop in background thread."""
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
 
 
-async def get_db() -> Database:
-    """Get or create database connection, recreating if loop changed."""
-    global _db, _db_loop
-    current_loop = asyncio.get_running_loop()
+def get_background_loop() -> asyncio.AbstractEventLoop:
+    """Get or create the background event loop."""
+    global _bg_loop, _bg_thread
 
-    # If db exists but was created in a different loop, recreate it
-    if _db is not None and _db_loop is not None and _db_loop != current_loop:
-        try:
-            await _db.disconnect()
-        except Exception:
-            pass
-        _db = None
-        _db_loop = None
+    if _bg_loop is None or _bg_loop.is_closed():
+        _bg_loop = asyncio.new_event_loop()
+        _bg_thread = threading.Thread(target=_start_background_loop, args=(_bg_loop,), daemon=True)
+        _bg_thread.start()
 
-    if _db is None:
-        _db = Database()
-        await _db.connect(min_size=1, max_size=5)
-        _db_loop = current_loop
-    elif _db.pool is None:
-        await _db.connect(min_size=1, max_size=5)
-        _db_loop = current_loop
-    return _db
+    return _bg_loop
 
 
 def run_async(coro):
-    """Run async coroutine in sync context."""
-    loop = get_event_loop()
-    return loop.run_until_complete(coro)
+    """Run async coroutine in the background event loop (thread-safe)."""
+    loop = get_background_loop()
+    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    return future.result(timeout=30)  # 30 second timeout
 
 
 def safe_run_async(coro, default=None):
@@ -104,6 +88,37 @@ def safe_run_async(coro, default=None):
     except Exception as e:
         print(f"[Dashboard] Error running async: {e}")
         return default
+
+
+async def get_db() -> Database:
+    """Get or create database connection (singleton in background loop)."""
+    global _db_instance
+
+    if _db_instance is None:
+        with _db_lock:
+            if _db_instance is None:
+                _db_instance = Database()
+                await _db_instance.connect(min_size=1, max_size=5)
+    elif _db_instance.pool is None:
+        with _db_lock:
+            if _db_instance.pool is None:
+                await _db_instance.connect(min_size=1, max_size=5)
+
+    return _db_instance
+
+
+def cleanup_db():
+    """Cleanup database connection on shutdown."""
+    global _db_instance, _bg_loop
+    if _db_instance and _bg_loop and not _bg_loop.is_closed():
+        try:
+            future = asyncio.run_coroutine_threadsafe(_db_instance.disconnect(), _bg_loop)
+            future.result(timeout=5)
+        except Exception:
+            pass
+
+
+atexit.register(cleanup_db)
 
 
 # =============================================================================
