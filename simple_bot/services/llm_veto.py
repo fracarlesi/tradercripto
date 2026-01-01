@@ -28,7 +28,7 @@ from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 from .base import BaseService
-from .message_bus import MessageBus
+from .message_bus import MessageBus, Message
 from ..core.enums import Topic
 from ..core.models import Setup, MarketState, LLMDecision, Regime
 
@@ -186,10 +186,14 @@ class LLMVetoService(BaseService):
     # Market State Handling
     # =========================================================================
 
-    async def _handle_market_state(self, state_data: Dict) -> None:
+    async def _handle_market_state(self, message: Message) -> None:
         """Cache market state for context."""
         try:
-            state = MarketState(**state_data)
+            payload = message.payload
+            if not isinstance(payload, dict):
+                self._logger.warning("Invalid market state payload type: %s", type(payload))
+                return
+            state = MarketState(**payload)
             self._market_states[state.symbol] = state
         except Exception as e:
             self._logger.error("Error parsing market state: %s", e)
