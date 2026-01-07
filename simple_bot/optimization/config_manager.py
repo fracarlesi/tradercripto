@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 from typing import Dict, Optional, Callable, List, Any
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 import logging
 
@@ -82,7 +82,7 @@ class HotReloadConfigManager:
                 )
                 logger.info(f"Created initial parameter version {self._current_version} from YAML")
 
-        self._last_reload_time = datetime.utcnow()
+        self._last_reload_time = datetime.now(timezone.utc)
         return self._current_version
 
     def _load_yaml(self) -> Dict:
@@ -241,7 +241,7 @@ class HotReloadConfigManager:
             # Update in memory
             self._current_config = new_config
             self._current_version = version_id
-            self._last_reload_time = datetime.utcnow()
+            self._last_reload_time = datetime.now(timezone.utc)
 
             logger.info(f"Applied new config version {version_id} (source: {source})")
 

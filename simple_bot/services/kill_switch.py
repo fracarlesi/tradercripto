@@ -20,7 +20,7 @@ Author: Francesco Carlesi
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -148,7 +148,7 @@ class KillSwitchService(BaseService):
             await self.subscribe(Topic.METRICS, self._handle_metrics)
 
         # Initialize reset times
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         self._last_day_reset = now.replace(hour=0, minute=0, second=0, microsecond=0)
         self._last_week_reset = now - timedelta(days=now.weekday())
         self._last_week_reset = self._last_week_reset.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -164,7 +164,7 @@ class KillSwitchService(BaseService):
 
         # Check if paused and can resume
         if self._ks_status in (KillSwitchStatus.DAILY_PAUSE, KillSwitchStatus.WEEKLY_PAUSE):
-            if self._resume_time and datetime.utcnow() >= self._resume_time:
+            if self._resume_time and datetime.now(timezone.utc) >= self._resume_time:
                 await self._resume_trading()
                 return
 
@@ -214,7 +214,7 @@ class KillSwitchService(BaseService):
 
     async def _check_period_reset(self) -> None:
         """Check if daily/weekly periods should reset."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         # Daily reset at UTC midnight
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -289,7 +289,7 @@ class KillSwitchService(BaseService):
         self._ks_status = KillSwitchStatus.DAILY_PAUSE
 
         # Resume tomorrow at market open
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         tomorrow = now + timedelta(days=1)
         self._resume_time = tomorrow.replace(hour=0, minute=0, second=0, microsecond=0)
 
@@ -317,10 +317,10 @@ class KillSwitchService(BaseService):
         self._ks_status = KillSwitchStatus.WEEKLY_PAUSE
 
         # Resume in 3 days
-        self._resume_time = datetime.utcnow() + timedelta(days=3)
+        self._resume_time = datetime.now(timezone.utc) + timedelta(days=3)
 
         event = KillSwitchEvent(
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             trigger_type="weekly",
             trigger_value=loss_pct,
             threshold=self._ks_config.weekly_loss_pct,
@@ -344,7 +344,7 @@ class KillSwitchService(BaseService):
         self._resume_time = None  # Manual intervention required
 
         event = KillSwitchEvent(
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             trigger_type="max_drawdown",
             trigger_value=drawdown_pct,
             threshold=self._ks_config.max_drawdown_pct,
@@ -373,7 +373,7 @@ class KillSwitchService(BaseService):
             await self.publish(Topic.RISK_ALERTS, {
                 "type": "kill_switch",
                 "status": self._ks_status.value,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "resume_time": self._resume_time.isoformat() if self._resume_time else None,
             })
 
@@ -399,7 +399,7 @@ class KillSwitchService(BaseService):
             await self.publish(Topic.RISK_ALERTS, {
                 "type": "kill_switch_resume",
                 "previous_status": old_status.value,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             })
 
     async def _send_alert(self, event: KillSwitchEvent) -> None:

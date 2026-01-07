@@ -38,7 +38,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set
@@ -388,7 +388,7 @@ class ExecutionEngineService(BaseService):
                 return False
             
             # Check for stale pending orders (> 5 minutes old)
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             stale_orders = [
                 order for order in self.pending_orders.values()
                 if order.submitted_at and (now - order.submitted_at) > timedelta(minutes=5)
@@ -555,7 +555,7 @@ class ExecutionEngineService(BaseService):
             order_type=order_type,
             signal_id=signal_id,
             strategy=strategy,
-            submitted_at=datetime.utcnow(),
+            submitted_at=datetime.now(timezone.utc),
         )
         
         self._logger.info(
@@ -579,7 +579,7 @@ class ExecutionEngineService(BaseService):
                 order.filled_size = result.get("filledSize", 0)
                 
                 if order.status == OrderStatus.FILLED:
-                    order.filled_at = datetime.utcnow()
+                    order.filled_at = datetime.now(timezone.utc)
                     
                     # Check slippage
                     if order.avg_price:
@@ -589,7 +589,7 @@ class ExecutionEngineService(BaseService):
                 if order.status == OrderStatus.FILLED:
                     self.metrics.orders_filled += 1
                 
-                self.metrics.last_execution_time = datetime.utcnow()
+                self.metrics.last_execution_time = datetime.now(timezone.utc)
                 
                 return order
                 
@@ -815,7 +815,7 @@ class ExecutionEngineService(BaseService):
             strategy=signal.get("strategy"),
             signal_id=order.signal_id,
             status=PositionStatus.OPEN,
-            opened_at=datetime.utcnow(),
+            opened_at=datetime.now(timezone.utc),
         )
         
         self.active_positions[symbol] = position
@@ -965,7 +965,7 @@ class ExecutionEngineService(BaseService):
                             unrealized_pnl=pos.get("unrealizedPnl", 0),
                             leverage=pos.get("leverage", 1),
                             status=PositionStatus.OPEN,
-                            opened_at=datetime.utcnow(),
+                            opened_at=datetime.now(timezone.utc),
                         )
                         self._logger.info(
                             "Synced existing position: %s %s %.4f",
@@ -1056,7 +1056,7 @@ class ExecutionEngineService(BaseService):
         
         position = self.active_positions[symbol]
         position.status = PositionStatus.CLOSED
-        position.closed_at = datetime.utcnow()
+        position.closed_at = datetime.now(timezone.utc)
         
         self.metrics.positions_closed += 1
         
@@ -1073,7 +1073,7 @@ class ExecutionEngineService(BaseService):
             "symbol": symbol,
             "position": position.to_dict(),
             "pnl": position.unrealized_pnl,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         })
         
         # Clean up - remove from active after a delay
@@ -1136,7 +1136,7 @@ class ExecutionEngineService(BaseService):
             "price": price,
             "fee": fee,
             "closed_pnl": fill.get("closedPnl", 0),
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         })
     
     # =========================================================================
@@ -1167,7 +1167,7 @@ class ExecutionEngineService(BaseService):
             "event": "order_error",
             "signal": signal,
             "error": str(error),
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         })
     
     # =========================================================================

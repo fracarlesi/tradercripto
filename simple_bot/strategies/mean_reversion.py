@@ -18,7 +18,7 @@ This strategy is riskier and should only be enabled after validation.
 
 import logging
 from decimal import Decimal
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from .base import BaseStrategy, StrategyResult
@@ -144,7 +144,7 @@ class MeanReversionStrategy(BaseStrategy):
         setup = Setup(
             id=self.generate_setup_id(),
             symbol=state.symbol,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             setup_type=SetupType.MEAN_REVERSION,
             direction=direction,
             regime=state.regime,

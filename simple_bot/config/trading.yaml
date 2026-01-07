@@ -29,8 +29,8 @@ universe:
 # Timeframes
 # -----------------------------------------------------------------------------
 timeframes:
-  primary: "4h"              # Main decision timeframe
-  secondary: "1h"            # For confirmation (optional)
+  primary: "1h"              # Main decision timeframe (changed from 4h)
+  secondary: "15m"           # For confirmation (optional)
   bars_to_fetch: 200         # History depth for indicators
 
 # -----------------------------------------------------------------------------

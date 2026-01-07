@@ -4,7 +4,7 @@ Handles growing data by providing detail for recent periods
 and aggregates for historical periods.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 from decimal import Decimal
 import json
@@ -44,7 +44,7 @@ class TieredSummarizer:
         Returns:
             Structured data ready for prompt formatting
         """
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         context = {
             "timestamp": now.isoformat(),

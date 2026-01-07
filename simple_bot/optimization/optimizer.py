@@ -4,7 +4,7 @@ Coordinates the hourly optimization cycle.
 """
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict
 import logging
 
@@ -109,7 +109,7 @@ class OptimizationOrchestrator:
 
     async def _run_cycle(self):
         """Run one optimization cycle."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         self.log.info(f"[OPTIMIZER] Starting optimization cycle at {now}")
 
         # 1. Collect metrics for the completed hour
@@ -394,7 +394,7 @@ class OptimizationOrchestrator:
 
     async def _sleep_until_next_hour(self):
         """Sleep until the start of the next hour."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         next_hour = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
         sleep_seconds = (next_hour - now).total_seconds()
 
@@ -447,7 +447,7 @@ class OptimizationOrchestrator:
             )
             response["applied"] = True
             response["version_id"] = version_id
-            self.last_optimization = datetime.utcnow()
+            self.last_optimization = datetime.now(timezone.utc)
         else:
             response["applied"] = False
             response["reason"] = (

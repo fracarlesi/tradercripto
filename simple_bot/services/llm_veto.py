@@ -23,7 +23,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
@@ -371,7 +371,7 @@ or
 
                 return LLMDecision(
                     setup_id=setup.id,
-                    timestamp=datetime.utcnow(),
+                    timestamp=datetime.now(timezone.utc),
                     decision=decision,
                     confidence=Decimal(str(confidence)),
                     reason=reason,
@@ -398,7 +398,7 @@ or
 
         return LLMDecision(
             setup_id=setup.id,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             decision="ALLOW" if allow else "DENY",
             confidence=Decimal("0.5"),
             reason=f"Fallback: {reason}",

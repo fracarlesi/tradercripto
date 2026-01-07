@@ -19,7 +19,7 @@ import asyncio
 import logging
 import os
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
@@ -92,7 +92,8 @@ def calculate_rsi(prices: np.ndarray, period: int = 14) -> np.ndarray:
         avg_gain[i] = (avg_gain[i - 1] * (period - 1) + gains[i]) / period
         avg_loss[i] = (avg_loss[i - 1] * (period - 1) + losses[i]) / period
 
-    rs = np.where(avg_loss != 0, avg_gain / avg_loss, 100)
+    # Use np.divide with where parameter to avoid RuntimeWarning for division by zero
+    rs = np.divide(avg_gain, avg_loss, out=np.full_like(avg_gain, 100.0, dtype=float), where=avg_loss != 0)
     rsi = 100 - (100 / (1 + rs))
 
     return rsi
@@ -125,9 +126,10 @@ def calculate_adx(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: 
     plus_di = np.where(atr != 0, 100 * plus_dm_smooth / (atr * period), 0)
     minus_di = np.where(atr != 0, 100 * minus_dm_smooth / (atr * period), 0)
 
-    # Calculate DX
+    # Calculate DX - use np.divide with where parameter to avoid RuntimeWarning for division by zero
     di_sum = plus_di + minus_di
-    dx = np.where(di_sum != 0, 100 * np.abs(plus_di - minus_di) / di_sum, 0)
+    di_diff = 100 * np.abs(plus_di - minus_di)
+    dx = np.divide(di_diff, di_sum, out=np.zeros_like(di_sum, dtype=float), where=di_sum != 0)
 
     # Smooth DX to get ADX
     adx = np.zeros(len(dx))
@@ -393,7 +395,7 @@ class MarketStateService(BaseService):
             state = MarketState(
                 symbol=symbol,
                 timeframe=self._state_config.timeframe,
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(timezone.utc),
                 open=Decimal(str(ohlcv["open"][-1])),
                 high=Decimal(str(high[-1])),
                 low=Decimal(str(low[-1])),
@@ -433,7 +435,7 @@ class MarketStateService(BaseService):
             loop = asyncio.get_event_loop()
 
             # Calculate time range
-            end_time = int(datetime.utcnow().timestamp() * 1000)
+            end_time = int(datetime.now(timezone.utc).timestamp() * 1000)
 
             # Timeframe to milliseconds
             tf_map = {

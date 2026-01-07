@@ -16,7 +16,7 @@ Publishes top N opportunities to Topic.OPPORTUNITIES for downstream services.
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
@@ -217,7 +217,7 @@ class OpportunityRankerService(BaseService):
         """Check service-specific health."""
         # Consider unhealthy if no rankings in last 5 minutes
         if self._last_ranking_time:
-            age_seconds = (datetime.utcnow() - self._last_ranking_time).total_seconds()
+            age_seconds = (datetime.now(timezone.utc) - self._last_ranking_time).total_seconds()
             if age_seconds > 300:
                 self._logger.warning(
                     "No rankings published in %.0f seconds",
@@ -380,7 +380,7 @@ class OpportunityRankerService(BaseService):
             # Store rankings
             self._last_rankings = top_scores
             self._last_regime = regime
-            self._last_ranking_time = datetime.utcnow()
+            self._last_ranking_time = datetime.now(timezone.utc)
             
             # Publish to message bus
             await self._publish_rankings(top_scores, regime)
@@ -568,7 +568,7 @@ class OpportunityRankerService(BaseService):
     ) -> None:
         """Publish rankings to Topic.OPPORTUNITIES."""
         payload = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "market_regime": regime,
             "rankings": [r.to_dict() for r in rankings],
         }

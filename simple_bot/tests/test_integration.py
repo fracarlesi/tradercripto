@@ -434,7 +434,7 @@ class TestConfiguration:
         config = SystemConfig(
             name="TestBot",
             mode="testnet",
-            log_level="debug",  # Should be uppercased
+            log_level="debug",  # type: ignore[arg-type]  # Test validator uppercases this
         )
         
         assert config.log_level == "DEBUG"
@@ -818,7 +818,7 @@ class TestLLMClient:
         # Test percentage string
         decision = StrategyDecision(
             strategy=StrategyType.MOMENTUM,
-            confidence="85%",
+            confidence="85%",  # type: ignore[arg-type]  # Test validator converts string to float
             direction=DirectionType.LONG,
             reasoning="Test",
         )

@@ -24,7 +24,7 @@ import json
 import logging
 import math
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
@@ -411,13 +411,13 @@ class LearningModuleService(BaseService):
                 for strategy, strat_metrics in metrics.items():
                     self._metrics_cache[strategy] = strat_metrics
                 
-                self._last_hourly_collection = datetime.utcnow()
+                self._last_hourly_collection = datetime.now(timezone.utc)
                 
                 # Publish metrics update
                 await self.publish(Topic.METRICS, {
                     "type": "strategy_metrics",
                     "metrics": {k: v.to_dict() for k, v in metrics.items()},
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                 })
                 
                 self._logger.info(
@@ -459,7 +459,7 @@ class LearningModuleService(BaseService):
                             self.min_trades_for_optimization,
                         )
                 
-                self._last_optimization = datetime.utcnow()
+                self._last_optimization = datetime.now(timezone.utc)
                 
             except asyncio.CancelledError:
                 raise
@@ -497,7 +497,7 @@ class LearningModuleService(BaseService):
     
     async def _wait_for_next_hour(self) -> None:
         """Wait until the next hour boundary."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         next_hour = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
         wait_seconds = (next_hour - now).total_seconds()
         
@@ -506,7 +506,7 @@ class LearningModuleService(BaseService):
     
     async def _wait_for_next_day(self) -> None:
         """Wait until the next day boundary (midnight UTC)."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         tomorrow = (now + timedelta(days=1)).replace(
             hour=0, minute=5, second=0, microsecond=0  # 00:05 to avoid conflicts
         )
@@ -537,7 +537,7 @@ class LearningModuleService(BaseService):
             return {}
         
         hours = hours or self.performance_window_hours
-        since = datetime.utcnow() - timedelta(hours=hours)
+        since = datetime.now(timezone.utc) - timedelta(hours=hours)
         
         # Get closed trades from the period
         try:
@@ -788,7 +788,7 @@ class LearningModuleService(BaseService):
             data = json.loads(text)
             
             return OptimizationResult(
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(timezone.utc),
                 strategy=strategy,
                 adjustments=data.get("adjustments", {}),
                 confidence=min(1.0, max(0.0, float(data.get("confidence", 0.5)))),
@@ -849,7 +849,7 @@ class LearningModuleService(BaseService):
                 "strategy": result.strategy,
                 "updates": updates,
                 "confidence": result.confidence,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "reason": result.expected_improvement,
             })
             
@@ -908,7 +908,7 @@ class LearningModuleService(BaseService):
                 "strategy": strategy,
                 "warnings": warnings,
                 "metrics": metrics.to_dict(),
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             })
     
     async def _check_rollback_conditions(self) -> None:
@@ -917,7 +917,7 @@ class LearningModuleService(BaseService):
             return
         
         # Check optimizations from the last 24 hours
-        cutoff = datetime.utcnow() - timedelta(hours=24)
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
         recent = [
             opt for opt in self._optimization_history
             if opt.applied and opt.timestamp >= cutoff and not opt.rollback_reason
@@ -965,7 +965,7 @@ class LearningModuleService(BaseService):
                 "strategy": optimization.strategy,
                 "updates": rollback_updates,
                 "reason": optimization.rollback_reason,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             })
             
             self._logger.info(

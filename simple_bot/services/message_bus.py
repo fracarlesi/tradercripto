@@ -33,7 +33,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Coroutine, Dict, List, Optional, Set
 
@@ -106,7 +106,7 @@ class Message:
     """
     topic: Topic
     payload: Any
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     source: str = "unknown"
     message_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     
@@ -117,7 +117,7 @@ class Message:
     
     def age_ms(self) -> float:
         """Calculate message age in milliseconds."""
-        delta = datetime.utcnow() - self.timestamp
+        delta = datetime.now(timezone.utc) - self.timestamp
         return delta.total_seconds() * 1000
     
     def to_dict(self) -> Dict[str, Any]:
@@ -355,7 +355,7 @@ class MessageBus:
         stats = self._stats[message.topic]
         stats.message_count += 1
         stats.total_latency_ms += elapsed_ms
-        stats.last_message_time = datetime.utcnow()
+        stats.last_message_time = datetime.now(timezone.utc)
         
         # Log any exceptions
         for i, result in enumerate(results):

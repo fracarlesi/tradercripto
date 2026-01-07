@@ -30,7 +30,7 @@ import asyncio
 import logging
 import signal
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -205,7 +205,7 @@ class HLQuantBot:
         """Get bot uptime in seconds."""
         if self._start_time is None:
             return 0.0
-        return (datetime.utcnow() - self._start_time).total_seconds()
+        return (datetime.now(timezone.utc) - self._start_time).total_seconds()
     
     @property
     def services(self) -> Dict[str, BaseService]:
@@ -588,7 +588,7 @@ class HLQuantBot:
             )
             
             self._running = True
-            self._start_time = datetime.utcnow()
+            self._start_time = datetime.now(timezone.utc)
             self._shutdown_event.clear()
             
             logger.info("=" * 60)

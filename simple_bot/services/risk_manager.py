@@ -20,12 +20,12 @@ Author: Francesco Carlesi
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 from .base import BaseService
-from .message_bus import MessageBus
+from .message_bus import Message, MessageBus
 from ..core.enums import Topic
 from ..core.models import Setup, TradeIntent, RiskParams, Direction
 
@@ -136,14 +136,17 @@ class RiskManagerService(BaseService):
     # Setup Handling
     # =========================================================================
 
-    async def _handle_setup(self, setup_data: Dict) -> None:
+    async def _handle_setup(self, message: Message) -> None:
         """
         Handle incoming setup from strategy/LLM veto.
 
         Args:
-            setup_data: Setup dictionary from message bus
+            message: Message containing setup data from message bus
         """
         try:
+            # Extract payload from Message
+            setup_data = message.payload
+
             # Reconstruct Setup
             setup = Setup(**setup_data)
 
@@ -301,7 +304,7 @@ class RiskManagerService(BaseService):
             id=f"intent_{setup.id}",
             setup_id=setup.id,
             symbol=setup.symbol,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             direction=setup.direction,
             setup_type=setup.setup_type,
             entry_price=setup.entry_price,

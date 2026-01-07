@@ -45,7 +45,7 @@ import time
 import traceback
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Coroutine, Dict, Optional, TypeVar
@@ -301,7 +301,7 @@ class BaseService(ABC):
             )
             
             self._status = ServiceStatus.RUNNING
-            self._start_time = datetime.utcnow()
+            self._start_time = datetime.now(timezone.utc)
             self._logger.info("Service started: %s", self.name)
             
         except Exception as e:
@@ -350,7 +350,7 @@ class BaseService(ABC):
             self._logger.error("Error during stop: %s", e)
         
         self._status = ServiceStatus.STOPPED
-        self._stop_time = datetime.utcnow()
+        self._stop_time = datetime.now(timezone.utc)
         self._main_task = None
         self._logger.info("Service stopped: %s", self.name)
     
@@ -480,7 +480,7 @@ class BaseService(ABC):
         if not self._start_time:
             return 0.0
         
-        end_time = self._stop_time or datetime.utcnow()
+        end_time = self._stop_time or datetime.now(timezone.utc)
         return (end_time - self._start_time).total_seconds()
     
     # =========================================================================

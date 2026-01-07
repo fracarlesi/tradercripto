@@ -14,7 +14,7 @@ Subscribes to Topic.SIGNALS and publishes to Topic.SIZED_SIGNALS.
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
@@ -388,7 +388,7 @@ class CapitalAllocatorService(BaseService):
         - Refresh account state every 30 seconds
         - Refresh correlation cache every 5 minutes
         """
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         
         # Refresh account state
         if (
@@ -408,7 +408,7 @@ class CapitalAllocatorService(BaseService):
         """Check service-specific health."""
         # Consider unhealthy if we haven't refreshed account in 2 minutes
         if self._last_account_refresh:
-            age = (datetime.utcnow() - self._last_account_refresh).total_seconds()
+            age = (datetime.now(timezone.utc) - self._last_account_refresh).total_seconds()
             if age > 120:
                 self._logger.warning(
                     "Account state stale: %.0f seconds old",
@@ -464,7 +464,7 @@ class CapitalAllocatorService(BaseService):
             # Refresh account state if stale
             if (
                 self._last_account_refresh is None or
-                (datetime.utcnow() - self._last_account_refresh).total_seconds() > 30
+                (datetime.now(timezone.utc) - self._last_account_refresh).total_seconds() > 30
             ):
                 await self._refresh_account_state()
             
@@ -736,11 +736,11 @@ class CapitalAllocatorService(BaseService):
             try:
                 timestamp = datetime.fromisoformat(ts.replace("Z", "+00:00"))
             except ValueError:
-                timestamp = datetime.utcnow()
+                timestamp = datetime.now(timezone.utc)
         elif isinstance(ts, datetime):
             timestamp = ts
         else:
-            timestamp = datetime.utcnow()
+            timestamp = datetime.now(timezone.utc)
         
         return SizedSignal(
             symbol=symbol,
@@ -835,7 +835,7 @@ class CapitalAllocatorService(BaseService):
                         self._strategy_exposure.get(strategy, 0.0) + p.notional_value
                     )
                 
-                self._last_account_refresh = datetime.utcnow()
+                self._last_account_refresh = datetime.now(timezone.utc)
                 
                 self._logger.debug(
                     "Account state refreshed: equity=%.2f, positions=%d",
@@ -855,7 +855,7 @@ class CapitalAllocatorService(BaseService):
         # Correlation cache is populated on-demand in _get_correlation
         # This method just clears stale entries
         self._correlation_cache.clear()
-        self._correlation_cache_time = datetime.utcnow()
+        self._correlation_cache_time = datetime.now(timezone.utc)
         self._logger.debug("Correlation cache cleared")
     
     async def _load_strategy_stats(self) -> None:

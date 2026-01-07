@@ -18,6 +18,9 @@ Uso:
 import asyncio
 import json
 import os
+
+from dotenv import load_dotenv
+load_dotenv()
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Optional

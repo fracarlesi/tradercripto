@@ -30,7 +30,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Set
 
@@ -278,7 +278,7 @@ class MarketScannerService(BaseService):
         
         # Check last scan time
         if self._metrics.last_scan_timestamp:
-            time_since_scan = datetime.utcnow() - self._metrics.last_scan_timestamp
+            time_since_scan = datetime.now(timezone.utc) - self._metrics.last_scan_timestamp
             if time_since_scan > timedelta(minutes=10):
                 self._logger.warning(
                     "Health check failed: Last scan was %s ago",
@@ -355,7 +355,7 @@ class MarketScannerService(BaseService):
             elapsed_ms = (time.perf_counter() - start_time) * 1000
             self._metrics.coins_scanned = len(coin_data_list)
             self._metrics.last_scan_duration_ms = elapsed_ms
-            self._metrics.last_scan_timestamp = datetime.utcnow()
+            self._metrics.last_scan_timestamp = datetime.now(timezone.utc)
             self._metrics.total_scans += 1
             
             self._logger.info(
@@ -366,7 +366,7 @@ class MarketScannerService(BaseService):
             
             return {
                 "snapshot_id": snapshot_id,
-                "timestamp": datetime.utcnow(),
+                "timestamp": datetime.now(timezone.utc),
                 "coins_count": len(coin_data_list),
                 "data": snapshot_data,
             }
@@ -604,7 +604,7 @@ class MarketScannerService(BaseService):
         
         message = {
             "snapshot_id": snapshot_id,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "coins_count": len(snapshot_data),
             "data": snapshot_data,
         }

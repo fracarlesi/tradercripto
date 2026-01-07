@@ -20,7 +20,7 @@ This strategy produces few trades but aims for high R-multiples.
 
 import logging
 from decimal import Decimal
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from .base import BaseStrategy, StrategyResult
@@ -145,7 +145,7 @@ class TrendFollowStrategy(BaseStrategy):
         setup = Setup(
             id=self.generate_setup_id(),
             symbol=state.symbol,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             setup_type=SetupType.TREND_BREAKOUT,
             direction=direction,
             regime=state.regime,

@@ -4,7 +4,7 @@ Collects performance data every hour for LLM analysis.
 """
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Dict, Optional, List
 import json
@@ -41,7 +41,7 @@ class HourlyMetricsCollector:
         Returns:
             Dict with collected metrics
         """
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         hour_start = now.replace(minute=0, second=0, microsecond=0)
         hour_end = hour_start + timedelta(hours=1)
 
@@ -338,7 +338,7 @@ class HourlyMetricsCollector:
         Returns:
             Number of hours backfilled
         """
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         filled = 0
 
         async with self.db.acquire() as conn:

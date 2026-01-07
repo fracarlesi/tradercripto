@@ -28,7 +28,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Literal, Optional
 
@@ -399,7 +399,7 @@ class StrategySelectorService(BaseService):
                 await self._store_decision(signal, context)
             
             # Update tracking
-            self._recent_decisions[symbol] = datetime.utcnow()
+            self._recent_decisions[symbol] = datetime.now(timezone.utc)
             self._signals_generated += 1
             
             self._logger.info(
@@ -613,7 +613,7 @@ class StrategySelectorService(BaseService):
         last_decision = self._recent_decisions[symbol]
         min_interval = timedelta(minutes=self._selector_config.reselect_interval_minutes)
         
-        return datetime.utcnow() - last_decision >= min_interval
+        return datetime.now(timezone.utc) - last_decision >= min_interval
     
     async def _publish_signal(self, signal: Signal) -> None:
         """Publish signal to message bus."""
@@ -655,7 +655,7 @@ class StrategySelectorService(BaseService):
                 perf.pnl_24h = Decimal("0")
             
             # Calculate performance for last 24h
-            cutoff = datetime.utcnow() - timedelta(hours=24)
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
             
             for trade in trades:
                 strategy = trade.get("strategy")

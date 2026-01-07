@@ -27,13 +27,17 @@ Author: Francesco Carlesi
 
 from __future__ import annotations
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import asyncio
 import logging
 import os
 import signal
 import sys
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -216,8 +220,8 @@ class ConservativeConfig:
         # Parse strategies
         strategies = data.get("strategies", {})
 
-        # Parse environment
-        env = data.get("environment", "testnet")
+        # Parse environment - OS env var takes precedence over YAML
+        env = os.getenv("ENVIRONMENT", data.get("environment", "testnet"))
 
         return cls(
             assets=assets,
@@ -523,15 +527,20 @@ class ConservativeBot:
         # Initial delay to let services initialize
         await asyncio.sleep(10)
 
+        # Calculate loop interval from timeframe
+        tf = self.config.primary_timeframe
+        tf_seconds = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}.get(tf, 3600)
+
         while self._running and not self._shutdown_event.is_set():
             try:
                 await self._evaluate_all_assets()
 
-                # Wait for next evaluation (4 hours or shutdown)
+                # Wait for next evaluation based on timeframe
+                logger.info("Next scan in %d minutes", tf_seconds // 60)
                 try:
                     await asyncio.wait_for(
                         self._shutdown_event.wait(),
-                        timeout=4 * 60 * 60,  # 4 hours
+                        timeout=tf_seconds,
                     )
                     break  # Shutdown requested
                 except asyncio.TimeoutError:
@@ -655,7 +664,8 @@ class ConservativeBot:
                 logger.error("Health check error: %s", e)
 
     async def _check_health(self) -> None:
-        """Check health of all services."""
+        """Check health of all services and sync account data to dashboard."""
+        # Check service health
         for name, service in self._services.items():
             try:
                 health = await service.health_check()
@@ -663,8 +673,33 @@ class ConservativeBot:
                 if not health.healthy:
                     logger.warning("Service unhealthy: %s - %s", name, health.message)
 
+                # Update service health in database for dashboard
+                if self._db:
+                    try:
+                        await self._db.update_service_health(
+                            service_name=name,
+                            status="healthy" if health.healthy else "unhealthy",
+                            message=health.message or "OK",
+                        )
+                    except Exception as e:
+                        logger.debug("Could not update service health in DB: %s", e)
+
             except Exception as e:
                 logger.error("Health check failed for %s: %s", name, e)
+
+        # Sync account data to database for dashboard
+        if self._exchange and self._db:
+            try:
+                account = await self._exchange.get_account_state()
+                await self._db.update_account(
+                    equity=Decimal(str(account.get("equity", 0))),
+                    available_balance=Decimal(str(account.get("availableBalance", 0))),
+                    margin_used=Decimal(str(account.get("marginUsed", 0))),
+                    unrealized_pnl=Decimal(str(account.get("unrealizedPnl", 0))),
+                )
+                logger.debug("Account synced to DB: equity=$%.2f", account.get("equity", 0))
+            except Exception as e:
+                logger.debug("Could not sync account to DB: %s", e)
 
     # =========================================================================
     # Lifecycle
@@ -738,7 +773,7 @@ class ConservativeBot:
             )
 
             self._running = True
-            self._start_time = datetime.utcnow()
+            self._start_time = datetime.now(timezone.utc)
             self._shutdown_event.clear()
 
             # Update equity in kill switch
@@ -856,7 +891,7 @@ class ConservativeBot:
             "running": self._running,
             "start_time": self._start_time.isoformat() if self._start_time else None,
             "uptime_seconds": (
-                (datetime.utcnow() - self._start_time).total_seconds()
+                (datetime.now(timezone.utc) - self._start_time).total_seconds()
                 if self._start_time else 0
             ),
             "config": {

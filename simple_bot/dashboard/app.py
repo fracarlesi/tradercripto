@@ -86,7 +86,9 @@ def safe_run_async(coro, default=None):
     try:
         return run_async(coro)
     except Exception as e:
-        print(f"[Dashboard] Error running async: {e}")
+        import traceback
+        print(f"[Dashboard] Error running async: {type(e).__name__}: {e}")
+        traceback.print_exc()
         return default
 
 

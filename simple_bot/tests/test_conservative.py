@@ -10,7 +10,7 @@ Run:
 
 import asyncio
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -36,7 +36,7 @@ def market_state_trend():
     return MarketState(
         symbol="BTC",
         timeframe="4h",
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
         open=Decimal("95000"),
         high=Decimal("96000"),
         low=Decimal("94500"),
@@ -60,7 +60,7 @@ def market_state_range():
     return MarketState(
         symbol="ETH",
         timeframe="4h",
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
         open=Decimal("3400"),
         high=Decimal("3450"),
         low=Decimal("3380"),
@@ -85,7 +85,7 @@ def market_state_chaos():
     return MarketState(
         symbol="BTC",
         timeframe="4h",
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
         open=Decimal("95000"),
         high=Decimal("97000"),
         low=Decimal("93000"),
@@ -109,7 +109,7 @@ def valid_setup():
     return Setup(
         id="setup_test_001",
         symbol="BTC",
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
         setup_type=SetupType.TREND_BREAKOUT,
         direction=Direction.LONG,
         regime=Regime.TREND,
@@ -161,7 +161,7 @@ class TestModels:
             id="intent_001",
             setup_id="setup_001",
             symbol="BTC",
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             direction=Direction.LONG,
             setup_type=SetupType.TREND_BREAKOUT,
             entry_price=Decimal("96000"),
@@ -345,7 +345,7 @@ class TestRiskManager:
         setup = Setup(
             id="test_setup",
             symbol="BTC",
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             setup_type=SetupType.TREND_BREAKOUT,
             direction=Direction.LONG,
             regime=Regime.TREND,
