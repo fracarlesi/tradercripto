@@ -75,6 +75,7 @@ from .services.llm_veto import (
 )
 from .services.execution_engine import (
     ExecutionEngineService,
+    create_execution_engine,
 )
 
 # Strategies
@@ -549,6 +550,41 @@ class ConservativeBot:
             bus=self._bus,
             db=self._db,
             config=risk_config,
+        )
+
+        # Execution Engine - executes trades from risk manager
+        # Create minimal config adapter for execution engine
+        class _ExecConfig:
+            """Minimal config adapter for ExecutionEngineService."""
+            def __init__(self, cfg: ConservativeConfig):
+                self.order_type = "limit" if cfg.prefer_limit else "market"
+                self.max_slippage_pct = cfg.max_slippage_pct
+                self.limit_timeout_seconds = 60
+                self.max_retries = 3
+                self.retry_delay_seconds = 5
+                self.position_sync_interval = 30
+                self.fill_sync_interval = 10
+
+        class _RiskConfig:
+            """Minimal risk config for TP/SL defaults."""
+            take_profit_pct = 3.0  # 3% default TP
+            stop_loss_pct = 2.0    # 2% default SL (overridden by ATR)
+
+        class _ServicesConfig:
+            def __init__(self, exec_cfg: _ExecConfig):
+                self.execution_engine = exec_cfg
+
+        class _ConfigAdapter:
+            """Config adapter for ExecutionEngineService."""
+            def __init__(self, cfg: ConservativeConfig):
+                self.services = _ServicesConfig(_ExecConfig(cfg))
+                self.risk = _RiskConfig()
+
+        self._services["execution"] = ExecutionEngineService(
+            bus=self._bus,
+            config=_ConfigAdapter(cfg),
+            client=self._exchange,
+            db=self._db,
         )
 
         logger.info(

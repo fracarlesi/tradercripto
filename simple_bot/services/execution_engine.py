@@ -335,8 +335,8 @@ class ExecutionEngineService(BaseService):
         """Initialize service and subscribe to topics."""
         self._logger.info("Starting ExecutionEngine service")
         
-        # Subscribe to sized signals
-        await self.subscribe(Topic.SIZED_SIGNALS, self._handle_signal)
+        # Subscribe to trade intents (from risk manager)
+        await self.subscribe(Topic.TRADE_INTENT, self._handle_signal)
         
         # Start background tasks
         self._position_monitor_task = asyncio.create_task(
