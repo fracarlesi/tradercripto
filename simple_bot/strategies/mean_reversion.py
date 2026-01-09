@@ -93,39 +93,24 @@ class MeanReversionStrategy(BaseStrategy):
         """
         # Check if enabled
         if not self.enabled:
-            return StrategyResult(
-                has_setup=False,
-                reason="Strategy disabled"
-            )
+            return self.reject("Strategy disabled")
 
         # Check regime
         if not self.can_trade(state):
-            return StrategyResult(
-                has_setup=False,
-                reason=f"Wrong regime: {state.regime.value}, need RANGE"
-            )
+            return self.reject(f"Wrong regime: {state.regime.value}, need RANGE")
 
         # Check ADX
         if float(state.adx) > self.max_adx:
-            return StrategyResult(
-                has_setup=False,
-                reason=f"ADX too high: {state.adx:.1f} > {self.max_adx}"
-            )
+            return self.reject(f"ADX too high: {state.adx:.1f} > {self.max_adx}")
 
         # Check Bollinger Bands
         if state.bb_lower is None or state.bb_upper is None:
-            return StrategyResult(
-                has_setup=False,
-                reason="Bollinger Bands not available"
-            )
+            return self.reject("Bollinger Bands not available")
 
         # Determine direction based on price position and RSI
         direction = self._determine_direction(state)
         if direction == Direction.FLAT:
-            return StrategyResult(
-                has_setup=False,
-                reason="No mean reversion setup"
-            )
+            return self.reject("No mean reversion setup")
 
         # Calculate entry and stop prices
         entry_price = state.close

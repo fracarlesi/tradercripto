@@ -14,11 +14,10 @@ import logging
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import datetime
 from decimal import Decimal
-from typing import Optional, List
+from typing import Optional
 
-from ..core.models import MarketState, Setup, Regime, Direction, SetupType
+from ..core.models import MarketState, Setup, Regime, Direction
 
 
 logger = logging.getLogger(__name__)
@@ -89,6 +88,18 @@ class BaseStrategy(ABC):
             True if regime matches required regime
         """
         return state.regime == self.required_regime
+
+    def reject(self, reason: str) -> StrategyResult:
+        """
+        Create a rejection result with the given reason.
+
+        Args:
+            reason: Why the setup was rejected
+
+        Returns:
+            StrategyResult with has_setup=False
+        """
+        return StrategyResult(has_setup=False, reason=reason)
 
     def generate_setup_id(self) -> str:
         """Generate unique setup ID."""

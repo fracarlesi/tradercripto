@@ -495,14 +495,21 @@ dry_run: false
         config_file = tmp_path / "test_trading.yaml"
         config_file.write_text(config_content)
 
-        config = ConservativeConfig.from_yaml(str(config_file))
+        # Clear ENVIRONMENT env var to test YAML takes precedence when env var is not set
+        import os
+        old_env = os.environ.pop("ENVIRONMENT", None)
+        try:
+            config = ConservativeConfig.from_yaml(str(config_file))
 
-        assert config.assets == ["BTC", "ETH"]  # SOL disabled
-        assert config.per_trade_pct == 0.5
-        assert config.max_drawdown_pct == 15.0
-        assert config.trend_follow_enabled == True
-        assert config.mean_reversion_enabled == False
-        assert config.testnet == True
+            assert config.assets == ["BTC", "ETH"]  # SOL disabled
+            assert config.per_trade_pct == 0.5
+            assert config.max_drawdown_pct == 15.0
+            assert config.trend_follow_enabled == True
+            assert config.mean_reversion_enabled == False
+            assert config.testnet == True
+        finally:
+            if old_env is not None:
+                os.environ["ENVIRONMENT"] = old_env
 
 
 # =============================================================================

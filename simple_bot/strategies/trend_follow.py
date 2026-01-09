@@ -85,48 +85,27 @@ class TrendFollowStrategy(BaseStrategy):
         """
         # Check regime
         if not self.can_trade(state):
-            return StrategyResult(
-                has_setup=False,
-                reason=f"Wrong regime: {state.regime.value}, need TREND"
-            )
+            return self.reject(f"Wrong regime: {state.regime.value}, need TREND")
 
         # Check ADX
         if float(state.adx) < self.min_adx:
-            return StrategyResult(
-                has_setup=False,
-                reason=f"ADX too low: {state.adx:.1f} < {self.min_adx}"
-            )
+            return self.reject(f"ADX too low: {state.adx:.1f} < {self.min_adx}")
 
         # Determine direction based on trend
         direction = self._determine_direction(state)
         if direction == Direction.FLAT:
-            return StrategyResult(
-                has_setup=False,
-                reason="No clear trend direction"
-            )
+            return self.reject("No clear trend direction")
 
         # Check price vs EMA200
         if self.price_above_ema200:
             if direction == Direction.LONG and state.close < state.ema200:
-                return StrategyResult(
-                    has_setup=False,
-                    reason="Price below EMA200 for long"
-                )
+                return self.reject("Price below EMA200 for long")
             if direction == Direction.SHORT and state.close > state.ema200:
-                return StrategyResult(
-                    has_setup=False,
-                    reason="Price above EMA200 for short"
-                )
+                return self.reject("Price above EMA200 for short")
 
-        # Check ATR filter
-        if self.atr_filter:
-            # We use atr_pct as proxy - should be above historical average
-            # Simplified: ATR% > 1% indicates active market
-            if float(state.atr_pct) < 0.5:
-                return StrategyResult(
-                    has_setup=False,
-                    reason=f"ATR too low: {state.atr_pct:.2f}%"
-                )
+        # Check ATR filter (ATR% > 0.5% indicates active market)
+        if self.atr_filter and float(state.atr_pct) < 0.5:
+            return self.reject(f"ATR too low: {state.atr_pct:.2f}%")
 
         # Calculate entry and stop prices
         entry_price = state.close

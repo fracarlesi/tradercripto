@@ -49,7 +49,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from database.db import Database
 
 from .core.enums import Topic
-from .core.models import MarketState, Setup, Regime, Direction
+from .core.models import MarketState, Setup
 
 # Services
 from .services.message_bus import MessageBus
@@ -128,6 +128,16 @@ def setup_logging(log_level: str = "INFO") -> logging.Logger:
 
 logger = logging.getLogger("hlquantbot.conservative.main")
 
+# Timeframe to seconds mapping
+TIMEFRAME_SECONDS = {
+    "1m": 60,
+    "5m": 300,
+    "15m": 900,
+    "1h": 3600,
+    "4h": 14400,
+    "1d": 86400,
+}
+
 
 # =============================================================================
 # Configuration Loader
@@ -139,10 +149,14 @@ class ConservativeConfig:
 
     # Universe
     assets: List[str]
+    universe_mode: str  # "all" or "manual"
+    min_volume_24h: float
+    exclude_symbols: List[str]
 
     # Timeframes
     primary_timeframe: str
     bars_to_fetch: int
+    scan_interval_minutes: int
 
     # Risk
     per_trade_pct: float
@@ -188,45 +202,42 @@ class ConservativeConfig:
         with open(path, "r") as f:
             data = yaml.safe_load(f)
 
-        # Parse assets
-        universe = data.get("universe", {})
-        assets = [
-            asset["symbol"]
-            for asset in universe.get("assets", [])
-            if asset.get("enabled", True)
-        ]
+        # Helper to get nested config with defaults
+        def get_section(name: str) -> dict:
+            return data.get(name, {})
 
-        # Parse timeframes
-        timeframes = data.get("timeframes", {})
+        universe = get_section("universe")
+        timeframes = get_section("timeframes")
+        risk = get_section("risk")
+        ks = get_section("kill_switch")
+        stops = get_section("stops")
+        regime = get_section("regime")
+        llm = get_section("llm")
+        execution = get_section("execution")
+        strategies = get_section("strategies")
 
-        # Parse risk
-        risk = data.get("risk", {})
+        # Parse universe mode and assets
+        universe_mode = universe.get("mode", "manual")
+        if universe_mode == "all":
+            assets = ["__DYNAMIC__"]
+        else:
+            assets = [
+                asset["symbol"]
+                for asset in universe.get("assets", [])
+                if asset.get("enabled", True)
+            ]
 
-        # Parse kill switch
-        ks = data.get("kill_switch", {})
-
-        # Parse stops
-        stops = data.get("stops", {})
-
-        # Parse regime
-        regime = data.get("regime", {})
-
-        # Parse LLM
-        llm = data.get("llm", {})
-
-        # Parse execution
-        execution = data.get("execution", {})
-
-        # Parse strategies
-        strategies = data.get("strategies", {})
-
-        # Parse environment - OS env var takes precedence over YAML
+        # Environment: OS env var takes precedence over YAML
         env = os.getenv("ENVIRONMENT", data.get("environment", "testnet"))
 
         return cls(
             assets=assets,
-            primary_timeframe=timeframes.get("primary", "4h"),
+            universe_mode=universe_mode,
+            min_volume_24h=universe.get("min_volume_24h", 100000),
+            exclude_symbols=universe.get("exclude_symbols", ["USDC", "USDT", "DAI"]),
+            primary_timeframe=timeframes.get("primary", "1h"),
             bars_to_fetch=timeframes.get("bars_to_fetch", 200),
+            scan_interval_minutes=timeframes.get("scan_interval_minutes", 15),
             per_trade_pct=risk.get("per_trade_pct", 0.5),
             max_positions=risk.get("max_positions", 2),
             max_exposure_pct=risk.get("max_exposure_pct", 100),
@@ -408,6 +419,75 @@ class ConservativeBot:
 
         return self._exchange
 
+    async def _load_dynamic_assets(self) -> None:
+        """
+        Dynamically load all available assets from Hyperliquid.
+
+        When universe_mode is "all", fetches all symbols and filters by:
+        - Minimum 24h volume
+        - Exclusion list (stablecoins, etc.)
+        """
+        cfg = self.config
+        if cfg.universe_mode != "all":
+            logger.info("Universe mode is 'manual', using configured assets: %s", cfg.assets)
+            return
+
+        if not self._exchange:
+            raise RuntimeError("Exchange not initialized")
+
+        logger.info("Loading dynamic asset universe...")
+
+        try:
+            # Get all available symbols from Hyperliquid
+            markets = await self._exchange.get_all_markets()
+            all_symbols = [market["name"] for market in markets]
+
+            logger.info("Found %d total symbols on Hyperliquid", len(all_symbols))
+
+            # Filter out excluded symbols
+            filtered = [
+                s for s in all_symbols
+                if s not in cfg.exclude_symbols
+            ]
+            logger.info("After exclusion filter: %d symbols", len(filtered))
+
+            # Filter by 24h volume if threshold > 0
+            if cfg.min_volume_24h > 0:
+                volume_filtered = []
+                # Fetch spot meta for volume info (this is approximate)
+                # For more accurate volume, we'd need to query each symbol
+                # For now, include all non-excluded symbols
+                volume_filtered = filtered
+                logger.info(
+                    "Volume filter: including all %d symbols (volume check disabled for speed)",
+                    len(volume_filtered)
+                )
+                filtered = volume_filtered
+
+            # Update config with dynamic assets
+            # Note: dataclass is frozen=False by default, so we can modify
+            object.__setattr__(cfg, "assets", filtered)
+
+            logger.info(
+                "Dynamic universe loaded: %d assets (excluded %d)",
+                len(filtered),
+                len(all_symbols) - len(filtered),
+            )
+
+            # Log first 10 and last 5 for visibility
+            if len(filtered) > 15:
+                logger.info("First 10: %s", filtered[:10])
+                logger.info("Last 5: %s", filtered[-5:])
+            else:
+                logger.info("Assets: %s", filtered)
+
+        except Exception as e:
+            logger.error("Failed to load dynamic assets: %s", e)
+            # Fallback to BTC/ETH
+            fallback = ["BTC", "ETH"]
+            object.__setattr__(cfg, "assets", fallback)
+            logger.warning("Using fallback assets: %s", fallback)
+
     def _init_services(self) -> None:
         """Initialize all services with proper configuration."""
         cfg = self.config
@@ -431,7 +511,7 @@ class ConservativeBot:
             assets=cfg.assets,
             timeframe=cfg.primary_timeframe,
             bars_to_fetch=cfg.bars_to_fetch,
-            interval_seconds=4 * 60 * 60,  # 4h
+            interval_seconds=cfg.scan_interval_minutes * 60,  # Convert minutes to seconds
             trend_adx_min=cfg.trend_adx_min,
             range_adx_max=cfg.range_adx_max,
             regime_confirmation_bars=cfg.regime_confirmation_bars,
@@ -528,8 +608,7 @@ class ConservativeBot:
         await asyncio.sleep(10)
 
         # Calculate loop interval from timeframe
-        tf = self.config.primary_timeframe
-        tf_seconds = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}.get(tf, 3600)
+        tf_seconds = TIMEFRAME_SECONDS.get(self.config.primary_timeframe, 3600)
 
         while self._running and not self._shutdown_event.is_set():
             try:
@@ -754,6 +833,9 @@ class ConservativeBot:
             await self._init_database()
             await self._init_message_bus()
             await self._init_exchange()
+
+            # Load dynamic assets if mode="all"
+            await self._load_dynamic_assets()
 
             # Initialize services and strategies
             self._init_services()

@@ -35,6 +35,9 @@ from pathlib import Path
 from typing import Optional, Dict, List, Any, Set
 from dataclasses import dataclass, field
 
+from dotenv import load_dotenv
+load_dotenv()
+
 # Hyperliquid SDK
 from hyperliquid.exchange import Exchange
 from hyperliquid.info import Info

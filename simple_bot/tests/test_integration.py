@@ -767,12 +767,19 @@ class TestLLMClient:
     
     def test_client_creation(self):
         """Test client creation without API key."""
+        import os
         from simple_bot.llm.client import DeepSeekClient
-        
-        client = DeepSeekClient(api_key=None)
-        
-        assert client.is_available is False
-        assert client.remaining_requests == 300
+
+        # Clear API key env var to test client without credentials
+        old_key = os.environ.pop("DEEPSEEK_API_KEY", None)
+        try:
+            client = DeepSeekClient(api_key=None)
+
+            assert client.is_available is False
+            assert client.remaining_requests == 300
+        finally:
+            if old_key is not None:
+                os.environ["DEEPSEEK_API_KEY"] = old_key
     
     def test_rate_limiter(self):
         """Test rate limiter functionality."""

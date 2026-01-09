@@ -386,6 +386,40 @@ class HyperliquidClient:
             "dayNtlVlm": float(asset_ctx.get("dayNtlVlm", 0)) if asset_ctx else 0.0,
         }
 
+    async def _get_asset_data(self, field: str, cache_key: str, ttl: float = 60.0) -> dict[str, float]:
+        """
+        Helper to extract per-symbol data from meta_and_asset_ctxs.
+
+        Args:
+            field: Field name to extract from asset context (e.g., "funding", "openInterest")
+            cache_key: Key for caching the result
+            ttl: Cache TTL in seconds
+
+        Returns:
+            Dict mapping symbol to field value
+        """
+        self._ensure_connected()
+
+        cached = self._cache.get(cache_key)
+        if cached:
+            return cached
+
+        async with self._rate_limiter.info:
+            ctx = await self._run_sync(lambda: self._info.meta_and_asset_ctxs())
+
+        result = {}
+        meta = ctx[0] if len(ctx) > 0 else {}
+        assets = ctx[1] if len(ctx) > 1 else []
+        universe = meta.get("universe", [])
+
+        for i, asset_ctx in enumerate(assets):
+            if i < len(universe):
+                symbol = universe[i].get("name", f"UNKNOWN_{i}")
+                result[symbol] = float(asset_ctx.get(field, 0))
+
+        self._cache.set(cache_key, result, ttl=ttl)
+        return result
+
     @with_retry(max_attempts=3)
     async def get_funding_rates(self) -> dict[str, float]:
         """
@@ -394,27 +428,7 @@ class HyperliquidClient:
         Returns:
             Dict mapping symbol to funding rate
         """
-        self._ensure_connected()
-
-        cached = self._cache.get("funding_rates")
-        if cached:
-            return cached
-
-        async with self._rate_limiter.info:
-            ctx = await self._run_sync(lambda: self._info.meta_and_asset_ctxs())
-
-        funding_rates = {}
-        meta = ctx[0] if len(ctx) > 0 else {}
-        assets = ctx[1] if len(ctx) > 1 else []
-
-        universe = meta.get("universe", [])
-        for i, asset_ctx in enumerate(assets):
-            if i < len(universe):
-                symbol = universe[i].get("name", f"UNKNOWN_{i}")
-                funding_rates[symbol] = float(asset_ctx.get("funding", 0))
-
-        self._cache.set("funding_rates", funding_rates, ttl=60.0)  # 1 minute cache
-        return funding_rates
+        return await self._get_asset_data("funding", "funding_rates", ttl=60.0)
 
     @with_retry(max_attempts=3)
     async def get_open_interest(self) -> dict[str, float]:
@@ -424,27 +438,7 @@ class HyperliquidClient:
         Returns:
             Dict mapping symbol to open interest in base currency
         """
-        self._ensure_connected()
-
-        cached = self._cache.get("open_interest")
-        if cached:
-            return cached
-
-        async with self._rate_limiter.info:
-            ctx = await self._run_sync(lambda: self._info.meta_and_asset_ctxs())
-
-        open_interest = {}
-        meta = ctx[0] if len(ctx) > 0 else {}
-        assets = ctx[1] if len(ctx) > 1 else []
-
-        universe = meta.get("universe", [])
-        for i, asset_ctx in enumerate(assets):
-            if i < len(universe):
-                symbol = universe[i].get("name", f"UNKNOWN_{i}")
-                open_interest[symbol] = float(asset_ctx.get("openInterest", 0))
-
-        self._cache.set("open_interest", open_interest, ttl=60.0)
-        return open_interest
+        return await self._get_asset_data("openInterest", "open_interest", ttl=60.0)
 
     @with_retry(max_attempts=3)
     async def get_candles(

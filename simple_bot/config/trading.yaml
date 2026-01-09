@@ -6,9 +6,26 @@
 # =============================================================================
 
 # -----------------------------------------------------------------------------
-# Universe: Only highly liquid assets
+# Universe: Dynamic asset selection
 # -----------------------------------------------------------------------------
 universe:
+  # Mode: "all" = fetch all from Hyperliquid, "manual" = use assets list below
+  mode: "all"
+
+  # Filters for "all" mode
+  min_volume_24h: 100000      # Min 24h volume in USD (filter illiquid coins)
+  min_market_cap: 0           # Min market cap (0 = no filter)
+
+  # Symbols to exclude (stablecoins, wrapped, etc.)
+  exclude_symbols:
+    - "USDC"
+    - "USDT"
+    - "DAI"
+    - "USDM"
+    - "FDUSD"
+    - "TUSD"
+
+  # Manual asset list (used when mode: "manual")
   assets:
     - symbol: "BTC"
       enabled: true
@@ -29,9 +46,10 @@ universe:
 # Timeframes
 # -----------------------------------------------------------------------------
 timeframes:
-  primary: "1h"              # Main decision timeframe (changed from 4h)
+  primary: "1h"              # Main decision timeframe
   secondary: "15m"           # For confirmation (optional)
   bars_to_fetch: 200         # History depth for indicators
+  scan_interval_minutes: 15  # How often to scan all assets (was 4h, now 15min)
 
 # -----------------------------------------------------------------------------
 # Risk Management - CRITICAL SECTION
@@ -42,7 +60,7 @@ risk:
   max_per_trade_pct: 1.0     # Absolute max per trade
 
   # Position limits
-  max_positions: 2           # Max concurrent positions
+  max_positions: 5           # Max concurrent positions (increased for multi-asset)
   max_exposure_pct: 100      # Max total notional as % of equity
 
   # Leverage

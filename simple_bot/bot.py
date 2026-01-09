@@ -23,16 +23,18 @@ Author: Francesco Carlesi
 import os
 import sys
 import time
-import json
 import yaml
 import logging
 import asyncio
 import argparse
-from datetime import datetime, timedelta
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Optional, Dict, List, Any
+from typing import Optional, List, Any
 from dataclasses import dataclass, field
+
+from dotenv import load_dotenv
+load_dotenv()
 
 # Hyperliquid SDK
 from hyperliquid.exchange import Exchange
@@ -961,17 +963,7 @@ def main():
     )
     
     args = parser.parse_args()
-    
-    # Load .env file if exists
-    env_path = Path(__file__).parent.parent / ".env"
-    if env_path.exists():
-        with open(env_path) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    key, value = line.split("=", 1)
-                    os.environ[key.strip()] = value.strip()
-    
+
     # Load config
     config_path = Path(args.config)
     if not config_path.exists():
