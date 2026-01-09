@@ -124,9 +124,7 @@ Configurati in `.mcp.json`:
 
 | Server | Funzione |
 |--------|----------|
-| `cclsp` | Python LSP (Pyright) |
-| `postgres` | Query DB in linguaggio naturale |
-| `sequential-thinking` | Decomposizione task complessi |
+| `github` | Gestione repo, PR, issues |
 
 ---
 
@@ -142,6 +140,50 @@ OPENAI_API_KEY=...  # Per LLM veto
 
 ---
 
+## Security Guidelines
+
+### CRITICAL: Mai Hardcodare Secrets
+
+**MAI scrivere API keys, private keys, o password nel codice.**
+
+```python
+# ❌ SBAGLIATO
+PRIVATE_KEY = "0x1234567890abcdef..."
+API_KEY = "sk-proj-..."
+
+# ✅ CORRETTO
+import os
+PRIVATE_KEY = os.environ.get("HYPERLIQUID_PRIVATE_KEY")
+API_KEY = os.environ.get("OPENAI_API_KEY")
+```
+
+### Secrets da Proteggere
+
+| Secret | Rischio se esposto |
+|--------|-------------------|
+| `HYPERLIQUID_PRIVATE_KEY` | **CRITICO** - Accesso completo al wallet, perdita fondi |
+| `HYPERLIQUID_WALLET_ADDRESS` | Medio - Visibilità posizioni |
+| `DATABASE_URL` | Alto - Accesso DB, manipolazione dati |
+| `OPENAI_API_KEY` | Medio - Costi API non autorizzati |
+
+### Quando Crei Script con Secrets
+
+1. Usa `os.environ.get()` o `python-dotenv`
+2. Aggiungi variabile a `.env.example` con placeholder
+3. Verifica che `.env` sia in `.gitignore`
+4. Mai loggare valori di secrets (usa `***` per mascherare)
+
+### Se Committi Accidentalmente un Secret
+
+1. **Revoca IMMEDIATAMENTE** la chiave/token
+2. Genera nuova chiave
+3. Aggiorna `.env` locale e su server
+4. La vecchia chiave è compromessa per sempre (git history)
+
+> **ATTENZIONE**: Per `HYPERLIQUID_PRIVATE_KEY`, un commit accidentale significa potenziale perdita di TUTTI i fondi nel wallet. Genera sempre un nuovo wallet se esposto.
+
+---
+
 ## Safety Rules
 
 1. **Mai** committare `.env` o chiavi private
@@ -149,15 +191,6 @@ OPENAI_API_KEY=...  # Per LLM veto
 3. **Sempre** verificare posizioni prima di modifiche al trading
 4. **Sempre** usare paper trading per test nuove strategie
 5. **Mai** usare `float` per importi finanziari
-
----
-
-## Serena Memories
-
-Per contesto progetto, leggi le memorie:
-```
-mcp__plugin_serena_serena__list_memories()
-```
 
 ---
 

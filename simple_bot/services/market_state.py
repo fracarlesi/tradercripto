@@ -305,12 +305,17 @@ class MarketStateService(BaseService):
         if self._info is None:
             return False
 
-        # Check if we have states for all assets
-        for asset in self._state_config.assets:
-            if asset not in self._market_states:
-                return False
+        # With dynamic asset loading, some assets may not have candle data
+        # Consider healthy if we have states for at least 80% of assets
+        total_assets = len(self._state_config.assets)
+        if total_assets == 0:
+            return False
 
-        return True
+        states_count = len(self._market_states)
+        coverage = states_count / total_assets
+
+        # Require at least 80% coverage for healthy status
+        return coverage >= 0.8
 
     # =========================================================================
     # Data Fetching
