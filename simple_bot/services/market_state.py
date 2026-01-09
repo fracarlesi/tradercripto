@@ -329,6 +329,8 @@ class MarketStateService(BaseService):
                 if state:
                     self._market_states[symbol] = state
                     await self._publish_state(state)
+                # Rate limiting: 100ms delay between API calls to avoid 429 errors
+                await asyncio.sleep(0.1)
             except Exception as e:
                 self._logger.error("Failed to fetch state for %s: %s", symbol, e)
 
