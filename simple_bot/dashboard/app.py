@@ -53,7 +53,7 @@ import atexit
 _bg_loop: Optional[asyncio.AbstractEventLoop] = None
 _bg_thread: Optional[threading.Thread] = None
 _db_instance: Optional[Database] = None
-_db_lock = threading.Lock()
+_db_async_lock: Optional[asyncio.Lock] = None  # Created lazily in event loop
 
 
 def _start_background_loop(loop: asyncio.AbstractEventLoop) -> None:
@@ -94,17 +94,18 @@ def safe_run_async(coro, default=None):
 
 async def get_db() -> Database:
     """Get or create database connection (singleton in background loop)."""
-    global _db_instance
+    global _db_instance, _db_async_lock
 
-    if _db_instance is None:
-        with _db_lock:
-            if _db_instance is None:
-                _db_instance = Database()
-                await _db_instance.connect(min_size=1, max_size=5)
-    elif _db_instance.pool is None:
-        with _db_lock:
-            if _db_instance.pool is None:
-                await _db_instance.connect(min_size=1, max_size=5)
+    # Create async lock lazily in the event loop context
+    if _db_async_lock is None:
+        _db_async_lock = asyncio.Lock()
+
+    async with _db_async_lock:
+        if _db_instance is None:
+            _db_instance = Database()
+            await _db_instance.connect(min_size=1, max_size=5)
+        elif _db_instance.pool is None:
+            await _db_instance.connect(min_size=1, max_size=5)
 
     return _db_instance
 
@@ -1017,10 +1018,15 @@ def server_error(e):
 # Main Entry Point
 # =============================================================================
 
-def run_dashboard(host: str = "0.0.0.0", port: int = 5611, debug: bool = True):
+def run_dashboard(host: str = "0.0.0.0", port: int = 5611, debug: bool = None):
     """Run the dashboard server."""
+    # Default to False in production, can enable via FLASK_DEBUG=1
+    if debug is None:
+        debug = os.getenv("FLASK_DEBUG", "0") == "1"
+
     print(f"Starting HLQuantBot v2.0 Dashboard on http://{host}:{port}")
-    app.run(host=host, port=port, debug=debug)
+    # use_reloader=False prevents Flask from forking which breaks background event loop
+    app.run(host=host, port=port, debug=debug, use_reloader=False)
 
 
 if __name__ == "__main__":
