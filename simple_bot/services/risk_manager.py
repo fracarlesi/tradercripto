@@ -84,6 +84,7 @@ class RiskManagerService(BaseService):
         bus: Optional[MessageBus] = None,
         db: Optional[Any] = None,
         config: Optional[RiskConfig] = None,
+        client: Optional[Any] = None,
     ) -> None:
         """Initialize RiskManagerService."""
         super().__init__(
@@ -94,9 +95,10 @@ class RiskManagerService(BaseService):
         )
 
         self._config = config or RiskConfig()
+        self._client = client  # HyperliquidClient for equity updates
 
         # State
-        self._current_equity: Decimal = Decimal("10000")  # Default, updated from API
+        self._current_equity: Decimal = Decimal("100")  # Safe default, updated from API
         self._open_positions: Dict[str, Dict] = {}
         self._pending_intents: Dict[str, TradeIntent] = {}
 
@@ -119,14 +121,30 @@ class RiskManagerService(BaseService):
             await self.subscribe(Topic.SETUPS, self._handle_setup)
             self._logger.info("Subscribed to SETUPS topic")
 
+        # Fetch initial equity from exchange
+        await self._update_equity()
+
     async def _on_stop(self) -> None:
         """Cleanup."""
         self._logger.info("Stopping RiskManagerService...")
 
     async def _run_iteration(self) -> None:
         """Periodic tasks - update equity, check positions."""
-        # In real implementation, fetch current equity from API
-        pass
+        await self._update_equity()
+
+    async def _update_equity(self) -> None:
+        """Fetch current equity from exchange."""
+        if not self._client:
+            return
+
+        try:
+            state = await self._client.get_account_state()
+            equity = Decimal(str(state.get("equity", 0)))
+            if equity > 0:
+                self._current_equity = equity
+                self._logger.debug("Equity updated: $%.2f", float(equity))
+        except Exception as e:
+            self._logger.warning("Failed to update equity: %s", e)
 
     async def _health_check_impl(self) -> bool:
         """Check service health."""
@@ -374,6 +392,7 @@ def create_risk_manager(
     bus: Optional[MessageBus] = None,
     db: Optional[Any] = None,
     config: Optional[RiskConfig] = None,
+    client: Optional[Any] = None,
 ) -> RiskManagerService:
     """Factory function to create RiskManagerService."""
     return RiskManagerService(
@@ -381,4 +400,5 @@ def create_risk_manager(
         bus=bus,
         db=db,
         config=config,
+        client=client,
     )

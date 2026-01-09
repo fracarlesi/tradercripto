@@ -770,6 +770,97 @@ class HyperliquidClient:
             else:
                 raise OrderRejectedError(str(e), symbol=symbol)
 
+    async def place_trigger_order(
+        self,
+        symbol: str,
+        is_buy: bool,
+        size: float,
+        trigger_price: float,
+        limit_price: Optional[float] = None,
+        tpsl: str = "sl",
+        reduce_only: bool = True,
+    ) -> dict:
+        """
+        Place a trigger order (stop loss or take profit).
+
+        Args:
+            symbol: Trading symbol (e.g., "ETH")
+            is_buy: True for buy, False for sell
+            size: Order size in base currency
+            trigger_price: Price at which to trigger the order
+            limit_price: Limit price after trigger (None for market)
+            tpsl: "sl" for stop loss, "tp" for take profit
+            reduce_only: Whether order should only reduce position (default True)
+
+        Returns:
+            Dict with:
+            - success: True if order was accepted
+            - orderId: Order ID
+            - status: Order status
+
+        Raises:
+            OrderRejectedError: If order is rejected
+        """
+        self._ensure_connected()
+
+        # Validate symbol
+        if symbol not in self._symbol_info:
+            await self.get_all_markets()
+        if symbol not in self._symbol_info:
+            raise SymbolNotFoundError(symbol)
+
+        # Get size decimals
+        sz_decimals = self._symbol_info[symbol].get("szDecimals", 4)
+        size = round(size, sz_decimals)
+
+        # Round prices
+        trigger_price = self._round_price(trigger_price)
+        if limit_price is not None:
+            limit_price = self._round_price(limit_price)
+
+        # For trigger orders, use limit_price if provided, else use trigger_price
+        order_price = limit_price if limit_price is not None else trigger_price
+        is_market = limit_price is None
+
+        logger.info(
+            f"Placing {tpsl.upper()} trigger order: {'BUY' if is_buy else 'SELL'} {size} {symbol} "
+            f"trigger@{trigger_price} {'MARKET' if is_market else f'limit@{limit_price}'}"
+        )
+
+        try:
+            async with self._rate_limiter.orders:
+                # Build trigger order type
+                order_type = {
+                    "trigger": {
+                        "triggerPx": trigger_price,
+                        "isMarket": is_market,
+                        "tpsl": tpsl,  # "sl" or "tp"
+                    }
+                }
+
+                result = await self._run_sync(
+                    lambda: self._exchange.order(
+                        symbol,
+                        is_buy,
+                        size,
+                        order_price,
+                        order_type,
+                        reduce_only=reduce_only
+                    )
+                )
+
+            return self._parse_order_result(result, is_market=False)
+
+        except Exception as e:
+            error_msg = str(e).lower()
+            logger.error(f"Trigger order failed: {e}")
+            if "insufficient" in error_msg or "margin" in error_msg:
+                raise InsufficientMarginError(str(e), symbol=symbol)
+            elif "invalid" in error_msg:
+                raise InvalidOrderError(str(e), symbol=symbol)
+            else:
+                raise OrderRejectedError(str(e), symbol=symbol)
+
     async def cancel_order(self, symbol: str, order_id: int) -> bool:
         """
         Cancel a specific order.
@@ -934,8 +1025,8 @@ class HyperliquidClient:
         """
         Round price to valid precision for Hyperliquid.
 
-        Hyperliquid uses 5 significant figures for prices.
-        This prevents "float_to_wire causes rounding" errors.
+        Hyperliquid requires prices to have at most 4 decimal places
+        AND at most 5 significant figures.
 
         Args:
             price: Raw price value
@@ -946,14 +1037,18 @@ class HyperliquidClient:
         if price <= 0:
             return price
 
-        # Use 5 significant figures
         from math import log10, floor
 
-        # Calculate the order of magnitude
-        magnitude = floor(log10(abs(price)))
-        # Round to 5 significant figures
-        factor = 10 ** (4 - magnitude)  # 5 sig figs = 4 decimal places after first digit
-        return round(price * factor) / factor
+        # First, round to 4 decimal places (Hyperliquid requirement)
+        rounded = round(price, 4)
+
+        # Also ensure we don't exceed 5 significant figures
+        if rounded > 0:
+            magnitude = floor(log10(abs(rounded)))
+            max_decimals = max(0, 4 - magnitude)  # e.g., 1000 -> 0 decimals, 0.01 -> 4 decimals
+            rounded = round(rounded, min(4, max_decimals))
+
+        return rounded
 
     def _get_asset_index(self, symbol: str) -> int:
         """Get asset index for symbol from metadata."""

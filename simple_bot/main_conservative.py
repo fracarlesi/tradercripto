@@ -550,6 +550,7 @@ class ConservativeBot:
             bus=self._bus,
             db=self._db,
             config=risk_config,
+            client=self._exchange,  # Pass client for real equity updates
         )
 
         # Execution Engine - executes trades from risk manager

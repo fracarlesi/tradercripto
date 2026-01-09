@@ -893,16 +893,16 @@ class ExecutionEngineService(BaseService):
         await self._set_tp_sl(signal, order, position)
     
     async def _set_tp_sl(
-        self, 
+        self,
         signal: Dict[str, Any],
         order: Order,
         position: ExecutionPosition
     ) -> None:
         """
-        Set take profit and stop loss orders.
-        
+        Set take profit and stop loss orders using proper trigger orders.
+
         Args:
-            signal: Original signal with TP/SL levels
+            signal: Original signal with TP/SL levels (stop_price from RiskManager)
             order: Filled entry order
             position: ExecutionPosition to protect
         """
@@ -910,29 +910,39 @@ class ExecutionEngineService(BaseService):
         is_long = signal["direction"] == "long"
         entry_price = order.avg_price or signal["entry_price"]
         size = position.size
-        
-        # Get TP/SL percentages from signal or config
+
+        # Get stop price from signal (calculated by RiskManager based on ATR)
+        # Fall back to percentage-based calculation if not provided
+        sl_price = signal.get("stop_price")
+        if sl_price is None:
+            sl_pct = signal.get("sl_pct", self._bot_config.risk.stop_loss_pct / 100)
+            if is_long:
+                sl_price = entry_price * (1 - sl_pct)
+            else:
+                sl_price = entry_price * (1 + sl_pct)
+        else:
+            sl_price = float(sl_price)
+
+        # Calculate TP price (use percentage from config)
         tp_pct = signal.get("tp_pct", self._bot_config.risk.take_profit_pct / 100)
-        sl_pct = signal.get("sl_pct", self._bot_config.risk.stop_loss_pct / 100)
-        
-        # Calculate TP/SL prices
         if is_long:
             tp_price = entry_price * (1 + tp_pct)
-            sl_price = entry_price * (1 - sl_pct)
         else:
             tp_price = entry_price * (1 - tp_pct)
-            sl_price = entry_price * (1 + sl_pct)
-        
+
+        # Calculate stop distance for logging
+        sl_distance_pct = abs(entry_price - sl_price) / entry_price * 100
+
         self._logger.info(
-            "Setting TP/SL for %s: TP=%.2f (%.1f%%), SL=%.2f (%.1f%%)",
+            "Setting TP/SL for %s: TP=%.4f (+%.1f%%), SL=%.4f (-%.1f%%)",
             symbol,
             tp_price,
             tp_pct * 100,
             sl_price,
-            sl_pct * 100
+            sl_distance_pct
         )
-        
-        # Place TP order (limit, reduce-only)
+
+        # Place TP order (limit, reduce-only) - executes at target price
         try:
             tp_result = await self.client.place_order(
                 symbol=symbol,
@@ -944,30 +954,28 @@ class ExecutionEngineService(BaseService):
             )
             position.tp_order_id = tp_result.get("orderId")
             position.tp_price = tp_price
-            self._logger.debug("TP order placed: %s", position.tp_order_id)
-            
+            self._logger.info("TP order placed: %s @ %.4f", position.tp_order_id, tp_price)
+
         except Exception as e:
             self._logger.error("Failed to place TP order: %s", e)
-        
-        # Place SL order (stop market, reduce-only)
+
+        # Place SL order using TRIGGER order (proper stop loss)
         try:
-            # For stop orders, we use market close with trigger
-            # Since SDK might not support stop orders directly,
-            # we'll use limit order at worse price as alternative
-            sl_result = await self.client.place_order(
+            sl_result = await self.client.place_trigger_order(
                 symbol=symbol,
-                is_buy=not is_long,
+                is_buy=not is_long,  # Opposite side to close
                 size=size,
-                price=sl_price,
-                order_type="limit",  # Using limit as stop-loss fallback
+                trigger_price=sl_price,
+                limit_price=None,  # Market order when triggered
+                tpsl="sl",  # Stop loss type
                 reduce_only=True,
             )
             position.sl_order_id = sl_result.get("orderId")
             position.sl_price = sl_price
-            self._logger.debug("SL order placed: %s", position.sl_order_id)
-            
+            self._logger.info("SL trigger order placed: %s @ %.4f", position.sl_order_id, sl_price)
+
         except Exception as e:
-            self._logger.error("Failed to place SL order: %s", e)
+            self._logger.error("Failed to place SL trigger order: %s", e)
     
     # =========================================================================
     # Position Monitoring
