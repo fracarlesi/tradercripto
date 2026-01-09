@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
@@ -408,29 +409,88 @@ class ExecutionEngineService(BaseService):
     # =========================================================================
     # Signal Handling
     # =========================================================================
-    
+
+    def _normalize_trade_intent(self, raw: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Normalize TradeIntent fields to execution format.
+
+        TradeIntent model uses: position_size, setup_type, direction (enum/str)
+        ExecutionEngine expects: size, strategy, direction (string "long"/"short")
+
+        Args:
+            raw: Raw TradeIntent payload from message bus
+
+        Returns:
+            Normalized signal dictionary for execution
+        """
+        # Handle direction - can be Direction enum, string, or dict
+        direction = raw.get("direction", "")
+        if isinstance(direction, dict):
+            # Pydantic serialization {"value": "long"}
+            direction = direction.get("value", str(direction))
+        elif hasattr(direction, "value"):
+            # Direction enum
+            direction = direction.value
+        direction = str(direction).lower()
+
+        # Handle setup_type/strategy - can be SetupType enum, string, or dict
+        strategy = raw.get("setup_type") or raw.get("strategy", "unknown")
+        if isinstance(strategy, dict):
+            strategy = strategy.get("value", str(strategy))
+        elif hasattr(strategy, "value"):
+            strategy = strategy.value
+        strategy = str(strategy)
+
+        # Handle size - TradeIntent uses position_size, we expect size
+        size = raw.get("position_size") or raw.get("size", 0)
+        if isinstance(size, str):
+            size = float(size)
+
+        # Handle entry_price - can be Decimal serialized as string
+        entry_price = raw.get("entry_price", 0)
+        if isinstance(entry_price, str):
+            entry_price = float(entry_price)
+
+        return {
+            **raw,  # Keep all original fields
+            "direction": direction,
+            "strategy": strategy,
+            "size": float(size),
+            "entry_price": float(entry_price),
+        }
+
     async def _handle_signal(self, message: Message) -> None:
         """
         Handle incoming sized signal from capital allocator.
-        
+
         Args:
-            message: Message containing sized signal payload
+            message: Message containing sized signal payload (TradeIntent)
         """
-        signal = message.payload
-        signal_id = signal.get("signal_id") or message.message_id
-        
+        raw_signal = message.payload
+        signal_id: str = (
+            raw_signal.get("id")
+            or raw_signal.get("signal_id")
+            or message.message_id
+            or str(uuid.uuid4())
+        )
+
+        # Normalize TradeIntent fields to execution format
+        # TradeIntent uses: position_size, setup_type, direction (enum)
+        # ExecutionEngine expects: size, strategy, direction (string)
+        signal = self._normalize_trade_intent(raw_signal)
+
         # Prevent duplicate processing
         if signal_id in self.processed_signals:
             self._logger.debug("Signal already processed: %s", signal_id[:8])
             return
-        
+
         self._logger.info(
-            "Received signal: %s %s %.4f %s @ %.2f",
+            "Received signal: %s %s %.4f %s @ %.4f",
             signal.get("direction", "unknown"),
             signal.get("symbol", "unknown"),
-            signal.get("size", 0),
+            float(signal.get("size", 0)),
             signal.get("strategy", "unknown"),
-            signal.get("entry_price", 0),
+            float(signal.get("entry_price", 0)),
         )
         
         # Validate signal
@@ -852,8 +912,8 @@ class ExecutionEngineService(BaseService):
         size = position.size
         
         # Get TP/SL percentages from signal or config
-        tp_pct = signal.get("tp_pct", self.config.risk.take_profit_pct / 100)
-        sl_pct = signal.get("sl_pct", self.config.risk.stop_loss_pct / 100)
+        tp_pct = signal.get("tp_pct", self._bot_config.risk.take_profit_pct / 100)
+        sl_pct = signal.get("sl_pct", self._bot_config.risk.stop_loss_pct / 100)
         
         # Calculate TP/SL prices
         if is_long:

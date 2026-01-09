@@ -731,6 +731,10 @@ class HyperliquidClient:
         sz_decimals = self._symbol_info[symbol].get("szDecimals", 4)
         size = round(size, sz_decimals)
 
+        # Round price to valid precision (Hyperliquid uses 5 significant figures)
+        if price is not None:
+            price = self._round_price(price)
+
         logger.info(f"Placing {'BUY' if is_buy else 'SELL'} {order_type} order: {size} {symbol} @ {price or 'MARKET'}")
 
         try:
@@ -925,6 +929,31 @@ class HyperliquidClient:
     # =========================================================================
     # Helper Methods
     # =========================================================================
+
+    def _round_price(self, price: float) -> float:
+        """
+        Round price to valid precision for Hyperliquid.
+
+        Hyperliquid uses 5 significant figures for prices.
+        This prevents "float_to_wire causes rounding" errors.
+
+        Args:
+            price: Raw price value
+
+        Returns:
+            Price rounded to valid precision
+        """
+        if price <= 0:
+            return price
+
+        # Use 5 significant figures
+        from math import log10, floor
+
+        # Calculate the order of magnitude
+        magnitude = floor(log10(abs(price)))
+        # Round to 5 significant figures
+        factor = 10 ** (4 - magnitude)  # 5 sig figs = 4 decimal places after first digit
+        return round(price * factor) / factor
 
     def _get_asset_index(self, symbol: str) -> int:
         """Get asset index for symbol from metadata."""

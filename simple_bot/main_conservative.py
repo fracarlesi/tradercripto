@@ -560,7 +560,7 @@ class ConservativeBot:
                 self.order_type = "limit" if cfg.prefer_limit else "market"
                 self.max_slippage_pct = cfg.max_slippage_pct
                 self.limit_timeout_seconds = 60
-                self.max_retries = 3
+                self.retry_attempts = 3  # ExecutionEngine expects retry_attempts
                 self.retry_delay_seconds = 5
                 self.position_sync_interval = 30
                 self.fill_sync_interval = 10
