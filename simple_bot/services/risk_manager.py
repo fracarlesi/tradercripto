@@ -114,8 +114,12 @@ class RiskManagerService(BaseService):
     # =========================================================================
 
     async def _on_start(self) -> None:
-        """Subscribe to setups topic."""
+        """Subscribe to setups topic and sync state."""
         self._logger.info("Starting RiskManagerService...")
+
+        # CRITICAL: Clear stale pending intents from previous session
+        self.clear_all_pending_intents()
+        self._logger.info("Cleared stale pending intents")
 
         if self.bus:
             await self.subscribe(Topic.SETUPS, self._handle_setup)
@@ -124,13 +128,20 @@ class RiskManagerService(BaseService):
         # Fetch initial equity from exchange
         await self._update_equity()
 
+        # Sync existing positions from exchange
+        await self._sync_positions_from_exchange()
+        self._logger.info(
+            "Synced %d positions from exchange", len(self._open_positions)
+        )
+
     async def _on_stop(self) -> None:
         """Cleanup."""
         self._logger.info("Stopping RiskManagerService...")
 
     async def _run_iteration(self) -> None:
-        """Periodic tasks - update equity, check positions."""
+        """Periodic tasks - update equity, sync positions."""
         await self._update_equity()
+        await self._sync_positions_from_exchange()
 
     async def _update_equity(self) -> None:
         """Fetch current equity from exchange."""
@@ -145,6 +156,51 @@ class RiskManagerService(BaseService):
                 self._logger.debug("Equity updated: $%.2f", float(equity))
         except Exception as e:
             self._logger.warning("Failed to update equity: %s", e)
+
+    async def _sync_positions_from_exchange(self) -> None:
+        """Sync open positions from exchange to local state."""
+        if not self._client:
+            return
+
+        try:
+            positions = await self._client.get_positions()
+            synced_symbols = set()
+
+            for pos in positions:
+                symbol = pos.get("symbol")
+                size = pos.get("size", 0)
+
+                # Only track positions with actual size
+                if abs(size) > 0.0001:
+                    synced_symbols.add(symbol)
+                    entry_price = pos.get("entryPrice", 0)
+                    notional = abs(size) * entry_price
+
+                    self._open_positions[symbol] = {
+                        "symbol": symbol,
+                        "side": "long" if size > 0 else "short",
+                        "size": abs(size),
+                        "entry_price": entry_price,
+                        "notional": notional,
+                        "mark_price": pos.get("markPrice", entry_price),
+                        "unrealized_pnl": pos.get("unrealizedPnl", 0),
+                    }
+                    self._logger.debug(
+                        "Synced position: %s %s %.4f @ %.2f",
+                        "LONG" if size > 0 else "SHORT",
+                        symbol,
+                        abs(size),
+                        entry_price,
+                    )
+
+            # Remove positions that no longer exist on exchange
+            closed_symbols = set(self._open_positions.keys()) - synced_symbols
+            for symbol in closed_symbols:
+                del self._open_positions[symbol]
+                self._logger.info("Position closed (removed): %s", symbol)
+
+        except Exception as e:
+            self._logger.error("Failed to sync positions: %s", e)
 
     async def _health_check_impl(self) -> bool:
         """Check service health."""
@@ -211,8 +267,9 @@ class RiskManagerService(BaseService):
         equity = self._current_equity
         cfg = self._config
 
-        # Check position limits
-        if len(self._open_positions) >= cfg.max_positions:
+        # Check position limits (including pending intents!)
+        total_position_count = len(self._open_positions) + len(self._pending_intents)
+        if total_position_count >= cfg.max_positions:
             return RiskParams(
                 risk_amount=Decimal("0"),
                 position_size=Decimal("0"),
@@ -222,10 +279,10 @@ class RiskManagerService(BaseService):
                 exposure_pct=Decimal("0"),
                 total_exposure_pct=self._get_total_exposure_pct(),
                 size_approved=False,
-                rejection_reason=f"Max positions reached: {cfg.max_positions}",
+                rejection_reason=f"Max positions reached: {cfg.max_positions} (open={len(self._open_positions)}, pending={len(self._pending_intents)})",
             )
 
-        # Check if already in position for this symbol
+        # Check if already in position or pending for this symbol
         if setup.symbol in self._open_positions:
             return RiskParams(
                 risk_amount=Decimal("0"),
@@ -237,6 +294,19 @@ class RiskManagerService(BaseService):
                 total_exposure_pct=self._get_total_exposure_pct(),
                 size_approved=False,
                 rejection_reason=f"Already in position: {setup.symbol}",
+            )
+
+        if setup.symbol in self._pending_intents:
+            return RiskParams(
+                risk_amount=Decimal("0"),
+                position_size=Decimal("0"),
+                notional_value=Decimal("0"),
+                stop_price=setup.stop_price,
+                stop_distance_pct=setup.stop_distance_pct,
+                exposure_pct=Decimal("0"),
+                total_exposure_pct=self._get_total_exposure_pct(),
+                size_approved=False,
+                rejection_reason=f"Already pending intent: {setup.symbol}",
             )
 
         # Calculate risk amount
@@ -262,6 +332,13 @@ class RiskManagerService(BaseService):
         # position_size = risk_amount / (stop_distance * entry_price)
         position_size = risk_amount / (stop_distance_pct * setup.entry_price)
         notional_value = position_size * setup.entry_price
+
+        # Ensure minimum order value for profitability
+        # At $50 with 2-3% TP = $1-1.50 profit, easily covers ~$0.05 fees
+        MIN_NOTIONAL = Decimal("50")  # $50 minimum for meaningful profit
+        if notional_value < MIN_NOTIONAL:
+            notional_value = MIN_NOTIONAL
+            position_size = notional_value / setup.entry_price
 
         # Check exposure limits
         exposure_pct = (notional_value / equity) * 100
@@ -341,6 +418,9 @@ class RiskManagerService(BaseService):
         if not self.bus:
             return
 
+        # Track pending intent to prevent duplicate orders
+        self._pending_intents[intent.symbol] = intent
+
         await self.publish(Topic.TRADE_INTENT, intent.model_dump())
 
         self._logger.info(
@@ -367,6 +447,19 @@ class RiskManagerService(BaseService):
     def remove_position(self, symbol: str) -> None:
         """Remove a closed position."""
         self._open_positions.pop(symbol, None)
+
+    def clear_pending_intent(self, symbol: str) -> None:
+        """Clear a pending intent (called when order fills or is rejected)."""
+        if symbol in self._pending_intents:
+            self._pending_intents.pop(symbol, None)
+            self._logger.debug("Cleared pending intent for %s", symbol)
+
+    def clear_all_pending_intents(self) -> None:
+        """Clear all pending intents (e.g., on startup or after timeout)."""
+        count = len(self._pending_intents)
+        self._pending_intents.clear()
+        if count > 0:
+            self._logger.info("Cleared %d pending intents", count)
 
     def get_position_count(self) -> int:
         """Get count of open positions."""

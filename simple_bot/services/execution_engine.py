@@ -892,6 +892,95 @@ class ExecutionEngineService(BaseService):
         # Set TP/SL orders
         await self._set_tp_sl(signal, order, position)
     
+    async def _ensure_tp_sl_for_position(self, position: ExecutionPosition) -> None:
+        """
+        Ensure a position has TP and SL orders set.
+
+        Called for positions discovered on exchange that may not have protection.
+        Uses default percentages from config.
+
+        Args:
+            position: Position to protect
+        """
+        symbol = position.symbol
+        is_long = position.side == "long"
+        entry_price = position.entry_price
+        size = position.size
+
+        # Check if position already has TP/SL set
+        if position.tp_order_id and position.sl_order_id:
+            self._logger.debug(
+                "%s already has TP/SL: tp=%s, sl=%s",
+                symbol, position.tp_order_id, position.sl_order_id
+            )
+            return
+
+        # Check for existing orders on exchange for this symbol
+        try:
+            open_orders = await self.client.get_open_orders()
+            symbol_orders = [o for o in open_orders if o.get("symbol") == symbol]
+
+            # If there are reduce-only orders, assume TP/SL are set
+            reduce_only_orders = [o for o in symbol_orders if o.get("reduceOnly")]
+            if len(reduce_only_orders) >= 2:
+                self._logger.info(
+                    "%s has %d reduce-only orders, assuming TP/SL present",
+                    symbol, len(reduce_only_orders)
+                )
+                return
+
+        except Exception as e:
+            self._logger.warning("Could not check existing orders for %s: %s", symbol, e)
+
+        # Calculate TP/SL using default percentages
+        tp_pct = self._bot_config.risk.take_profit_pct / 100
+        sl_pct = self._bot_config.risk.stop_loss_pct / 100
+
+        if is_long:
+            tp_price = entry_price * (1 + tp_pct)
+            sl_price = entry_price * (1 - sl_pct)
+        else:
+            tp_price = entry_price * (1 - tp_pct)
+            sl_price = entry_price * (1 + sl_pct)
+
+        self._logger.info(
+            "Setting TP/SL for existing position %s: TP=%.4f (%.1f%%), SL=%.4f (%.1f%%)",
+            symbol, tp_price, tp_pct * 100, sl_price, sl_pct * 100
+        )
+
+        # Place TP order (limit, reduce-only)
+        try:
+            tp_result = await self.client.place_order(
+                symbol=symbol,
+                is_buy=not is_long,
+                size=size,
+                price=tp_price,
+                order_type="limit",
+                reduce_only=True,
+            )
+            position.tp_order_id = tp_result.get("orderId")
+            position.tp_price = tp_price
+            self._logger.info("TP order placed for %s: %s @ %.4f", symbol, position.tp_order_id, tp_price)
+        except Exception as e:
+            self._logger.error("Failed to place TP order for %s: %s", symbol, e)
+
+        # Place SL order using trigger order
+        try:
+            sl_result = await self.client.place_trigger_order(
+                symbol=symbol,
+                is_buy=not is_long,
+                size=size,
+                trigger_price=sl_price,
+                limit_price=None,
+                tpsl="sl",
+                reduce_only=True,
+            )
+            position.sl_order_id = sl_result.get("orderId")
+            position.sl_price = sl_price
+            self._logger.info("SL trigger order placed for %s: %s @ %.4f", symbol, position.sl_order_id, sl_price)
+        except Exception as e:
+            self._logger.error("Failed to place SL order for %s: %s", symbol, e)
+
     async def _set_tp_sl(
         self,
         signal: Dict[str, Any],
@@ -1006,16 +1095,16 @@ class ExecutionEngineService(BaseService):
         """Sync positions from exchange to local state."""
         try:
             exchange_positions = await self.client.get_positions()
-            
+
             exchange_symbols = set()
-            
+
             for pos in exchange_positions:
                 symbol = pos["symbol"]
                 size = pos.get("size", 0)
-                
+
                 if abs(size) > 0.0001:
                     exchange_symbols.add(symbol)
-                    
+
                     if symbol in self.active_positions:
                         # Update existing position
                         local_pos = self.active_positions[symbol]
@@ -1024,7 +1113,7 @@ class ExecutionEngineService(BaseService):
                         local_pos.size = abs(size)
                     else:
                         # New position (opened externally or before service start)
-                        self.active_positions[symbol] = ExecutionPosition(
+                        new_pos = ExecutionPosition(
                             symbol=symbol,
                             side="long" if size > 0 else "short",
                             size=abs(size),
@@ -1035,12 +1124,16 @@ class ExecutionEngineService(BaseService):
                             status=PositionStatus.OPEN,
                             opened_at=datetime.now(timezone.utc),
                         )
+                        self.active_positions[symbol] = new_pos
                         self._logger.info(
                             "Synced existing position: %s %s %.4f",
-                            self.active_positions[symbol].side,
+                            new_pos.side,
                             symbol,
                             abs(size)
                         )
+
+                        # Check and set SL/TP for newly discovered positions
+                        await self._ensure_tp_sl_for_position(new_pos)
             
             # Check for closed positions
             closed_symbols = set(self.active_positions.keys()) - exchange_symbols
