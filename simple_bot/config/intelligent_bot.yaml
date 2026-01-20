@@ -99,9 +99,18 @@ llm:
   retry_attempts: 3
   retry_delay_seconds: 5
 
+# ========================================================
+# SIMPLIFIED STRATEGY CONFIGURATION
+# ========================================================
+# Only TrendFollowStrategy with SMA crossover is active.
+# Other strategies are disabled and kept for future use.
+# Primary strategy is configured in trading.yaml
+# ========================================================
+
 strategies:
+  # ACTIVE: TrendFollow uses SMA20/SMA50 crossover (configured in trading.yaml)
   momentum:
-    enabled: true
+    enabled: false            # DISABLED: Using SMA crossover instead
     weight: 0.35
     timeframe: "4h"
     ema_fast: 20
@@ -112,9 +121,9 @@ strategies:
     rsi_long_threshold: 55
     rsi_short_threshold: 45
     volume_confirmation: true
-    
+
   mean_reversion:
-    enabled: true
+    enabled: false            # DISABLED: Not validated for production
     weight: 0.25
     timeframe: "15m"
     rsi_period: 14
@@ -123,9 +132,9 @@ strategies:
     bb_period: 20
     bb_std: 2.0
     min_bb_width: 0.02
-    
+
   breakout:
-    enabled: true
+    enabled: false            # DISABLED: Using SMA crossover instead
     weight: 0.25
     timeframe: "1h"
     lookback_periods: 20
@@ -133,9 +142,9 @@ strategies:
     atr_multiplier: 2.0
     atr_period: 14
     volume_surge_multiplier: 1.5
-    
+
   funding_arb:
-    enabled: true
+    enabled: false            # DISABLED: Not part of simplified strategy
     weight: 0.15
     min_funding_rate: 0.05
     max_funding_rate: 0.5

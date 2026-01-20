@@ -1,6 +1,31 @@
 # HLQuantBot - Claude Code Configuration
 
-> Trading bot per Hyperliquid DEX con architettura multi-agent
+> Simplified BTC-only trading bot for Hyperliquid DEX with SMA crossover strategy
+
+---
+
+## Current Strategy: Simplified SMA Crossover
+
+The bot has been simplified from a multi-asset, multi-strategy system to focus on:
+
+| Aspect | Configuration |
+|--------|---------------|
+| **Asset** | BTC only (single position) |
+| **Strategy** | SMA20/SMA50 crossover with candle confirmation |
+| **Entry (LONG)** | Price > SMA20 > SMA50 + bullish engulfing |
+| **Entry (SHORT)** | Disabled by default (`allow_short: false`) |
+| **Risk** | 1.5% stop loss, 3% take profit (1:2 ratio) |
+| **Limits** | Max 3 trades/day, 30% position size |
+| **LLM Veto** | Disabled (`llm.enabled: false`) |
+| **Mode** | Paper trading (`dry_run: true`) |
+
+### Key Files for Strategy
+
+| File | Purpose |
+|------|---------|
+| `strategies/trend_follow.py` | SMA crossover logic |
+| `services/market_state.py` | Indicator calculation (SMA, engulfing patterns) |
+| `config/trading.yaml` | Primary configuration |
 
 ---
 
@@ -68,7 +93,7 @@ cd simple_bot && python -m dashboard.app       # Dashboard only
 | **Exchange** | Hyperliquid SDK, WebSocket |
 | **Database** | PostgreSQL, asyncpg |
 | **Frontend** | Flask, HTMX, TailwindCSS |
-| **AI/ML** | OpenAI (LLM veto), custom regime detection |
+| **AI/ML** | DeepSeek LLM veto (disabled), custom regime detection |
 | **Quality** | Pyright, Ruff, Black, pytest |
 
 ---
@@ -135,7 +160,7 @@ Required in `.env`:
 DATABASE_URL=postgresql://...
 HYPERLIQUID_WALLET_ADDRESS=...
 HYPERLIQUID_PRIVATE_KEY=...
-OPENAI_API_KEY=...  # Per LLM veto
+DEEPSEEK_API_KEY=...  # Per LLM veto (optional, disabled by default)
 ```
 
 ---
