@@ -1,0 +1,68 @@
+# Ralph Progress Log
+Started: 2026-01-20
+Project: HLQuantBot Trading Optimization
+
+## Codebase Patterns
+- Use `Decimal` for all prices, quantities, and financial calculations
+- Risk validation via `RiskManager.validate_order()` before any trade
+- LLM veto system uses OpenAI API in `llm_veto.py`
+- Database: asyncpg with connection pool, migrations in `database/migrations/`
+- Config: YAML files in `simple_bot/config/`
+- Tests: pytest in `simple_bot/tests/`
+- Type checking: pyright
+- Async patterns: all I/O must use async/await
+- Strategy pattern: `BaseStrategy` → `evaluate(MarketState) → StrategyResult`
+- Regime detection: TREND (ADX>25), RANGE (ADX<20), CHAOS (20-25)
+- Config conflict: `trading.yaml` and `intelligent_bot.yaml` have overlapping settings
+
+---
+
+## 2026-01-20 - US-001: Strategy Analysis Report
+
+### Current Strategy: TrendFollowStrategy (trend_follow.py)
+
+**Entry Conditions:**
+1. Regime must be TREND (ADX > 25)
+2. ADX > min_adx (default 25)
+3. Price position vs EMA200 (longs: price > EMA200, shorts: price < EMA200)
+4. ATR% > 0.5% (volatility filter)
+5. Direction determined by `trend_direction` from MarketState or EMA200 slope
+
+**Exit Conditions:**
+- Initial stop: 2.5 ATR from entry
+- Trailing stop: 2.5 ATR from max favorable (configured in trading.yaml)
+- Minimal ROI (time-based take profit) in trading.yaml
+
+### Assets Configured
+
+**trading.yaml - universe mode: "all"**
+- Fetches ALL assets from Hyperliquid with filters
+- Manual list exists (BTC, ETH, SOL) but not used since mode="all"
+- Excludes stablecoins only
+
+**intelligent_bot.yaml:**
+- market_scanner with min_volume filter
+- capital_allocator: max 5 positions
+
+### Problems Identified
+
+1. **Too Many Assets**: `mode: "all"` means trading potentially hundreds of assets instead of focusing on BTC
+2. **Complex Entry Logic**: Requires TREND regime + ADX + EMA200 + ATR filter - may miss good opportunities
+3. **No Simple Moving Average Strategy**: Current strategy uses EMA200 slope and breakout, not SMA crossovers
+4. **No Candlestick Pattern Confirmation**: Entry relies only on indicators, no price action confirmation
+5. **No Daily Trade Limit**: Nothing prevents overtrading
+6. **Config Confusion**: Two YAML files with overlapping settings (trading.yaml vs intelligent_bot.yaml)
+7. **Typecheck Issues**: 385 pyright errors in codebase (pre-existing technical debt)
+8. **Shorts Disabled**: `allow_short: false` in trading.yaml, limiting to long-only
+
+### Files Changed
+- None (analysis only)
+
+### Learnings for Future Iterations
+- `BaseStrategy.evaluate()` returns `StrategyResult` with `has_setup` and `Setup` object
+- `Setup` model requires many fields including llm_approved, llm_confidence, llm_reason
+- Trading.yaml `universe.mode: "all"` is the culprit for multi-asset trading
+- Strategy quality score (0-1) is calculated but meaning unclear
+- Current strategy designed for "let trends run" with no take profit by default
+
+---
