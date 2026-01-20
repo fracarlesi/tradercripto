@@ -470,7 +470,13 @@ class RiskConfig(BaseConfig):
         le=10,
         description="Profit percentage to activate trailing stop"
     )
-    
+    max_daily_trades: int = Field(
+        default=3,
+        ge=1,
+        le=50,
+        description="Maximum number of trades allowed per day (resets at UTC midnight)"
+    )
+
     @model_validator(mode="after")
     def validate_risk_reward(self) -> "RiskConfig":
         if self.take_profit_pct < self.stop_loss_pct:

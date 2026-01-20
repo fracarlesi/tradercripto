@@ -72,6 +72,9 @@ risk:
   # Correlation control
   correlation_limit: 0.7     # Don't open BTC+ETH if corr > 0.7
 
+  # Daily trade limit
+  max_daily_trades: 3        # Max 3 trades per day (resets at UTC midnight)
+
 # -----------------------------------------------------------------------------
 # Kill Switch - NON-NEGOTIABLE
 # -----------------------------------------------------------------------------
