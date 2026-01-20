@@ -53,9 +53,9 @@ services:
     
   capital_allocator:
     enabled: true
-    max_positions: 5
+    max_positions: 1          # SIMPLIFIED: Only 1 position (BTC only)
     reserve_pct: 0.20
-    max_position_pct: 0.20
+    max_position_pct: 0.30    # Increased since we're focused on BTC
     max_correlated_pct: 0.30
     rebalance_threshold_pct: 0.10
     
@@ -76,16 +76,16 @@ services:
 
 risk:
   leverage: 5
-  position_size_pct: 10
-  max_positions: 5
+  position_size_pct: 15              # Increased from 10%
+  max_positions: 1                   # SIMPLIFIED: Only 1 position (BTC only)
   max_drawdown_pct: 15
   daily_loss_limit_pct: 5
   target_monthly_return: 12
   max_correlation: 0.7
-  stop_loss_pct: 1.0
-  take_profit_pct: 1.5
-  trailing_stop_pct: 0.8
-  trailing_stop_activation_pct: 0.5
+  stop_loss_pct: 1.5                 # Widened from 1.0% to allow more breathing room
+  take_profit_pct: 3.0               # Increased from 1.5% for meaningful profit
+  trailing_stop_pct: 1.2             # Widened from 0.8%
+  trailing_stop_activation_pct: 1.0  # Activate after 1% profit
 
 llm:
   provider: "deepseek"

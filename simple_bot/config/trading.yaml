@@ -10,7 +10,8 @@
 # -----------------------------------------------------------------------------
 universe:
   # Mode: "all" = fetch all from Hyperliquid, "manual" = use assets list below
-  mode: "all"
+  # SIMPLIFIED: Using manual mode with only BTC to focus capital and reduce complexity
+  mode: "manual"
 
   # Filters for "all" mode
   min_volume_24h: 100000      # Min 24h volume in USD (filter illiquid coins)
@@ -26,6 +27,7 @@ universe:
     - "TUSD"
 
   # Manual asset list (used when mode: "manual")
+  # SIMPLIFIED: Only BTC is enabled to focus capital on the most liquid asset
   assets:
     - symbol: "BTC"
       enabled: true
@@ -33,12 +35,12 @@ universe:
       max_notional: 50000    # Max trade size in USD
 
     - symbol: "ETH"
-      enabled: true
+      enabled: false         # DISABLED: Focusing on BTC only
       min_notional: 100
       max_notional: 30000
 
     - symbol: "SOL"
-      enabled: false         # Disabled until validated
+      enabled: false         # DISABLED: Focusing on BTC only
       min_notional: 50
       max_notional: 10000
 
@@ -56,16 +58,16 @@ timeframes:
 # -----------------------------------------------------------------------------
 risk:
   # Per-trade risk
-  per_trade_pct: 0.5         # Risk 0.5% of equity per trade
-  max_per_trade_pct: 1.0     # Absolute max per trade
+  per_trade_pct: 2.0         # Risk 2% of equity per trade (increased from 1%)
+  max_per_trade_pct: 3.0     # Absolute max per trade
 
   # Position limits
-  max_positions: 5           # Max concurrent positions (increased for multi-asset)
-  max_exposure_pct: 100      # Max total notional as % of equity
+  max_positions: 3           # Max 3 concurrent positions (was 5) - focus capital
+  max_exposure_pct: 150      # Max total notional as % of equity (allow some leverage)
 
   # Leverage
-  leverage: 1                # Keep at 1 for conservative approach
-  max_leverage: 2            # Absolute max leverage allowed
+  leverage: 5                # Increased to 5x for meaningful trade sizes
+  max_leverage: 10           # Absolute max leverage allowed
 
   # Correlation control
   correlation_limit: 0.7     # Don't open BTC+ETH if corr > 0.7
@@ -100,6 +102,18 @@ stops:
   use_server_side: true      # Place stop on exchange
   trailing_update_interval: 300  # Update trailing every 5 min
 
+  # ROI graduato time-based (take profit dinamico)
+  # Le chiavi sono minuti dall'apertura, i valori sono % di profitto richiesto
+  # Cattura profitti early quando disponibili, permette respiro ai trade
+  minimal_roi:
+    "0": 0.03      # 3% profit target nei primi minuti
+    "30": 0.02     # 2% profit dopo 30 minuti
+    "60": 0.015    # 1.5% profit dopo 1 ora
+    "120": 0.01    # 1% profit dopo 2 ore
+    "240": 0.005   # 0.5% profit dopo 4 ore
+    "480": 0.005   # 0.5% profit dopo 8 ore (era BE, ora cattura più profitto)
+    "720": 0.0     # Break-even dopo 12 ore (esci a qualsiasi profitto)
+
 # -----------------------------------------------------------------------------
 # Regime Detection
 # -----------------------------------------------------------------------------
@@ -125,6 +139,7 @@ strategies:
   trend_follow:
     enabled: true
     regime_required: "trend"
+    allow_short: false         # Only long positions (shorts failing in bullish market)
 
     # Entry conditions
     breakout_period: 20        # Breakout of N-bar high/low
@@ -201,17 +216,44 @@ monitoring:
   # Telegram alerts
   telegram:
     enabled: true
+    token: ${TELEGRAM_BOT_TOKEN:}      # From @BotFather
+    chat_id: ${TELEGRAM_CHAT_ID:}      # Your chat ID
     alert_on:
       - "trade_open"
       - "trade_close"
       - "kill_switch_trigger"
       - "daily_summary"
       - "error"
+      - "fill"
 
   # Logging
   log_level: "INFO"
   log_trades: true
   log_decisions: true
+
+# -----------------------------------------------------------------------------
+# Protections - Automatic trading pause in adverse conditions
+# -----------------------------------------------------------------------------
+# Protections are PROACTIVE (prevent disaster) vs Cooldown which is REACTIVE
+# Each protection can be enabled/disabled by adding/removing from this list
+protections:
+  - name: "StoplossGuard"
+    lookback_period_min: 60      # Check last 60 minutes
+    stoploss_limit: 3            # If 3+ stoplosses...
+    stop_duration_min: 360       # ...block trading for 6 hours
+
+  - name: "MaxDrawdown"
+    lookback_period_min: 1440    # Check last 24 hours
+    max_drawdown_pct: 5.0        # If drawdown > 5%...
+    stop_duration_min: 720       # ...block trading for 12 hours
+
+  - name: "CooldownPeriod"
+    cooldown_minutes: 5          # Minimum 5 min between trades
+
+  - name: "LowPerformance"
+    min_trades: 20               # Need at least 20 trades
+    min_win_rate: 0.30           # If win rate < 30%...
+    stop_duration_min: 1440      # ...block trading for 24 hours
 
 # -----------------------------------------------------------------------------
 # Performance Metrics (for offline analysis)
