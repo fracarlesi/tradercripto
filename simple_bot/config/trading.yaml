@@ -282,4 +282,4 @@ metrics:
 # Environment
 # -----------------------------------------------------------------------------
 environment: "testnet"         # "testnet" or "mainnet"
-dry_run: false                 # If true, simulate trades only
+dry_run: true                  # PAPER MODE: Simulate trades without execution
