@@ -30,8 +30,8 @@
         "Tests pass"
       ],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Changed universe.mode to 'manual' and disabled ETH/SOL. Updated max_positions to 1 in intelligent_bot.yaml. 193 tests pass. Pyright errors (385) are pre-existing technical debt."
     },
     {
       "id": "US-003",
@@ -47,8 +47,8 @@
         "Tests pass"
       ],
       "priority": 3,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented SMA20/SMA50 crossover strategy. Added sma20/sma50 fields to MarketState model and MarketStateService. Rewrote TrendFollowStrategy.evaluate() to use simple golden cross (Price>SMA20>SMA50) and death cross logic. Created database migration 008_add_sma_indicators.sql. All 193 tests pass. Pyright errors (385) are pre-existing."
     },
     {
       "id": "US-004",

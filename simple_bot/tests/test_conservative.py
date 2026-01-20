@@ -32,7 +32,7 @@ from simple_bot.core.models import (
 
 @pytest.fixture
 def market_state_trend():
-    """Create a market state in TREND regime."""
+    """Create a market state in TREND regime with SMA golden cross."""
     return MarketState(
         symbol="BTC",
         timeframe="4h",
@@ -40,7 +40,7 @@ def market_state_trend():
         open=Decimal("95000"),
         high=Decimal("96000"),
         low=Decimal("94500"),
-        close=Decimal("95800"),
+        close=Decimal("95800"),  # Price > SMA20 > SMA50 (golden cross)
         volume=Decimal("1000"),
         atr=Decimal("500"),
         atr_pct=Decimal("0.52"),
@@ -49,6 +49,8 @@ def market_state_trend():
         ema50=Decimal("94000"),
         ema200=Decimal("92000"),
         ema200_slope=Decimal("0.002"),
+        sma20=Decimal("95000"),  # Price (95800) > SMA20 (95000)
+        sma50=Decimal("94000"),  # SMA20 (95000) > SMA50 (94000)
         regime=Regime.TREND,
         trend_direction=Direction.LONG,
     )
@@ -56,7 +58,7 @@ def market_state_trend():
 
 @pytest.fixture
 def market_state_range():
-    """Create a market state in RANGE regime."""
+    """Create a market state in RANGE regime (no clear SMA signal)."""
     return MarketState(
         symbol="ETH",
         timeframe="4h",
@@ -64,7 +66,7 @@ def market_state_range():
         open=Decimal("3400"),
         high=Decimal("3450"),
         low=Decimal("3380"),
-        close=Decimal("3420"),
+        close=Decimal("3420"),  # Price between SMA20 and SMA50
         volume=Decimal("500"),
         atr=Decimal("30"),
         atr_pct=Decimal("0.88"),
@@ -73,6 +75,8 @@ def market_state_range():
         ema50=Decimal("3420"),
         ema200=Decimal("3400"),
         ema200_slope=Decimal("0.0005"),
+        sma20=Decimal("3410"),  # Price > SMA20 but SMA20 < SMA50 - no clear signal
+        sma50=Decimal("3430"),  # SMA50 > SMA20 - mixed signal
         regime=Regime.RANGE,
         trend_direction=Direction.FLAT,
         choppiness=Decimal("65"),
@@ -81,7 +85,7 @@ def market_state_range():
 
 @pytest.fixture
 def market_state_chaos():
-    """Create a market state in CHAOS regime."""
+    """Create a market state in CHAOS regime (no clear SMA signal)."""
     return MarketState(
         symbol="BTC",
         timeframe="4h",
@@ -89,7 +93,7 @@ def market_state_chaos():
         open=Decimal("95000"),
         high=Decimal("97000"),
         low=Decimal("93000"),
-        close=Decimal("94500"),
+        close=Decimal("94500"),  # Price < SMA20 but SMA20 > SMA50 - no clear signal
         volume=Decimal("2000"),
         atr=Decimal("800"),
         atr_pct=Decimal("0.85"),
@@ -98,6 +102,8 @@ def market_state_chaos():
         ema50=Decimal("95000"),
         ema200=Decimal("94000"),
         ema200_slope=Decimal("0.0008"),
+        sma20=Decimal("95500"),  # Price (94500) < SMA20 (95500)
+        sma50=Decimal("94000"),  # SMA20 (95500) > SMA50 (94000) - mixed signal
         regime=Regime.CHAOS,
         trend_direction=Direction.FLAT,
     )
@@ -180,7 +186,7 @@ class TestModels:
 # =============================================================================
 
 class TestTrendFollowStrategy:
-    """Test TrendFollowStrategy."""
+    """Test TrendFollowStrategy (SMA Crossover)."""
 
     def test_import(self):
         """Test strategy can be imported."""
@@ -200,47 +206,64 @@ class TestTrendFollowStrategy:
         from simple_bot.strategies import TrendFollowStrategy
 
         config = {
-            "breakout_period": 15,
             "stop_atr_mult": 3.0,
-            "min_adx": 30,
+            "allow_short": True,
+            "min_atr_pct": 0.5,
         }
         strategy = TrendFollowStrategy(config=config)
-        assert strategy.breakout_period == 15
         assert strategy.stop_atr_mult == 3.0
-        assert strategy.min_adx == 30.0
+        assert strategy.allow_short == True
+        assert strategy.min_atr_pct == 0.5
 
-    def test_can_trade_in_trend(self, market_state_trend):
-        """Test strategy can trade in TREND regime."""
+    def test_can_trade_in_any_regime(self, market_state_trend, market_state_range, market_state_chaos):
+        """Test SMA strategy can trade in any regime (signals are self-contained)."""
         from simple_bot.strategies import TrendFollowStrategy
 
         strategy = TrendFollowStrategy()
+        # SMA crossover strategy doesn't rely on regime
         assert strategy.can_trade(market_state_trend) == True
+        assert strategy.can_trade(market_state_range) == True
+        assert strategy.can_trade(market_state_chaos) == True
 
-    def test_cannot_trade_in_range(self, market_state_range):
-        """Test strategy cannot trade in RANGE regime."""
+    def test_evaluate_generates_long_setup_on_golden_cross(self, market_state_trend):
+        """Test strategy generates LONG setup on golden cross (Price > SMA20 > SMA50)."""
         from simple_bot.strategies import TrendFollowStrategy
 
         strategy = TrendFollowStrategy()
-        assert strategy.can_trade(market_state_range) == False
-
-    def test_cannot_trade_in_chaos(self, market_state_chaos):
-        """Test strategy cannot trade in CHAOS regime."""
-        from simple_bot.strategies import TrendFollowStrategy
-
-        strategy = TrendFollowStrategy()
-        assert strategy.can_trade(market_state_chaos) == False
-
-    def test_evaluate_generates_setup(self, market_state_trend):
-        """Test strategy generates setup in valid conditions."""
-        from simple_bot.strategies import TrendFollowStrategy
-
-        strategy = TrendFollowStrategy(config={"min_adx": 25})
         result = strategy.evaluate(market_state_trend)
 
         assert result.has_setup == True
         assert result.setup is not None
         assert result.setup.direction == Direction.LONG
         assert result.setup.symbol == "BTC"
+        assert "Golden Cross" in result.reason
+
+    def test_evaluate_rejects_mixed_signal(self, market_state_chaos):
+        """Test strategy rejects when SMAs give mixed signal."""
+        from simple_bot.strategies import TrendFollowStrategy
+
+        strategy = TrendFollowStrategy()
+        result = strategy.evaluate(market_state_chaos)
+
+        # Price < SMA20 but SMA20 > SMA50 - no clear signal
+        assert result.has_setup == False
+        assert "No SMA crossover signal" in result.reason
+
+    def test_short_disabled_by_default(self, market_state_range):
+        """Test short positions are disabled by default."""
+        from simple_bot.strategies import TrendFollowStrategy
+
+        # Create a death cross scenario
+        market_state_range.close = Decimal("3380")  # Price < SMA20
+        market_state_range.sma20 = Decimal("3400")  # SMA20 < SMA50
+        market_state_range.sma50 = Decimal("3450")  # Death cross setup
+
+        strategy = TrendFollowStrategy()
+        result = strategy.evaluate(market_state_range)
+
+        # Should reject because shorts are disabled
+        assert result.has_setup == False
+        assert "Short positions disabled" in result.reason
 
 
 class TestMeanReversionStrategy:

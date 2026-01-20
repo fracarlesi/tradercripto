@@ -367,6 +367,10 @@ class MarketStateService(BaseService):
             # EMA200 slope (normalized)
             ema200_slope = (ema200[-1] - ema200[-5]) / ema200[-5] if len(ema200) >= 5 else 0
 
+            # SMAs for crossover strategy
+            sma20 = calculate_sma(close, 20)
+            sma50_arr = calculate_sma(close, 50)
+
             # ADX
             adx_values = calculate_adx(high, low, close, 14)
             adx = Decimal(str(max(0, min(100, adx_values[-1]))))
@@ -415,6 +419,8 @@ class MarketStateService(BaseService):
                 ema50=Decimal(str(ema50[-1])),
                 ema200=Decimal(str(ema200[-1])),
                 ema200_slope=Decimal(str(ema200_slope)),
+                sma20=Decimal(str(sma20[-1])),
+                sma50=Decimal(str(sma50_arr[-1])),
                 choppiness=choppiness,
                 bb_lower=Decimal(str(bb_lower[-1])),
                 bb_mid=Decimal(str(bb_mid[-1])),
@@ -587,14 +593,16 @@ class MarketStateService(BaseService):
                     timestamp, symbol, timeframe,
                     open, high, low, close, volume,
                     atr, atr_pct, adx, rsi, ema50, ema200, ema200_slope,
+                    sma20, sma50,
                     choppiness, bb_lower, bb_mid, bb_upper,
                     regime, trend_direction, bars_count
                 ) VALUES (
                     $1, $2, $3,
                     $4, $5, $6, $7, $8,
                     $9, $10, $11, $12, $13, $14, $15,
-                    $16, $17, $18, $19,
-                    $20, $21, $22
+                    $16, $17,
+                    $18, $19, $20, $21,
+                    $22, $23, $24
                 )
                 ON CONFLICT (timestamp, symbol, timeframe)
                 DO UPDATE SET
@@ -610,6 +618,8 @@ class MarketStateService(BaseService):
                     ema50 = EXCLUDED.ema50,
                     ema200 = EXCLUDED.ema200,
                     ema200_slope = EXCLUDED.ema200_slope,
+                    sma20 = EXCLUDED.sma20,
+                    sma50 = EXCLUDED.sma50,
                     choppiness = EXCLUDED.choppiness,
                     bb_lower = EXCLUDED.bb_lower,
                     bb_mid = EXCLUDED.bb_mid,
@@ -633,6 +643,8 @@ class MarketStateService(BaseService):
                 float(state.ema50),
                 float(state.ema200),
                 float(state.ema200_slope),
+                float(state.sma20),
+                float(state.sma50),
                 float(state.choppiness) if state.choppiness else None,
                 float(state.bb_lower) if state.bb_lower else None,
                 float(state.bb_mid) if state.bb_mid else None,

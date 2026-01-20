@@ -1,27 +1,23 @@
 """
-Trend Following Strategy
-=========================
+Trend Following Strategy - SMA Crossover
+==========================================
 
-Core strategy for HLQuantBot conservative approach.
+Simplified strategy using Simple Moving Average crossover.
 
 Entry conditions:
-- Regime is TREND
-- Price > EMA200 (for longs)
-- Breakout of N-bar high
-- ATR above average (volatility confirmation)
+- LONG: Price > SMA20 AND SMA20 > SMA50 (golden cross setup)
+- SHORT: Price < SMA20 AND SMA20 < SMA50 (death cross setup)
 
 Exit:
-- Initial stop: 2.5 ATR
-- Trailing stop: 2.5 ATR from max favorable
-- No take profit (let trends run)
+- When price crosses SMA20 in opposite direction
+- Initial stop: 2.5 ATR from entry
 
-This strategy produces few trades but aims for high R-multiples.
+This strategy focuses on clear, simple signals for BTC trading.
 """
 
 import logging
 from decimal import Decimal
 from datetime import datetime, timezone
-from typing import Optional
 
 from .base import BaseStrategy, StrategyResult
 from ..core.models import MarketState, Setup, Regime, Direction, SetupType
@@ -32,36 +28,32 @@ logger = logging.getLogger(__name__)
 
 class TrendFollowStrategy(BaseStrategy):
     """
-    Trend-following breakout strategy.
+    Simple SMA crossover strategy.
 
-    Works only in TREND regime. Enters on breakout of recent high/low
-    with ATR-based stops.
+    Uses SMA20/SMA50 crossover for trend direction and price
+    position relative to SMA20 for entry timing.
     """
 
     def __init__(self, config: dict = None):
         """
-        Initialize trend follow strategy.
+        Initialize SMA crossover strategy.
 
         Config options:
-            breakout_period: Number of bars for breakout (default: 20)
-            atr_filter: Require ATR above average (default: True)
-            price_above_ema200: Require price above EMA200 for longs (default: True)
             stop_atr_mult: ATR multiplier for stop (default: 2.5)
-            min_adx: Minimum ADX for entry (default: 25)
+            allow_short: Allow short positions (default: False)
+            min_atr_pct: Minimum ATR% for entry (default: 0.3)
         """
         super().__init__(config)
 
         # Configuration
-        self.breakout_period = self.config.get("breakout_period", 20)
-        self.atr_filter = self.config.get("atr_filter", True)
-        self.price_above_ema200 = self.config.get("price_above_ema200", True)
         self.stop_atr_mult = self.config.get("stop_atr_mult", 2.5)
-        self.min_adx = self.config.get("min_adx", 25.0)
+        self.allow_short = self.config.get("allow_short", False)
+        self.min_atr_pct = self.config.get("min_atr_pct", 0.3)
 
         self._logger.info(
-            "TrendFollowStrategy initialized: breakout=%d, stop_atr=%.1f",
-            self.breakout_period,
+            "TrendFollowStrategy (SMA Crossover) initialized: stop_atr=%.1f, allow_short=%s",
             self.stop_atr_mult,
+            self.allow_short,
         )
 
     @property
@@ -70,42 +62,38 @@ class TrendFollowStrategy(BaseStrategy):
 
     @property
     def required_regime(self) -> Regime:
+        # SMA strategy works in all regimes - signals are clearer
         return Regime.TREND
+
+    def can_trade(self, state: MarketState) -> bool:
+        """
+        Override to allow trading in any regime.
+
+        The SMA crossover strategy doesn't rely on regime detection
+        since SMA signals are self-contained.
+        """
+        return True
 
     def evaluate(self, state: MarketState) -> StrategyResult:
         """
-        Evaluate market state for trend breakout setup.
+        Evaluate market state for SMA crossover setup.
 
-        Checks:
-        1. Regime is TREND
-        2. ADX > min_adx
-        3. Price position relative to EMA200
-        4. Breakout conditions
-        5. ATR filter
+        Entry conditions:
+        - LONG: Price > SMA20 AND SMA20 > SMA50 (golden cross setup)
+        - SHORT: Price < SMA20 AND SMA20 < SMA50 (death cross setup)
         """
-        # Check regime
-        if not self.can_trade(state):
-            return self.reject(f"Wrong regime: {state.regime.value}, need TREND")
+        # Check minimum volatility
+        if float(state.atr_pct) < self.min_atr_pct:
+            return self.reject(f"ATR too low: {state.atr_pct:.2f}% < {self.min_atr_pct}%")
 
-        # Check ADX
-        if float(state.adx) < self.min_adx:
-            return self.reject(f"ADX too low: {state.adx:.1f} < {self.min_adx}")
-
-        # Determine direction based on trend
-        direction = self._determine_direction(state)
+        # Determine direction based on SMA crossover
+        direction = self._determine_sma_direction(state)
         if direction == Direction.FLAT:
-            return self.reject("No clear trend direction")
+            return self.reject("No SMA crossover signal")
 
-        # Check price vs EMA200
-        if self.price_above_ema200:
-            if direction == Direction.LONG and state.close < state.ema200:
-                return self.reject("Price below EMA200 for long")
-            if direction == Direction.SHORT and state.close > state.ema200:
-                return self.reject("Price above EMA200 for short")
-
-        # Check ATR filter (ATR% > 0.5% indicates active market)
-        if self.atr_filter and float(state.atr_pct) < 0.5:
-            return self.reject(f"ATR too low: {state.atr_pct:.2f}%")
+        # Check if shorts are disabled
+        if direction == Direction.SHORT and not self.allow_short:
+            return self.reject("Short positions disabled in configuration")
 
         # Calculate entry and stop prices
         entry_price = state.close
@@ -117,8 +105,8 @@ class TrendFollowStrategy(BaseStrategy):
         )
         stop_distance_pct = self.calculate_stop_distance_pct(entry_price, stop_price)
 
-        # Calculate setup quality based on indicators
-        quality = self._calculate_quality(state, direction)
+        # Calculate setup quality based on SMA alignment strength
+        quality = self._calculate_sma_quality(state, direction)
 
         # Create setup
         setup = Setup(
@@ -135,73 +123,90 @@ class TrendFollowStrategy(BaseStrategy):
             adx=state.adx,
             rsi=state.rsi,
             setup_quality=quality,
-            confidence=Decimal(str(min(0.9, float(state.adx) / 100 + 0.4))),
+            confidence=quality,  # Use quality as confidence for simplicity
         )
 
+        crossover_type = "Golden Cross" if direction == Direction.LONG else "Death Cross"
         self._logger.info(
-            "SETUP: %s %s @ %.2f, stop=%.2f (%.2f%%), quality=%.2f",
+            "SETUP: %s %s @ %.2f (%s), SMA20=%.2f, SMA50=%.2f, stop=%.2f (%.2f%%)",
             direction.value.upper(),
             state.symbol,
             float(entry_price),
+            crossover_type,
+            float(state.sma20),
+            float(state.sma50),
             float(stop_price),
             float(stop_distance_pct),
-            float(quality),
         )
 
         return StrategyResult(
             has_setup=True,
             setup=setup,
-            reason="Trend breakout conditions met"
+            reason=f"{crossover_type} setup: Price {'>' if direction == Direction.LONG else '<'} SMA20 {'>' if direction == Direction.LONG else '<'} SMA50"
         )
 
-    def _determine_direction(self, state: MarketState) -> Direction:
+    def _determine_sma_direction(self, state: MarketState) -> Direction:
         """
-        Determine trade direction based on trend indicators.
+        Determine trade direction based on SMA crossover.
 
-        Uses:
-        - EMA200 slope
-        - Price position vs EMA200
-        - Trend direction from market state
+        Golden Cross (LONG): Price > SMA20 AND SMA20 > SMA50
+        Death Cross (SHORT): Price < SMA20 AND SMA20 < SMA50
+
+        Returns FLAT if no clear signal.
         """
-        # Use the trend direction already calculated by MarketStateService
-        if state.trend_direction != Direction.FLAT:
-            return state.trend_direction
+        price = state.close
+        sma20 = state.sma20
+        sma50 = state.sma50
 
-        # Fallback: check EMA200 slope
-        if float(state.ema200_slope) > 0.001:
+        # Golden Cross setup: Price > SMA20 > SMA50
+        if price > sma20 and sma20 > sma50:
             return Direction.LONG
-        elif float(state.ema200_slope) < -0.001:
+
+        # Death Cross setup: Price < SMA20 < SMA50
+        if price < sma20 and sma20 < sma50:
             return Direction.SHORT
 
         return Direction.FLAT
 
-    def _calculate_quality(self, state: MarketState, direction: Direction) -> Decimal:
+    def _calculate_sma_quality(self, state: MarketState, direction: Direction) -> Decimal:
         """
-        Calculate setup quality score 0-1.
+        Calculate setup quality score 0-1 based on SMA alignment.
 
         Factors:
-        - ADX strength (higher = better trend)
-        - RSI confirmation (not overbought/oversold against direction)
-        - ATR level (higher = more potential)
+        - Distance between SMA20 and SMA50 (more separation = stronger trend)
+        - Price distance from SMA20 (closer = better entry)
+        - RSI confirmation (not extreme)
         """
         score = Decimal("0.5")  # Base score
 
-        # ADX bonus (max +0.3)
-        adx_bonus = min(0.3, (float(state.adx) - 25) / 50)
-        score += Decimal(str(adx_bonus))
+        # SMA separation bonus (max +0.2)
+        # More separation between SMAs indicates stronger trend
+        sma_diff_pct = abs(float(state.sma20) - float(state.sma50)) / float(state.sma50) * 100
+        sma_bonus = min(0.2, sma_diff_pct / 5)  # Max bonus at 5% separation
+        score += Decimal(str(sma_bonus))
 
-        # RSI confirmation (max +0.2)
+        # Price proximity to SMA20 bonus (max +0.15)
+        # Entries closer to SMA20 have better risk/reward
+        price_to_sma20_pct = abs(float(state.close) - float(state.sma20)) / float(state.sma20) * 100
+        if price_to_sma20_pct < 1:
+            score += Decimal("0.15")
+        elif price_to_sma20_pct < 2:
+            score += Decimal("0.10")
+        elif price_to_sma20_pct < 3:
+            score += Decimal("0.05")
+
+        # RSI confirmation (max +0.15)
         rsi = float(state.rsi)
         if direction == Direction.LONG:
-            if 40 < rsi < 70:  # Not oversold, not overbought
-                score += Decimal("0.2")
-            elif 30 < rsi < 40:  # Slightly oversold - good for entry
+            if 40 <= rsi <= 65:  # Not overbought
                 score += Decimal("0.15")
+            elif 35 <= rsi < 40 or 65 < rsi <= 70:
+                score += Decimal("0.08")
         else:  # SHORT
-            if 30 < rsi < 60:
-                score += Decimal("0.2")
-            elif 60 < rsi < 70:
+            if 35 <= rsi <= 60:  # Not oversold
                 score += Decimal("0.15")
+            elif 30 <= rsi < 35 or 60 < rsi <= 65:
+                score += Decimal("0.08")
 
         # Cap at 1.0
         return min(Decimal("1.0"), max(Decimal("0.0"), score))

@@ -66,3 +66,71 @@ Project: HLQuantBot Trading Optimization
 - Current strategy designed for "let trends run" with no take profit by default
 
 ---
+
+## 2026-01-20 - US-002: Configure Bot to Trade Only BTC
+
+### What Was Implemented
+- Changed `universe.mode` from `"all"` to `"manual"` in trading.yaml
+- Disabled ETH asset (`enabled: false`) - was previously `enabled: true`
+- SOL was already disabled
+- Updated `intelligent_bot.yaml` to set `max_positions: 1` (in both services.capital_allocator and risk sections)
+- Increased `max_position_pct` to 30% for concentrated capital on single asset
+
+### Files Changed
+- `simple_bot/config/trading.yaml`: Universe mode and ETH disabled
+- `simple_bot/config/intelligent_bot.yaml`: max_positions reduced to 1
+
+### Performance Impact
+- Bot now focuses all capital on BTC, the most liquid asset
+- Reduced complexity from potentially hundreds of assets to just 1
+- Better capital concentration should improve per-trade returns
+
+### Verification
+- 193 tests pass ✓
+- Pyright: 385 errors (pre-existing technical debt, not introduced by this change)
+
+### Learnings for Future Iterations
+- Config changes in YAML don't affect Python type checking
+- Both trading.yaml and intelligent_bot.yaml have risk/position settings that need to stay in sync
+- The bot respects `universe.mode: "manual"` and only uses enabled assets from the list
+
+---
+
+## 2026-01-20 - US-003: Implement Simple SMA Crossover Strategy
+
+### What Was Implemented
+- Added `sma20` and `sma50` fields to `MarketState` model in `core/models.py`
+- Updated `MarketStateService._fetch_market_state()` to calculate SMA20/SMA50 using `calculate_sma()`
+- Completely rewrote `TrendFollowStrategy.evaluate()` to use SMA crossover logic:
+  - **Golden Cross (LONG)**: Price > SMA20 AND SMA20 > SMA50
+  - **Death Cross (SHORT)**: Price < SMA20 AND SMA20 < SMA50
+- Simplified entry conditions - removed complex ADX/regime checks
+- Strategy now works in any market regime (signals are self-contained)
+- Created database migration `008_add_sma_indicators.sql` for new columns
+- Updated `_save_to_db()` to persist SMA values
+- Updated test fixtures with sma20/sma50 values and rewrote strategy tests
+
+### Files Changed
+- `simple_bot/core/models.py`: Added sma20, sma50 fields to MarketState
+- `simple_bot/services/market_state.py`: Calculate and save SMA indicators
+- `simple_bot/strategies/trend_follow.py`: Complete rewrite with SMA crossover logic
+- `simple_bot/tests/test_conservative.py`: Updated fixtures and strategy tests
+- `database/migrations/008_add_sma_indicators.sql`: New migration for SMA columns
+
+### Performance Impact
+- Simpler, clearer entry/exit signals
+- No longer dependent on regime detection (TREND/RANGE/CHAOS)
+- Shorts disabled by default (configurable via `allow_short` config)
+- Quality score based on SMA separation and price proximity to SMA20
+
+### Verification
+- 193 tests pass ✓
+- Pyright: 385 errors (pre-existing technical debt)
+
+### Learnings for Future Iterations
+- `calculate_sma()` returns shorter array due to `mode='valid'` - use `[-1]` for latest value
+- SMA crossover logic is simpler to understand and debug than regime-based trading
+- `BaseStrategy.can_trade()` can be overridden to allow trading in any regime
+- Strategy quality is now based on: SMA separation (trend strength), price proximity to SMA20 (entry timing), RSI confirmation
+
+---
