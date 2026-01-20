@@ -306,10 +306,10 @@ class CapitalAllocatorConfig(BaseConfig):
         description="Reserve capital percentage"
     )
     max_position_pct: float = Field(
-        default=0.20,
+        default=0.30,
         ge=0.05,
         le=0.5,
-        description="Maximum position size as percentage of capital"
+        description="Maximum position size as percentage of capital (conservative: 30%)"
     )
     max_correlated_pct: float = Field(
         default=0.30,
@@ -447,16 +447,16 @@ class RiskConfig(BaseConfig):
         description="Maximum correlation between positions"
     )
     stop_loss_pct: float = Field(
-        default=1.0,
-        ge=0.1,
-        le=10,
-        description="Stop loss percentage"
-    )
-    take_profit_pct: float = Field(
         default=1.5,
         ge=0.1,
+        le=10,
+        description="Stop loss percentage (conservative default: 1.5%)"
+    )
+    take_profit_pct: float = Field(
+        default=3.0,
+        ge=0.1,
         le=20,
-        description="Take profit percentage"
+        description="Take profit percentage (conservative default: 3% for 1:2 risk/reward ratio)"
     )
     trailing_stop_pct: float = Field(
         default=0.8,

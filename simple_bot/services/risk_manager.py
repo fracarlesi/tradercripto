@@ -51,12 +51,15 @@ class RiskConfig:
     # Position limits
     max_positions: int = 2
     max_exposure_pct: float = 100.0   # Max notional as % of equity
+    max_position_pct: float = 30.0    # Max 30% of capital per trade (conservative)
 
     # Leverage
     leverage: float = 1.0
     max_leverage: float = 2.0
 
-    # Stops
+    # Stops (conservative: 1.5% SL, 3% TP for 1:2 risk/reward ratio)
+    stop_loss_pct: float = 1.5        # Stop loss at 1.5% from entry
+    take_profit_pct: float = 3.0      # Take profit at 3% from entry (1:2 R:R)
     trailing_atr_mult: float = 2.5
 
     # Slippage
@@ -365,6 +368,17 @@ class RiskManagerService(BaseService):
         if notional_value < MIN_NOTIONAL:
             notional_value = MIN_NOTIONAL
             position_size = notional_value / setup.entry_price
+
+        # Cap position size at max_position_pct of equity (conservative: 30%)
+        max_position_value = equity * Decimal(str(cfg.max_position_pct)) / 100
+        if notional_value > max_position_value:
+            notional_value = max_position_value
+            position_size = notional_value / setup.entry_price
+            self._logger.info(
+                "Position size capped at %.1f%% of equity ($%.2f)",
+                float(cfg.max_position_pct),
+                float(notional_value),
+            )
 
         # Check exposure limits
         exposure_pct = (notional_value / equity) * 100
