@@ -82,6 +82,16 @@ class MarketState(BaseModel):
     sma20: Decimal = Field(..., ge=0, description="SMA(20)")
     sma50: Decimal = Field(..., ge=0, description="SMA(50)")
 
+    # Previous candle data for candlestick pattern detection
+    prev_open: Optional[Decimal] = Field(None, ge=0, description="Previous candle open")
+    prev_high: Optional[Decimal] = Field(None, ge=0, description="Previous candle high")
+    prev_low: Optional[Decimal] = Field(None, ge=0, description="Previous candle low")
+    prev_close: Optional[Decimal] = Field(None, ge=0, description="Previous candle close")
+
+    # Candlestick pattern signals for entry confirmation
+    bullish_engulfing: bool = Field(default=False, description="Bullish engulfing pattern detected")
+    bearish_engulfing: bool = Field(default=False, description="Bearish engulfing pattern detected")
+
     # Optional indicators
     choppiness: Optional[Decimal] = Field(None, ge=0, le=100, description="Choppiness Index")
     bb_upper: Optional[Decimal] = Field(None, ge=0, description="Bollinger upper band")

@@ -32,7 +32,7 @@ from simple_bot.core.models import (
 
 @pytest.fixture
 def market_state_trend():
-    """Create a market state in TREND regime with SMA golden cross."""
+    """Create a market state in TREND regime with SMA golden cross and bullish engulfing."""
     return MarketState(
         symbol="BTC",
         timeframe="4h",
@@ -51,6 +51,14 @@ def market_state_trend():
         ema200_slope=Decimal("0.002"),
         sma20=Decimal("95000"),  # Price (95800) > SMA20 (95000)
         sma50=Decimal("94000"),  # SMA20 (95000) > SMA50 (94000)
+        # Previous candle data - bearish candle that gets engulfed
+        prev_open=Decimal("95500"),
+        prev_high=Decimal("95600"),
+        prev_low=Decimal("94800"),
+        prev_close=Decimal("94900"),  # Bearish: close < open
+        # Current candle is bullish and engulfs previous
+        bullish_engulfing=True,  # Current opens at 95000, closes at 95800 - engulfs prev body
+        bearish_engulfing=False,
         regime=Regime.TREND,
         trend_direction=Direction.LONG,
     )
@@ -77,6 +85,13 @@ def market_state_range():
         ema200_slope=Decimal("0.0005"),
         sma20=Decimal("3410"),  # Price > SMA20 but SMA20 < SMA50 - no clear signal
         sma50=Decimal("3430"),  # SMA50 > SMA20 - mixed signal
+        # Previous candle data
+        prev_open=Decimal("3390"),
+        prev_high=Decimal("3420"),
+        prev_low=Decimal("3380"),
+        prev_close=Decimal("3400"),
+        bullish_engulfing=False,
+        bearish_engulfing=True,  # Bearish engulfing for potential short setup
         regime=Regime.RANGE,
         trend_direction=Direction.FLAT,
         choppiness=Decimal("65"),
@@ -104,6 +119,13 @@ def market_state_chaos():
         ema200_slope=Decimal("0.0008"),
         sma20=Decimal("95500"),  # Price (94500) < SMA20 (95500)
         sma50=Decimal("94000"),  # SMA20 (95500) > SMA50 (94000) - mixed signal
+        # Previous candle data
+        prev_open=Decimal("94000"),
+        prev_high=Decimal("96000"),
+        prev_low=Decimal("93500"),
+        prev_close=Decimal("95000"),
+        bullish_engulfing=False,
+        bearish_engulfing=False,  # No engulfing pattern in chaos
         regime=Regime.CHAOS,
         trend_direction=Direction.FLAT,
     )
@@ -226,7 +248,7 @@ class TestTrendFollowStrategy:
         assert strategy.can_trade(market_state_chaos) == True
 
     def test_evaluate_generates_long_setup_on_golden_cross(self, market_state_trend):
-        """Test strategy generates LONG setup on golden cross (Price > SMA20 > SMA50)."""
+        """Test strategy generates LONG setup on golden cross with candle confirmation."""
         from simple_bot.strategies import TrendFollowStrategy
 
         strategy = TrendFollowStrategy()
@@ -237,6 +259,39 @@ class TestTrendFollowStrategy:
         assert result.setup.direction == Direction.LONG
         assert result.setup.symbol == "BTC"
         assert "Golden Cross" in result.reason
+        assert "bullish engulfing" in result.reason  # Candle confirmation in reason
+
+    def test_evaluate_rejects_without_candle_confirmation(self, market_state_trend):
+        """Test strategy rejects setup without candle confirmation when required."""
+        from simple_bot.strategies import TrendFollowStrategy
+
+        # Remove the bullish engulfing signal
+        market_state_trend.bullish_engulfing = False
+
+        strategy = TrendFollowStrategy()
+        result = strategy.evaluate(market_state_trend)
+
+        # Should reject because no bullish engulfing
+        assert result.has_setup == False
+        assert "No bullish engulfing candle confirmation" in result.reason
+
+    def test_evaluate_generates_setup_without_candle_confirm_disabled(self, market_state_trend):
+        """Test strategy generates setup when candle confirmation is disabled."""
+        from simple_bot.strategies import TrendFollowStrategy
+
+        # Remove the bullish engulfing signal
+        market_state_trend.bullish_engulfing = False
+
+        # Disable candle confirmation requirement
+        strategy = TrendFollowStrategy(config={"require_candle_confirm": False})
+        result = strategy.evaluate(market_state_trend)
+
+        # Should still generate setup because candle confirmation is disabled
+        assert result.has_setup == True
+        assert result.setup is not None
+        assert result.setup.direction == Direction.LONG
+        assert "Golden Cross" in result.reason
+        assert "bullish engulfing" not in result.reason  # No candle mention when disabled
 
     def test_evaluate_rejects_mixed_signal(self, market_state_chaos):
         """Test strategy rejects when SMAs give mixed signal."""

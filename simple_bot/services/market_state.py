@@ -172,6 +172,76 @@ def calculate_choppiness_index(high: np.ndarray, low: np.ndarray, close: np.ndar
     return ci
 
 
+def detect_engulfing_pattern(
+    curr_open: float,
+    curr_close: float,
+    prev_open: float,
+    prev_close: float,
+) -> tuple[bool, bool]:
+    """
+    Detect bullish and bearish engulfing candlestick patterns.
+
+    Engulfing Pattern Rules:
+    ========================
+
+    BULLISH ENGULFING (reversal signal for LONG entry):
+    - Previous candle is bearish (prev_close < prev_open)
+    - Current candle is bullish (curr_close > curr_open)
+    - Current body engulfs previous body:
+      - Current open <= previous close (opens at or below previous close)
+      - Current close >= previous open (closes at or above previous open)
+
+    BEARISH ENGULFING (reversal signal for SHORT entry):
+    - Previous candle is bullish (prev_close > prev_open)
+    - Current candle is bearish (curr_close < curr_open)
+    - Current body engulfs previous body:
+      - Current open >= previous close (opens at or above previous close)
+      - Current close <= previous open (closes at or below previous open)
+
+    Args:
+        curr_open: Current candle open price
+        curr_close: Current candle close price
+        prev_open: Previous candle open price
+        prev_close: Previous candle close price
+
+    Returns:
+        Tuple of (bullish_engulfing, bearish_engulfing) booleans
+    """
+    # Previous candle direction
+    prev_is_bearish = prev_close < prev_open
+    prev_is_bullish = prev_close > prev_open
+
+    # Current candle direction
+    curr_is_bullish = curr_close > curr_open
+    curr_is_bearish = curr_close < curr_open
+
+    # Previous candle body boundaries
+    prev_body_high = max(prev_open, prev_close)
+    prev_body_low = min(prev_open, prev_close)
+
+    # Current candle body boundaries
+    curr_body_high = max(curr_open, curr_close)
+    curr_body_low = min(curr_open, curr_close)
+
+    # Bullish Engulfing: bearish previous + bullish current + current engulfs previous
+    bullish_engulfing = (
+        prev_is_bearish and
+        curr_is_bullish and
+        curr_body_low <= prev_body_low and
+        curr_body_high >= prev_body_high
+    )
+
+    # Bearish Engulfing: bullish previous + bearish current + current engulfs previous
+    bearish_engulfing = (
+        prev_is_bullish and
+        curr_is_bearish and
+        curr_body_low <= prev_body_low and
+        curr_body_high >= prev_body_high
+    )
+
+    return bullish_engulfing, bearish_engulfing
+
+
 # =============================================================================
 # Configuration
 # =============================================================================
@@ -402,6 +472,24 @@ class MarketStateService(BaseService):
             else:
                 trend_direction = Direction.FLAT
 
+            # Extract previous candle data for pattern detection
+            opens = ohlcv["open"]
+            prev_open = Decimal(str(opens[-2])) if len(opens) >= 2 else None
+            prev_high = Decimal(str(high[-2])) if len(high) >= 2 else None
+            prev_low = Decimal(str(low[-2])) if len(low) >= 2 else None
+            prev_close = Decimal(str(close[-2])) if len(close) >= 2 else None
+
+            # Detect engulfing patterns for entry confirmation
+            bullish_engulfing = False
+            bearish_engulfing = False
+            if prev_open is not None and prev_close is not None:
+                bullish_engulfing, bearish_engulfing = detect_engulfing_pattern(
+                    curr_open=float(opens[-1]),
+                    curr_close=float(close[-1]),
+                    prev_open=float(prev_open),
+                    prev_close=float(prev_close),
+                )
+
             # Build MarketState
             state = MarketState(
                 symbol=symbol,
@@ -421,6 +509,12 @@ class MarketStateService(BaseService):
                 ema200_slope=Decimal(str(ema200_slope)),
                 sma20=Decimal(str(sma20[-1])),
                 sma50=Decimal(str(sma50_arr[-1])),
+                prev_open=prev_open,
+                prev_high=prev_high,
+                prev_low=prev_low,
+                prev_close=prev_close,
+                bullish_engulfing=bullish_engulfing,
+                bearish_engulfing=bearish_engulfing,
                 choppiness=choppiness,
                 bb_lower=Decimal(str(bb_lower[-1])),
                 bb_mid=Decimal(str(bb_mid[-1])),

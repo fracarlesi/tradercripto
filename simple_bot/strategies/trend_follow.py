@@ -1,18 +1,28 @@
 """
-Trend Following Strategy - SMA Crossover
-==========================================
+Trend Following Strategy - SMA Crossover with Candle Confirmation
+===================================================================
 
-Simplified strategy using Simple Moving Average crossover.
+Simplified strategy using Simple Moving Average crossover with candlestick
+pattern confirmation to avoid false signals.
 
 Entry conditions:
 - LONG: Price > SMA20 AND SMA20 > SMA50 (golden cross setup)
+        + Bullish engulfing candle pattern for confirmation
 - SHORT: Price < SMA20 AND SMA20 < SMA50 (death cross setup)
+         + Bearish engulfing candle pattern for confirmation
+
+Candlestick Pattern Confirmation:
+- Bullish Engulfing: Current bullish candle body completely engulfs
+  previous bearish candle body - confirms buyer control
+- Bearish Engulfing: Current bearish candle body completely engulfs
+  previous bullish candle body - confirms seller control
 
 Exit:
 - When price crosses SMA20 in opposite direction
 - Initial stop: 2.5 ATR from entry
 
-This strategy focuses on clear, simple signals for BTC trading.
+This strategy focuses on clear, simple signals for BTC trading with
+additional candle confirmation to filter out low-probability setups.
 """
 
 import logging
@@ -42,6 +52,7 @@ class TrendFollowStrategy(BaseStrategy):
             stop_atr_mult: ATR multiplier for stop (default: 2.5)
             allow_short: Allow short positions (default: False)
             min_atr_pct: Minimum ATR% for entry (default: 0.3)
+            require_candle_confirm: Require engulfing candle pattern (default: True)
         """
         super().__init__(config)
 
@@ -49,11 +60,13 @@ class TrendFollowStrategy(BaseStrategy):
         self.stop_atr_mult = self.config.get("stop_atr_mult", 2.5)
         self.allow_short = self.config.get("allow_short", False)
         self.min_atr_pct = self.config.get("min_atr_pct", 0.3)
+        self.require_candle_confirm = self.config.get("require_candle_confirm", True)
 
         self._logger.info(
-            "TrendFollowStrategy (SMA Crossover) initialized: stop_atr=%.1f, allow_short=%s",
+            "TrendFollowStrategy (SMA Crossover) initialized: stop_atr=%.1f, allow_short=%s, candle_confirm=%s",
             self.stop_atr_mult,
             self.allow_short,
+            self.require_candle_confirm,
         )
 
     @property
@@ -76,11 +89,13 @@ class TrendFollowStrategy(BaseStrategy):
 
     def evaluate(self, state: MarketState) -> StrategyResult:
         """
-        Evaluate market state for SMA crossover setup.
+        Evaluate market state for SMA crossover setup with candle confirmation.
 
         Entry conditions:
         - LONG: Price > SMA20 AND SMA20 > SMA50 (golden cross setup)
+                + Bullish engulfing candle (if require_candle_confirm=True)
         - SHORT: Price < SMA20 AND SMA20 < SMA50 (death cross setup)
+                 + Bearish engulfing candle (if require_candle_confirm=True)
         """
         # Check minimum volatility
         if float(state.atr_pct) < self.min_atr_pct:
@@ -94,6 +109,13 @@ class TrendFollowStrategy(BaseStrategy):
         # Check if shorts are disabled
         if direction == Direction.SHORT and not self.allow_short:
             return self.reject("Short positions disabled in configuration")
+
+        # Check candle confirmation if required
+        if self.require_candle_confirm:
+            candle_confirmed = self._check_candle_confirmation(state, direction)
+            if not candle_confirmed:
+                expected_pattern = "bullish engulfing" if direction == Direction.LONG else "bearish engulfing"
+                return self.reject(f"No {expected_pattern} candle confirmation")
 
         # Calculate entry and stop prices
         entry_price = state.close
@@ -127,22 +149,30 @@ class TrendFollowStrategy(BaseStrategy):
         )
 
         crossover_type = "Golden Cross" if direction == Direction.LONG else "Death Cross"
+        candle_pattern = "bullish engulfing" if direction == Direction.LONG else "bearish engulfing"
+        candle_status = f" + {candle_pattern}" if self.require_candle_confirm else ""
+
         self._logger.info(
-            "SETUP: %s %s @ %.2f (%s), SMA20=%.2f, SMA50=%.2f, stop=%.2f (%.2f%%)",
+            "SETUP: %s %s @ %.2f (%s%s), SMA20=%.2f, SMA50=%.2f, stop=%.2f (%.2f%%)",
             direction.value.upper(),
             state.symbol,
             float(entry_price),
             crossover_type,
+            candle_status,
             float(state.sma20),
             float(state.sma50),
             float(stop_price),
             float(stop_distance_pct),
         )
 
+        reason_parts = [f"{crossover_type} setup: Price {'>' if direction == Direction.LONG else '<'} SMA20 {'>' if direction == Direction.LONG else '<'} SMA50"]
+        if self.require_candle_confirm:
+            reason_parts.append(f"confirmed by {candle_pattern}")
+
         return StrategyResult(
             has_setup=True,
             setup=setup,
-            reason=f"{crossover_type} setup: Price {'>' if direction == Direction.LONG else '<'} SMA20 {'>' if direction == Direction.LONG else '<'} SMA50"
+            reason=" ".join(reason_parts)
         )
 
     def _determine_sma_direction(self, state: MarketState) -> Direction:
@@ -167,6 +197,36 @@ class TrendFollowStrategy(BaseStrategy):
             return Direction.SHORT
 
         return Direction.FLAT
+
+    def _check_candle_confirmation(self, state: MarketState, direction: Direction) -> bool:
+        """
+        Check if there's a confirming candlestick pattern for the trade direction.
+
+        Candle Confirmation Rules:
+        ==========================
+
+        For LONG trades, we want a BULLISH ENGULFING pattern:
+        - Shows buyers have taken control
+        - Previous bearish candle completely engulfed by bullish candle
+        - Confirms momentum reversal in favor of longs
+
+        For SHORT trades, we want a BEARISH ENGULFING pattern:
+        - Shows sellers have taken control
+        - Previous bullish candle completely engulfed by bearish candle
+        - Confirms momentum reversal in favor of shorts
+
+        Args:
+            state: Current market state with engulfing pattern flags
+            direction: Trade direction (LONG or SHORT)
+
+        Returns:
+            True if candle pattern confirms the trade direction
+        """
+        if direction == Direction.LONG:
+            return state.bullish_engulfing
+        elif direction == Direction.SHORT:
+            return state.bearish_engulfing
+        return False
 
     def _calculate_sma_quality(self, state: MarketState, direction: Direction) -> Decimal:
         """
