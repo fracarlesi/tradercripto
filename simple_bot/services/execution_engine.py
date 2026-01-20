@@ -191,6 +191,7 @@ class ExecutionPosition:
     sl_price: Optional[float] = None
     opened_at: Optional[datetime] = None
     closed_at: Optional[datetime] = None
+    exit_reason: Optional[str] = None  # "stop_loss", "take_profit", "roi_target", "manual"
     
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary."""
@@ -212,6 +213,7 @@ class ExecutionPosition:
             "sl_price": self.sl_price,
             "opened_at": self.opened_at.isoformat() if self.opened_at else None,
             "closed_at": self.closed_at.isoformat() if self.closed_at else None,
+            "exit_reason": self.exit_reason,
         }
 
 
@@ -948,21 +950,22 @@ class ExecutionEngineService(BaseService):
             symbol, tp_price, tp_pct * 100, sl_price, sl_pct * 100
         )
 
-        # Place TP order (limit, reduce-only)
+        # Place TP order using TRIGGER order (proper take profit - shows in TP/SL column)
         try:
-            tp_result = await self.client.place_order(
+            tp_result = await self.client.place_trigger_order(
                 symbol=symbol,
                 is_buy=not is_long,
                 size=size,
-                price=tp_price,
-                order_type="limit",
+                trigger_price=tp_price,
+                limit_price=None,  # Market order when triggered
+                tpsl="tp",  # Take profit type - shows in native TP/SL column
                 reduce_only=True,
             )
             position.tp_order_id = tp_result.get("orderId")
             position.tp_price = tp_price
-            self._logger.info("TP order placed for %s: %s @ %.4f", symbol, position.tp_order_id, tp_price)
+            self._logger.info("TP trigger order placed for %s: %s @ %.4f", symbol, position.tp_order_id, tp_price)
         except Exception as e:
-            self._logger.error("Failed to place TP order for %s: %s", symbol, e)
+            self._logger.error("Failed to place TP trigger order for %s: %s", symbol, e)
 
         # Place SL order using trigger order
         try:
@@ -1031,22 +1034,23 @@ class ExecutionEngineService(BaseService):
             sl_distance_pct
         )
 
-        # Place TP order (limit, reduce-only) - executes at target price
+        # Place TP order using TRIGGER order (proper take profit - shows in TP/SL column)
         try:
-            tp_result = await self.client.place_order(
+            tp_result = await self.client.place_trigger_order(
                 symbol=symbol,
                 is_buy=not is_long,  # Opposite side to close
                 size=size,
-                price=tp_price,
-                order_type="limit",
+                trigger_price=tp_price,
+                limit_price=None,  # Market order when triggered
+                tpsl="tp",  # Take profit type - shows in native TP/SL column
                 reduce_only=True,
             )
             position.tp_order_id = tp_result.get("orderId")
             position.tp_price = tp_price
-            self._logger.info("TP order placed: %s @ %.4f", position.tp_order_id, tp_price)
+            self._logger.info("TP trigger order placed: %s @ %.4f", position.tp_order_id, tp_price)
 
         except Exception as e:
-            self._logger.error("Failed to place TP order: %s", e)
+            self._logger.error("Failed to place TP trigger order: %s", e)
 
         # Place SL order using TRIGGER order (proper stop loss)
         try:
@@ -1079,8 +1083,11 @@ class ExecutionEngineService(BaseService):
                 # Sync positions from exchange
                 await self._sync_positions_from_exchange()
                 
-                # Check for closed positions
+                # Check for closed positions (SL/TP hit)
                 await self._check_closed_positions()
+                
+                # Check for ROI-based exits (time-based take profit)
+                await self._check_roi_exits()
                 
                 await asyncio.sleep(5)  # Check every 5 seconds
                 
@@ -1204,6 +1211,136 @@ class ExecutionEngineService(BaseService):
                             position.current_price,
                             position.sl_price
                         )
+
+    async def should_exit_on_roi(self, position: ExecutionPosition) -> tuple[bool, float, float]:
+        """
+        Check if position should exit based on graduated ROI target.
+        
+        ROI targets decrease over time:
+        - 0-30min: 3% profit target
+        - 30-60min: 2% profit target  
+        - 1-2h: 1.5% profit target
+        - 2-4h: 1% profit target
+        - 4-8h: 0.5% profit target
+        - 8h+: Break-even (exit at any profit)
+        
+        Args:
+            position: ExecutionPosition to check
+            
+        Returns:
+            Tuple of (should_exit, current_roi_pct, target_roi_pct)
+        """
+        # Get ROI config from bot config
+        roi_config: Dict[str, float] = {}
+        try:
+            if hasattr(self._bot_config, 'stops') and hasattr(self._bot_config.stops, 'minimal_roi'):
+                roi_config = self._bot_config.stops.minimal_roi or {}
+        except Exception:
+            pass
+        
+        if not roi_config:
+            return False, 0.0, 0.0  # ROI not configured
+        
+        # Need opened_at to calculate time in trade
+        if not position.opened_at:
+            return False, 0.0, 0.0
+        
+        # Calculate time in trade (minutes)
+        now = datetime.now(timezone.utc)
+        time_in_trade_seconds = (now - position.opened_at).total_seconds()
+        time_in_trade_min = time_in_trade_seconds / 60
+        
+        # Find current ROI target based on time elapsed
+        # ROI config keys are strings representing minutes
+        target_roi = 0.0
+        applicable_threshold = 0
+        
+        for time_threshold_str, roi_value in sorted(
+            roi_config.items(),
+            key=lambda x: int(x[0])  # Sort by time threshold
+        ):
+            time_threshold_min = int(time_threshold_str)
+            
+            if time_in_trade_min >= time_threshold_min:
+                target_roi = float(roi_value)
+                applicable_threshold = time_threshold_min
+            else:
+                break  # We've passed applicable thresholds
+        
+        # Calculate current ROI %
+        if position.entry_price <= 0:
+            return False, 0.0, target_roi
+        
+        if position.side == "long":
+            current_roi_pct = (position.current_price - position.entry_price) / position.entry_price
+        else:  # short
+            current_roi_pct = (position.entry_price - position.current_price) / position.entry_price
+        
+        # Check if current ROI meets target
+        if current_roi_pct >= target_roi:
+            self._logger.info(
+                "ROI target reached for %s: Current ROI %.2f%% >= Target %.2f%% "
+                "(time in trade: %.1f min, threshold: %d min)",
+                position.symbol,
+                current_roi_pct * 100,
+                target_roi * 100,
+                time_in_trade_min,
+                applicable_threshold
+            )
+            return True, current_roi_pct, target_roi
+        
+        return False, current_roi_pct, target_roi
+
+    async def _check_roi_exits(self) -> None:
+        """
+        Check all active positions for ROI-based exits.
+        
+        This is called from _monitor_positions and checks if any position
+        has reached its time-based ROI target.
+        """
+        for symbol, position in list(self.active_positions.items()):
+            if position.status != PositionStatus.OPEN:
+                continue
+            
+            try:
+                should_exit, current_roi, target_roi = await self.should_exit_on_roi(position)
+                
+                if should_exit:
+                    # Calculate time in trade for logging
+                    time_in_trade_str = "unknown"
+                    if position.opened_at:
+                        time_in_trade_sec = (datetime.now(timezone.utc) - position.opened_at).total_seconds()
+                        hours = int(time_in_trade_sec // 3600)
+                        minutes = int((time_in_trade_sec % 3600) // 60)
+                        time_in_trade_str = f"{hours}h {minutes}m"
+                    
+                    # Calculate PnL
+                    pnl = position.unrealized_pnl
+                    
+                    self._logger.info(
+                        "Closing trade via ROI: %s | Entry: $%.2f | "
+                        "Exit: $%.2f | PnL: $%.2f (%.2f%%) | "
+                        "Time in trade: %s | ROI target: %.2f%%",
+                        symbol,
+                        position.entry_price,
+                        position.current_price,
+                        pnl,
+                        current_roi * 100,
+                        time_in_trade_str,
+                        target_roi * 100
+                    )
+                    
+                    # Mark exit reason before closing
+                    position.exit_reason = "roi_target"
+                    
+                    # Close position
+                    await self.close_position(symbol)
+                    
+            except Exception as e:
+                self._logger.error(
+                    "Error checking ROI exit for %s: %s",
+                    symbol, e
+                )
     
     async def _handle_position_closed(self, symbol: str) -> None:
         """

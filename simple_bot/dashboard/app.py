@@ -396,6 +396,195 @@ def api_kill_switch_events():
     return render_template("partials/kill_switch_events.html", events=events)
 
 
+@app.route("/api/cooldown-status")
+def api_cooldown_status():
+    """Get current cooldown status."""
+    async def _get_data():
+        try:
+            db = await get_db()
+            cooldown = await db.get_active_cooldown()
+            if cooldown:
+                # Parse details JSON if string
+                details = cooldown.get("details", {})
+                if isinstance(details, str):
+                    import json
+                    details = json.loads(details)
+                
+                # Calculate remaining time
+                cooldown_until = cooldown.get("cooldown_until")
+                if cooldown_until:
+                    now = datetime.now(timezone.utc)
+                    if cooldown_until.tzinfo is None:
+                        cooldown_until = cooldown_until.replace(tzinfo=timezone.utc)
+                    remaining_seconds = max(0, (cooldown_until - now).total_seconds())
+                else:
+                    remaining_seconds = 0
+                
+                return {
+                    "active": remaining_seconds > 0,
+                    "reason": cooldown.get("reason"),
+                    "triggered_at": cooldown.get("triggered_at").isoformat() if cooldown.get("triggered_at") else None,
+                    "cooldown_until": cooldown_until.isoformat() if cooldown_until else None,
+                    "remaining_seconds": int(remaining_seconds),
+                    "remaining_minutes": int(remaining_seconds // 60),
+                    "details": details,
+                }
+            return {"active": False}
+        except Exception as e:
+            print(f"[Dashboard] Error fetching cooldown status: {e}")
+            return {"active": False, "error": str(e)}
+
+    cooldown = safe_run_async(_get_data(), default={"active": False})
+    return jsonify(cooldown)
+
+
+@app.route("/api/cooldown-history")
+def api_cooldown_history():
+    """Get cooldown history."""
+    async def _get_data():
+        try:
+            db = await get_db()
+            history = await db.get_cooldown_history(limit=20)
+            result = []
+            for row in history:
+                details = row.get("details", {})
+                if isinstance(details, str):
+                    import json
+                    details = json.loads(details)
+                result.append({
+                    "id": row.get("id"),
+                    "reason": row.get("reason"),
+                    "triggered_at": row.get("triggered_at").isoformat() if row.get("triggered_at") else None,
+                    "cooldown_until": row.get("cooldown_until").isoformat() if row.get("cooldown_until") else None,
+                    "details": details,
+                })
+            return result
+        except Exception as e:
+            print(f"[Dashboard] Error fetching cooldown history: {e}")
+            return []
+
+    history = safe_run_async(_get_data(), default=[])
+    return jsonify(history)
+
+
+@app.route("/api/protections")
+def api_protections():
+    """Get active protections from the protection system."""
+    async def _get_data():
+        try:
+            db = await get_db()
+            # Query active protections (protected_until > NOW())
+            rows = await db.fetch("""
+                SELECT 
+                    id,
+                    protection_name,
+                    protected_until,
+                    trigger_details,
+                    created_at
+                FROM protections
+                WHERE protected_until > NOW()
+                ORDER BY created_at DESC
+            """)
+            
+            result = []
+            now = datetime.now(timezone.utc)
+            
+            for row in rows:
+                details = row.get("trigger_details", {})
+                if isinstance(details, str):
+                    import json
+                    details = json.loads(details)
+                
+                protected_until = row.get("protected_until")
+                if protected_until and protected_until.tzinfo is None:
+                    protected_until = protected_until.replace(tzinfo=timezone.utc)
+                
+                remaining_seconds = max(0, (protected_until - now).total_seconds()) if protected_until else 0
+                
+                result.append({
+                    "id": row.get("id"),
+                    "protection_name": row.get("protection_name"),
+                    "protected_until": protected_until.isoformat() if protected_until else None,
+                    "remaining_seconds": int(remaining_seconds),
+                    "remaining_minutes": int(remaining_seconds // 60),
+                    "trigger_details": details,
+                    "created_at": row.get("created_at").isoformat() if row.get("created_at") else None,
+                })
+            
+            return {
+                "active_protections": result,
+                "count": len(result),
+            }
+        except Exception as e:
+            print(f"[Dashboard] Error fetching protections: {e}")
+            return {"active_protections": [], "count": 0, "error": str(e)}
+
+    protections = safe_run_async(_get_data(), default={"active_protections": [], "count": 0})
+    return jsonify(protections)
+
+
+@app.route("/api/protections/history")
+def api_protections_history():
+    """Get protection trigger history."""
+    async def _get_data():
+        try:
+            db = await get_db()
+            rows = await db.fetch("""
+                SELECT 
+                    id,
+                    protection_name,
+                    protected_until,
+                    trigger_details,
+                    created_at
+                FROM protections
+                ORDER BY created_at DESC
+                LIMIT 50
+            """)
+            
+            result = []
+            for row in rows:
+                details = row.get("trigger_details", {})
+                if isinstance(details, str):
+                    import json
+                    details = json.loads(details)
+                
+                result.append({
+                    "id": row.get("id"),
+                    "protection_name": row.get("protection_name"),
+                    "protected_until": row.get("protected_until").isoformat() if row.get("protected_until") else None,
+                    "trigger_details": details,
+                    "created_at": row.get("created_at").isoformat() if row.get("created_at") else None,
+                })
+            
+            return result
+        except Exception as e:
+            print(f"[Dashboard] Error fetching protection history: {e}")
+            return []
+
+    history = safe_run_async(_get_data(), default=[])
+    return jsonify(history)
+
+
+@app.route("/api/protections/<int:protection_id>/clear", methods=["POST"])
+def api_clear_protection(protection_id: int):
+    """Manually clear a protection (admin override)."""
+    async def _clear():
+        try:
+            db = await get_db()
+            await db.execute("""
+                UPDATE protections
+                SET protected_until = NOW()
+                WHERE id = $1
+            """, protection_id)
+            return {"success": True, "message": f"Protection {protection_id} cleared"}
+        except Exception as e:
+            print(f"[Dashboard] Error clearing protection: {e}")
+            return {"success": False, "error": str(e)}
+
+    result = safe_run_async(_clear(), default={"success": False, "error": "Unknown error"})
+    return jsonify(result)
+
+
 @app.route("/api/llm-stats")
 def api_llm_stats():
     """Get LLM decision statistics."""
@@ -697,6 +886,11 @@ def partial_positions():
 @app.route("/partials/performance")
 def partial_performance():
     """Performance metrics partial."""
+    from decimal import Decimal as Dec
+    import math
+    import statistics
+    from collections import defaultdict
+
     async def _get_data():
         try:
             db = await get_db()
@@ -715,14 +909,224 @@ def partial_performance():
             print(f"[Dashboard] Error fetching performance: {e}")
             return {"total_trades": 0, "wins": 0, "losses": 0, "win_rate": 0, "total_pnl": 0, "total_fees": 0}, [], []
 
+    async def _get_metrics():
+        """Calculate risk-adjusted performance metrics."""
+        try:
+            db = await get_db()
+
+            # Get initial equity and current equity
+            account = await db.get_account()
+            current_equity = Dec(str(account.get("equity", 100))) if account else Dec("100")
+
+            # Get initial equity (fallback to current minus total PnL)
+            pnl_row = await db.fetchrow(
+                """
+                SELECT COALESCE(SUM(net_pnl), 0) as total_pnl
+                FROM trades
+                WHERE is_closed = true
+                """
+            )
+            total_pnl_from_db = Dec(str(pnl_row["total_pnl"])) if pnl_row else Dec("0")
+            initial_equity = current_equity - total_pnl_from_db
+            if initial_equity <= 0:
+                initial_equity = current_equity
+
+            # Get all closed trades
+            all_trades = await db.fetch(
+                """
+                SELECT
+                    trade_id, symbol, side, size,
+                    entry_price, entry_time,
+                    exit_price, exit_time,
+                    gross_pnl, fees, net_pnl,
+                    strategy, duration_seconds, notes
+                FROM trades
+                WHERE is_closed = true
+                ORDER BY exit_time ASC
+                """
+            )
+            all_trades = [dict(row) for row in all_trades]
+
+            # Return None if no trades
+            if not all_trades:
+                return None
+
+            # Separate winning and losing trades
+            winning_trades = [t for t in all_trades if (t.get("net_pnl") or 0) > 0]
+            losing_trades = [t for t in all_trades if (t.get("net_pnl") or 0) < 0]
+
+            total_trades = len(all_trades)
+            winning_count = len(winning_trades)
+            losing_count = len(losing_trades)
+
+            win_rate = winning_count / total_trades if total_trades > 0 else 0
+
+            # PnL metrics
+            total_pnl = sum(Dec(str(t.get("net_pnl") or 0)) for t in all_trades)
+            total_fees = sum(Dec(str(t.get("fees") or 0)) for t in all_trades)
+            total_pnl_pct = (total_pnl / initial_equity * 100) if initial_equity > 0 else Dec("0")
+
+            gross_profit = sum(Dec(str(t.get("net_pnl") or 0)) for t in winning_trades)
+            gross_loss = sum(Dec(str(t.get("net_pnl") or 0)) for t in losing_trades)
+
+            avg_win = gross_profit / winning_count if winning_count > 0 else Dec("0")
+            avg_loss = gross_loss / losing_count if losing_count > 0 else Dec("0")
+
+            avg_win_loss_ratio = abs(float(avg_win / avg_loss)) if avg_loss != 0 else None
+
+            pnls = [Dec(str(t.get("net_pnl") or 0)) for t in all_trades]
+            largest_win = max(pnls) if pnls else Dec("0")
+            largest_loss = min(pnls) if pnls else Dec("0")
+
+            durations = [t.get("duration_seconds") for t in all_trades if t.get("duration_seconds")]
+            avg_duration = int(sum(durations) / len(durations)) if durations else None
+
+            # Calculate daily returns
+            daily_pnl = defaultdict(lambda: Dec("0"))
+            for trade in all_trades:
+                exit_time = trade.get("exit_time")
+                if exit_time:
+                    date_key = exit_time.date().isoformat()
+                    daily_pnl[date_key] += Dec(str(trade.get("net_pnl") or 0))
+
+            daily_returns = []
+            running_equity = initial_equity
+            for date_key in sorted(daily_pnl.keys()):
+                pnl = daily_pnl[date_key]
+                if running_equity > 0:
+                    daily_returns.append(float(pnl / running_equity))
+                    running_equity += pnl
+
+            # Sharpe Ratio
+            sharpe_ratio = None
+            if len(daily_returns) >= 2:
+                try:
+                    mean_return = statistics.mean(daily_returns)
+                    std_return = statistics.stdev(daily_returns)
+                    if std_return > 0:
+                        risk_free_daily = 0.03 / 365
+                        sharpe = (mean_return - risk_free_daily) / std_return * math.sqrt(365)
+                        sharpe_ratio = round(sharpe, 2)
+                except Exception:
+                    pass
+
+            # Sortino Ratio
+            sortino_ratio = None
+            if len(daily_returns) >= 2:
+                try:
+                    downside_returns = [r for r in daily_returns if r < 0]
+                    if len(downside_returns) >= 2:
+                        mean_return = statistics.mean(daily_returns)
+                        downside_std = statistics.stdev(downside_returns)
+                        if downside_std > 0:
+                            risk_free_daily = 0.03 / 365
+                            sortino = (mean_return - risk_free_daily) / downside_std * math.sqrt(365)
+                            sortino_ratio = round(sortino, 2)
+                except Exception:
+                    pass
+
+            # Equity curve and drawdown
+            equity_curve = [(initial_equity, None)]
+            running_eq = initial_equity
+            for trade in all_trades:
+                net_pnl = Dec(str(trade.get("net_pnl") or 0))
+                running_eq += net_pnl
+                equity_curve.append((running_eq, trade.get("exit_time")))
+
+            peak = equity_curve[0][0]
+            max_dd_pct = Dec("0")
+            max_dd_abs = Dec("0")
+            for eq, _ in equity_curve:
+                if eq > peak:
+                    peak = eq
+                dd_abs = peak - eq
+                dd_pct = (dd_abs / peak * 100) if peak > 0 else Dec("0")
+                if dd_pct > max_dd_pct:
+                    max_dd_pct = dd_pct
+                    max_dd_abs = dd_abs
+
+            current_peak = max(eq for eq, _ in equity_curve)
+            current_eq = equity_curve[-1][0]
+            current_dd_pct = ((current_peak - current_eq) / current_peak * 100) if current_peak > 0 else Dec("0")
+
+            # Calmar Ratio
+            calmar_ratio = None
+            if max_dd_pct > 0 and total_pnl_pct != 0 and len(all_trades) >= 2:
+                first_time = all_trades[0].get("entry_time")
+                last_time = all_trades[-1].get("exit_time") or all_trades[-1].get("entry_time")
+                if first_time and last_time:
+                    trading_days = max(1, (last_time - first_time).days)
+                    annual_return_pct = (float(total_pnl_pct) / trading_days) * 365
+                    calmar_ratio = round(annual_return_pct / float(max_dd_pct), 2)
+
+            # Profit Factor
+            profit_factor = None
+            abs_loss = abs(gross_loss)
+            if abs_loss > 0:
+                profit_factor = round(float(gross_profit / abs_loss), 2)
+
+            # Expectancy
+            expectancy = None
+            if avg_loss != 0:
+                loss_rate = 1 - win_rate
+                expectancy = round(float(avg_win) * win_rate - float(abs(avg_loss)) * loss_rate, 2)
+
+            # SQN
+            sqn = None
+            if len(pnls) >= 2:
+                try:
+                    float_pnls = [float(p) for p in pnls]
+                    mean_pnl = statistics.mean(float_pnls)
+                    std_pnl = statistics.stdev(float_pnls)
+                    if std_pnl > 0:
+                        sqn = round((mean_pnl / std_pnl) * math.sqrt(len(float_pnls)), 2)
+                except Exception:
+                    pass
+
+            return {
+                "timestamp": datetime.now(timezone.utc),
+                "equity": float(current_equity),
+                "initial_equity": float(initial_equity),
+                "total_pnl": float(total_pnl),
+                "total_pnl_pct": float(total_pnl_pct),
+                "sharpe_ratio": sharpe_ratio,
+                "sortino_ratio": sortino_ratio,
+                "calmar_ratio": calmar_ratio,
+                "max_drawdown_pct": float(max_dd_pct),
+                "max_drawdown_abs": float(max_dd_abs),
+                "current_drawdown_pct": float(current_dd_pct),
+                "profit_factor": profit_factor,
+                "win_rate": round(win_rate, 4),
+                "avg_win": float(avg_win),
+                "avg_loss": float(avg_loss),
+                "avg_win_loss_ratio": avg_win_loss_ratio,
+                "expectancy": expectancy,
+                "sqn": sqn,
+                "total_trades": total_trades,
+                "winning_trades": winning_count,
+                "losing_trades": losing_count,
+                "total_fees": float(total_fees),
+                "avg_trade_duration_seconds": avg_duration,
+                "largest_win": float(largest_win),
+                "largest_loss": float(largest_loss),
+            }
+        except Exception as e:
+            print(f"[Dashboard] Error calculating metrics: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
     result = safe_run_async(_get_data(), default=({"total_trades": 0, "wins": 0, "losses": 0, "win_rate": 0, "total_pnl": 0, "total_fees": 0}, [], []))
     stats, trades, summaries = result
+
+    metrics = safe_run_async(_get_metrics(), default=None)
 
     return render_template(
         "partials/performance_table.html",
         stats=stats,
         trades=trades,
         summaries=summaries,
+        metrics=metrics,
         updated_at=datetime.now(timezone.utc)
     )
 
@@ -772,6 +1176,7 @@ def partial_overview():
         stats = {"total_trades": 0, "wins": 0, "losses": 0, "win_rate": 0, "total_pnl": 0, "total_fees": 0}
         decisions = []
         market_regime = None
+        cooldown = None
 
         try:
             account = await db.get_account()
@@ -816,6 +1221,43 @@ def partial_overview():
         except Exception as e:
             print(f"[Dashboard] Error fetching market regime: {e}")
 
+        # Get cooldown status
+        try:
+            cooldown = await db.get_active_cooldown()
+        except Exception as e:
+            print(f"[Dashboard] Error fetching cooldown: {e}")
+
+        # Get active protections
+        active_protections = []
+        try:
+            import json as _json
+            rows = await db.fetch("""
+                SELECT 
+                    protection_name,
+                    protected_until,
+                    trigger_details
+                FROM protections
+                WHERE protected_until > NOW()
+                ORDER BY created_at DESC
+            """)
+            now = datetime.now(timezone.utc)
+            for row in rows:
+                protected_until = row.get("protected_until")
+                if protected_until and protected_until.tzinfo is None:
+                    protected_until = protected_until.replace(tzinfo=timezone.utc)
+                remaining_seconds = max(0, (protected_until - now).total_seconds()) if protected_until else 0
+                details = row.get("trigger_details", {})
+                if isinstance(details, str):
+                    details = _json.loads(details)
+                active_protections.append({
+                    "protection_name": row.get("protection_name"),
+                    "protected_until": protected_until.strftime("%Y-%m-%d %H:%M UTC") if protected_until else None,
+                    "remaining_minutes": int(remaining_seconds // 60),
+                    "trigger_details": details,
+                })
+        except Exception as e:
+            print(f"[Dashboard] Error fetching active protections: {e}")
+
         return {
             "account": account,
             "positions": positions,
@@ -824,6 +1266,8 @@ def partial_overview():
             "stats": stats,
             "decisions": decisions,
             "market_regime": market_regime,
+            "cooldown": cooldown,
+            "active_protections": active_protections,
         }
 
     data = safe_run_async(_get_data(), default={
@@ -834,6 +1278,8 @@ def partial_overview():
         "stats": {"total_trades": 0, "wins": 0, "losses": 0, "win_rate": 0, "total_pnl": 0, "total_fees": 0},
         "decisions": [],
         "market_regime": None,
+        "cooldown": None,
+        "active_protections": [],
     })
 
     # Process data
@@ -843,6 +1289,31 @@ def partial_overview():
     rankings_data = data["rankings_data"] or {}
     stats = data["stats"]
     decisions = data["decisions"]
+    cooldown_data = data.get("cooldown")
+
+    # Process cooldown data
+    cooldown_active = False
+    cooldown_info = None
+    if cooldown_data:
+        cooldown_until = cooldown_data.get("cooldown_until")
+        if cooldown_until:
+            now = datetime.now(timezone.utc)
+            if cooldown_until.tzinfo is None:
+                cooldown_until = cooldown_until.replace(tzinfo=timezone.utc)
+            remaining = max(0, (cooldown_until - now).total_seconds())
+            cooldown_active = remaining > 0
+            if cooldown_active:
+                import json
+                details = cooldown_data.get("details", {})
+                if isinstance(details, str):
+                    details = json.loads(details)
+                cooldown_info = {
+                    "reason": cooldown_data.get("reason"),
+                    "cooldown_until": cooldown_until,
+                    "remaining_minutes": int(remaining // 60),
+                    "remaining_hours": round(remaining / 3600, 1),
+                    "details": details,
+                }
 
     # Service health summary
     healthy_count = sum(1 for s in services if s.get("status") == "healthy")
@@ -871,6 +1342,9 @@ def partial_overview():
     # Daily PnL (from stats or calculate)
     daily_pnl = float(stats.get("total_pnl", 0))
 
+    # Get active protections from data
+    active_protections = data.get("active_protections", [])
+
     return render_template(
         "partials/overview_summary.html",
         account=account,
@@ -882,6 +1356,9 @@ def partial_overview():
         stats=stats,
         decisions=decisions,
         daily_pnl=daily_pnl,
+        cooldown_active=cooldown_active,
+        cooldown=cooldown_info,
+        active_protections=active_protections,
         updated_at=datetime.now(timezone.utc)
     )
 
@@ -957,6 +1434,257 @@ def api_metrics():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/performance-metrics")
+def api_performance_metrics():
+    """
+    Risk-adjusted performance metrics endpoint.
+
+    Returns comprehensive trading performance metrics including:
+    - Sharpe Ratio, Sortino Ratio, Calmar Ratio
+    - Max Drawdown, Current Drawdown
+    - Profit Factor, Win Rate, Expectancy
+    - System Quality Number (SQN)
+    """
+    from decimal import Decimal as Dec
+    import math
+    import statistics
+    from collections import defaultdict
+
+    async def _calculate_metrics():
+        db = await get_db()
+
+        # Get initial equity and current equity
+        account = await db.get_account()
+        current_equity = Dec(str(account.get("equity", 100))) if account else Dec("100")
+
+        # Get initial equity (fallback to current minus total PnL)
+        pnl_row = await db.fetchrow(
+            """
+            SELECT COALESCE(SUM(net_pnl), 0) as total_pnl
+            FROM trades
+            WHERE is_closed = true
+            """
+        )
+        total_pnl_from_db = Dec(str(pnl_row["total_pnl"])) if pnl_row else Dec("0")
+        initial_equity = current_equity - total_pnl_from_db
+        if initial_equity <= 0:
+            initial_equity = current_equity
+
+        # Get all closed trades
+        trades = await db.fetch(
+            """
+            SELECT
+                trade_id, symbol, side, size,
+                entry_price, entry_time,
+                exit_price, exit_time,
+                gross_pnl, fees, net_pnl,
+                strategy, duration_seconds, notes
+            FROM trades
+            WHERE is_closed = true
+            ORDER BY exit_time ASC
+            """
+        )
+        trades = [dict(row) for row in trades]
+
+        # Return empty metrics if no trades
+        if not trades:
+            return {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "equity": float(current_equity),
+                "initial_equity": float(initial_equity),
+                "total_pnl": 0,
+                "total_pnl_pct": 0,
+                "sharpe_ratio": None,
+                "sortino_ratio": None,
+                "calmar_ratio": None,
+                "max_drawdown_pct": 0,
+                "max_drawdown_abs": 0,
+                "current_drawdown_pct": 0,
+                "profit_factor": None,
+                "win_rate": 0,
+                "avg_win": 0,
+                "avg_loss": 0,
+                "avg_win_loss_ratio": None,
+                "expectancy": None,
+                "sqn": None,
+                "total_trades": 0,
+                "winning_trades": 0,
+                "losing_trades": 0,
+                "total_fees": 0,
+                "avg_trade_duration_seconds": None,
+                "largest_win": 0,
+                "largest_loss": 0,
+            }
+
+        # Separate winning and losing trades
+        winning_trades = [t for t in trades if (t.get("net_pnl") or 0) > 0]
+        losing_trades = [t for t in trades if (t.get("net_pnl") or 0) < 0]
+
+        total_trades = len(trades)
+        winning_count = len(winning_trades)
+        losing_count = len(losing_trades)
+
+        win_rate = winning_count / total_trades if total_trades > 0 else 0
+
+        # PnL metrics
+        total_pnl = sum(Dec(str(t.get("net_pnl") or 0)) for t in trades)
+        total_fees = sum(Dec(str(t.get("fees") or 0)) for t in trades)
+        total_pnl_pct = (total_pnl / initial_equity * 100) if initial_equity > 0 else Dec("0")
+
+        gross_profit = sum(Dec(str(t.get("net_pnl") or 0)) for t in winning_trades)
+        gross_loss = sum(Dec(str(t.get("net_pnl") or 0)) for t in losing_trades)
+
+        avg_win = gross_profit / winning_count if winning_count > 0 else Dec("0")
+        avg_loss = gross_loss / losing_count if losing_count > 0 else Dec("0")
+
+        avg_win_loss_ratio = abs(float(avg_win / avg_loss)) if avg_loss != 0 else None
+
+        pnls = [Dec(str(t.get("net_pnl") or 0)) for t in trades]
+        largest_win = max(pnls) if pnls else Dec("0")
+        largest_loss = min(pnls) if pnls else Dec("0")
+
+        durations = [t.get("duration_seconds") for t in trades if t.get("duration_seconds")]
+        avg_duration = int(sum(durations) / len(durations)) if durations else None
+
+        # Calculate daily returns
+        daily_pnl = defaultdict(lambda: Dec("0"))
+        for trade in trades:
+            exit_time = trade.get("exit_time")
+            if exit_time:
+                date_key = exit_time.date().isoformat()
+                daily_pnl[date_key] += Dec(str(trade.get("net_pnl") or 0))
+
+        daily_returns = []
+        running_equity = initial_equity
+        for date_key in sorted(daily_pnl.keys()):
+            pnl = daily_pnl[date_key]
+            if running_equity > 0:
+                daily_returns.append(float(pnl / running_equity))
+                running_equity += pnl
+
+        # Sharpe Ratio
+        sharpe_ratio = None
+        if len(daily_returns) >= 2:
+            try:
+                mean_return = statistics.mean(daily_returns)
+                std_return = statistics.stdev(daily_returns)
+                if std_return > 0:
+                    risk_free_daily = 0.03 / 365
+                    sharpe = (mean_return - risk_free_daily) / std_return * math.sqrt(365)
+                    sharpe_ratio = round(sharpe, 2)
+            except Exception:
+                pass
+
+        # Sortino Ratio
+        sortino_ratio = None
+        if len(daily_returns) >= 2:
+            try:
+                downside_returns = [r for r in daily_returns if r < 0]
+                if len(downside_returns) >= 2:
+                    mean_return = statistics.mean(daily_returns)
+                    downside_std = statistics.stdev(downside_returns)
+                    if downside_std > 0:
+                        risk_free_daily = 0.03 / 365
+                        sortino = (mean_return - risk_free_daily) / downside_std * math.sqrt(365)
+                        sortino_ratio = round(sortino, 2)
+            except Exception:
+                pass
+
+        # Equity curve and drawdown
+        equity_curve = [(initial_equity, None)]
+        running_eq = initial_equity
+        for trade in trades:
+            net_pnl = Dec(str(trade.get("net_pnl") or 0))
+            running_eq += net_pnl
+            equity_curve.append((running_eq, trade.get("exit_time")))
+
+        peak = equity_curve[0][0]
+        max_dd_pct = Dec("0")
+        max_dd_abs = Dec("0")
+        for eq, _ in equity_curve:
+            if eq > peak:
+                peak = eq
+            dd_abs = peak - eq
+            dd_pct = (dd_abs / peak * 100) if peak > 0 else Dec("0")
+            if dd_pct > max_dd_pct:
+                max_dd_pct = dd_pct
+                max_dd_abs = dd_abs
+
+        current_peak = max(eq for eq, _ in equity_curve)
+        current_eq = equity_curve[-1][0]
+        current_dd_pct = ((current_peak - current_eq) / current_peak * 100) if current_peak > 0 else Dec("0")
+
+        # Calmar Ratio
+        calmar_ratio = None
+        if max_dd_pct > 0 and total_pnl_pct != 0 and len(trades) >= 2:
+            first_time = trades[0].get("entry_time")
+            last_time = trades[-1].get("exit_time") or trades[-1].get("entry_time")
+            if first_time and last_time:
+                trading_days = max(1, (last_time - first_time).days)
+                annual_return_pct = (float(total_pnl_pct) / trading_days) * 365
+                calmar_ratio = round(annual_return_pct / float(max_dd_pct), 2)
+
+        # Profit Factor
+        profit_factor = None
+        abs_loss = abs(gross_loss)
+        if abs_loss > 0:
+            profit_factor = round(float(gross_profit / abs_loss), 2)
+
+        # Expectancy
+        expectancy = None
+        if avg_loss != 0:
+            loss_rate = 1 - win_rate
+            expectancy = round(float(avg_win) * win_rate - float(abs(avg_loss)) * loss_rate, 2)
+
+        # SQN
+        sqn = None
+        if len(pnls) >= 2:
+            try:
+                float_pnls = [float(p) for p in pnls]
+                mean_pnl = statistics.mean(float_pnls)
+                std_pnl = statistics.stdev(float_pnls)
+                if std_pnl > 0:
+                    sqn = round((mean_pnl / std_pnl) * math.sqrt(len(float_pnls)), 2)
+            except Exception:
+                pass
+
+        return {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "equity": float(current_equity),
+            "initial_equity": float(initial_equity),
+            "total_pnl": float(total_pnl),
+            "total_pnl_pct": float(total_pnl_pct),
+            "sharpe_ratio": sharpe_ratio,
+            "sortino_ratio": sortino_ratio,
+            "calmar_ratio": calmar_ratio,
+            "max_drawdown_pct": float(max_dd_pct),
+            "max_drawdown_abs": float(max_dd_abs),
+            "current_drawdown_pct": float(current_dd_pct),
+            "profit_factor": profit_factor,
+            "win_rate": round(win_rate, 4),
+            "avg_win": float(avg_win),
+            "avg_loss": float(avg_loss),
+            "avg_win_loss_ratio": avg_win_loss_ratio,
+            "expectancy": expectancy,
+            "sqn": sqn,
+            "total_trades": total_trades,
+            "winning_trades": winning_count,
+            "losing_trades": losing_count,
+            "total_fees": float(total_fees),
+            "avg_trade_duration_seconds": avg_duration,
+            "largest_win": float(largest_win),
+            "largest_loss": float(largest_loss),
+        }
+
+    try:
+        metrics = run_async(_calculate_metrics())
+        return jsonify(metrics)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/bot-status")
 def api_bot_status():
     """Bot status for header indicator."""
@@ -996,6 +1724,302 @@ def api_bot_status():
         <span class="status-dot offline"></span>
         <span>Error</span>
         '''
+
+
+@app.route("/api/bot-activity")
+def api_bot_activity():
+    """
+    Get current bot activity status for the dashboard.
+    Returns: current activity, last scan time, next scan time, active monitors.
+    """
+    async def _get_data():
+        try:
+            db = await get_db()
+            
+            # Get latest service heartbeats to determine bot state
+            services = await db.get_service_health()
+            
+            # Get latest market state timestamp (indicates last scan)
+            last_scan_row = await db.fetchrow("""
+                SELECT MAX(timestamp) as last_scan
+                FROM market_states
+            """)
+            last_scan = last_scan_row["last_scan"] if last_scan_row else None
+            
+            # Get active positions count
+            positions = await db.get_positions()
+            active_monitors = len(positions)
+            
+            # Get scan interval from service metadata (default 15 min)
+            scan_interval_minutes = 15
+            for s in services:
+                if s.get("service_name") == "market_state" and s.get("metadata"):
+                    meta = s["metadata"]
+                    if isinstance(meta, str):
+                        import json
+                        meta = json.loads(meta)
+                    scan_interval_minutes = meta.get("scan_interval_minutes", 15)
+                    break
+            
+            # Calculate next scan time
+            next_scan = None
+            if last_scan:
+                from datetime import timedelta
+                next_scan = last_scan + timedelta(minutes=scan_interval_minutes)
+            
+            # Determine current activity based on services
+            market_state_service = None
+            execution_service = None
+            llm_service = None
+            
+            for s in services:
+                name = s.get("service_name", "")
+                if "market_state" in name:
+                    market_state_service = s
+                elif "execution" in name:
+                    execution_service = s
+                elif "llm" in name:
+                    llm_service = s
+            
+            # Determine activity state
+            now = datetime.now(timezone.utc)
+            
+            activity = "idle"
+            activity_detail = "Waiting for next scan"
+            
+            # Check if any service is actively processing
+            if market_state_service:
+                heartbeat = market_state_service.get("last_heartbeat")
+                if heartbeat:
+                    if heartbeat.tzinfo is None:
+                        heartbeat = heartbeat.replace(tzinfo=timezone.utc)
+                    age = (now - heartbeat).total_seconds()
+                    
+                    if age < 10:  # Recent heartbeat
+                        activity = "scanning"
+                        activity_detail = "Scanning markets..."
+            
+            if llm_service:
+                heartbeat = llm_service.get("last_heartbeat")
+                if heartbeat:
+                    if heartbeat.tzinfo is None:
+                        heartbeat = heartbeat.replace(tzinfo=timezone.utc)
+                    age = (now - heartbeat).total_seconds()
+                    
+                    if age < 5:  # Very recent LLM activity
+                        activity = "evaluating"
+                        activity_detail = "Evaluating setup with LLM..."
+            
+            if execution_service:
+                heartbeat = execution_service.get("last_heartbeat")
+                if heartbeat:
+                    if heartbeat.tzinfo is None:
+                        heartbeat = heartbeat.replace(tzinfo=timezone.utc)
+                    age = (now - heartbeat).total_seconds()
+                    
+                    if age < 5:  # Very recent execution activity
+                        activity = "executing"
+                        activity_detail = "Executing trade..."
+            
+            # Check for recent setups to show evaluation state
+            recent_setup = await db.fetchrow("""
+                SELECT timestamp, symbol, llm_approved
+                FROM trade_setups
+                ORDER BY timestamp DESC
+                LIMIT 1
+            """)
+            
+            if recent_setup and recent_setup["timestamp"]:
+                setup_time = recent_setup["timestamp"]
+                if setup_time.tzinfo is None:
+                    setup_time = setup_time.replace(tzinfo=timezone.utc)
+                setup_age = (now - setup_time).total_seconds()
+                
+                if setup_age < 60 and recent_setup["llm_approved"] is None:
+                    activity = "evaluating"
+                    activity_detail = f"Evaluating {recent_setup['symbol']} setup..."
+            
+            # If no services running, show offline
+            healthy_services = sum(1 for s in services if s.get("status") == "healthy")
+            if len(services) == 0 or healthy_services == 0:
+                activity = "offline"
+                activity_detail = "Bot not running"
+            
+            return {
+                "activity": activity,
+                "activity_detail": activity_detail,
+                "last_scan": last_scan.isoformat() if last_scan else None,
+                "next_scan": next_scan.isoformat() if next_scan else None,
+                "scan_interval_minutes": scan_interval_minutes,
+                "active_monitors": active_monitors,
+                "healthy_services": healthy_services,
+                "total_services": len(services),
+            }
+        except Exception as e:
+            print(f"[Dashboard] Error fetching bot activity: {e}")
+            return {
+                "activity": "error",
+                "activity_detail": str(e),
+                "last_scan": None,
+                "next_scan": None,
+                "active_monitors": 0,
+            }
+
+    data = safe_run_async(_get_data(), default={
+        "activity": "unknown",
+        "activity_detail": "Unable to fetch status",
+        "last_scan": None,
+        "next_scan": None,
+        "active_monitors": 0,
+    })
+
+    return render_template("partials/bot_activity.html", **data)
+
+
+@app.route("/api/recent-setups")
+def api_recent_setups():
+    """
+    Get recent trade setups with LLM/risk decisions.
+    Shows the last 10 setups generated.
+    """
+    async def _get_data():
+        try:
+            db = await get_db()
+            
+            # Get recent setups from trade_setups table
+            rows = await db.fetch("""
+                SELECT 
+                    setup_id,
+                    timestamp,
+                    symbol,
+                    setup_type,
+                    direction,
+                    regime,
+                    entry_price,
+                    stop_price,
+                    stop_distance_pct,
+                    setup_quality,
+                    confidence,
+                    llm_approved,
+                    llm_confidence,
+                    llm_reason,
+                    was_executed,
+                    final_pnl
+                FROM trade_setups
+                ORDER BY timestamp DESC
+                LIMIT 10
+            """)
+            
+            setups = []
+            for row in rows:
+                setup = dict(row)
+                
+                # Determine status
+                if setup.get("was_executed"):
+                    status = "executed"
+                    status_icon = "chart"
+                    status_class = "info"
+                elif setup.get("llm_approved") is True:
+                    status = "approved"
+                    status_icon = "check"
+                    status_class = "success"
+                elif setup.get("llm_approved") is False:
+                    status = "rejected_llm"
+                    status_icon = "x"
+                    status_class = "danger"
+                else:
+                    status = "pending"
+                    status_icon = "clock"
+                    status_class = "warning"
+                
+                setup["status"] = status
+                setup["status_icon"] = status_icon
+                setup["status_class"] = status_class
+                
+                # Convert Decimals to float
+                for key in ["entry_price", "stop_price", "stop_distance_pct", 
+                           "setup_quality", "confidence", "llm_confidence", "final_pnl"]:
+                    if setup.get(key) is not None:
+                        setup[key] = float(setup[key])
+                
+                setups.append(setup)
+            
+            return setups
+        except Exception as e:
+            print(f"[Dashboard] Error fetching recent setups: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+
+    setups = safe_run_async(_get_data(), default=[])
+    
+    return render_template("partials/recent_setups.html", setups=setups)
+
+
+@app.route("/api/llm-activity")
+def api_llm_activity():
+    """
+    Get recent LLM veto decisions with details.
+    Shows the last 5 LLM decisions for the activity feed.
+    """
+    async def _get_data():
+        try:
+            db = await get_db()
+            
+            # Get recent LLM decisions
+            rows = await db.fetch("""
+                SELECT 
+                    setup_id,
+                    timestamp,
+                    decision,
+                    confidence,
+                    reason,
+                    symbol,
+                    regime,
+                    setup_type,
+                    was_correct
+                FROM llm_decisions
+                ORDER BY timestamp DESC
+                LIMIT 5
+            """)
+            
+            decisions = []
+            for row in rows:
+                decision = dict(row)
+                
+                # Convert confidence to float
+                if decision.get("confidence"):
+                    decision["confidence"] = float(decision["confidence"])
+                
+                decisions.append(decision)
+            
+            # Get LLM stats
+            stats_row = await db.fetchrow("""
+                SELECT
+                    COUNT(*) as total,
+                    SUM(CASE WHEN decision = 'ALLOW' THEN 1 ELSE 0 END) as allow_count,
+                    SUM(CASE WHEN decision = 'DENY' THEN 1 ELSE 0 END) as deny_count
+                FROM llm_decisions
+                WHERE timestamp > NOW() - INTERVAL '24 hours'
+            """)
+            
+            stats = {
+                "total_today": stats_row["total"] or 0,
+                "allow_today": stats_row["allow_count"] or 0,
+                "deny_today": stats_row["deny_count"] or 0,
+            }
+            
+            return {"decisions": decisions, "stats": stats}
+        except Exception as e:
+            print(f"[Dashboard] Error fetching LLM activity: {e}")
+            return {"decisions": [], "stats": {"total_today": 0, "allow_today": 0, "deny_today": 0}}
+
+    data = safe_run_async(_get_data(), default={
+        "decisions": [], 
+        "stats": {"total_today": 0, "allow_today": 0, "deny_today": 0}
+    })
+    
+    return render_template("partials/llm_activity.html", **data)
 
 
 # =============================================================================

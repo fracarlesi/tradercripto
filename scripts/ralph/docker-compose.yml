@@ -1,0 +1,19 @@
+services:
+  ralph:
+    build: .
+    container_name: ralph-trader
+    volumes:
+      # Mount the entire project
+      - ../../:/app
+      # Mount Claude credentials from host (required for Claude Max auth)
+      # Using non-root user 'ralph' with home at /home/ralph
+      - ${HOME}/.claude:/home/ralph/.claude
+      - ${HOME}/.config/claude-code:/home/ralph/.config/claude-code
+    working_dir: /app
+    environment:
+      - HOME=/home/ralph
+      - TERM=xterm-256color
+    stdin_open: true
+    tty: true
+    # Default: run ralph with 50 iterations
+    command: ["./scripts/ralph/ralph.sh", "50"]

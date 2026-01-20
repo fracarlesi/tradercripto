@@ -528,7 +528,7 @@ class TestConfigurationLoading:
 
     def test_conservative_config_from_yaml(self, tmp_path):
         """Test loading ConservativeConfig from YAML."""
-        from simple_bot.main_conservative import ConservativeConfig
+        from simple_bot.main import ConservativeConfig
 
         # Create test config
         config_content = """

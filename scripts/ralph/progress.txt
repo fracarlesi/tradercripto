@@ -346,3 +346,49 @@ Paper mode testing of the simplified SMA crossover strategy with comprehensive v
 - Path handling in tests: use `Path(__file__).parent.parent / "config"` for relative paths
 
 ---
+
+## 2026-01-20 - US-009: Cleanup codice - rimuovere complessità inutile
+
+### What was Implemented
+Simplified codebase by disabling unused strategies and updating documentation:
+
+1. **Strategy Configuration Cleanup** (`intelligent_bot.yaml`):
+   - Disabled `momentum` strategy (using SMA crossover instead)
+   - Disabled `mean_reversion` strategy (not validated for production)
+   - Disabled `breakout` strategy (using SMA crossover instead)
+   - Disabled `funding_arb` strategy (not part of simplified approach)
+   - Added documentation header explaining simplified strategy config
+
+2. **Documentation Update** (`CLAUDE.md`):
+   - New "Current Strategy: Simplified SMA Crossover" section at top
+   - Documented: BTC-only, SMA20/SMA50 crossover, candle confirmation
+   - Documented: 1.5% SL, 3% TP, 3 trades/day, 30% position size
+   - Updated Technology Stack: DeepSeek (not OpenAI) for LLM veto
+   - Updated Environment Variables: DEEPSEEK_API_KEY (optional)
+
+3. **Decision: Keep MeanReversionStrategy Code**:
+   - Strategy is referenced in 60+ locations across codebase
+   - Removing would require extensive refactoring
+   - Already disabled by default (`enabled: false`)
+   - Code preserved for potential future use
+
+### Files Changed
+- `CLAUDE.md`: Added simplified architecture documentation
+- `simple_bot/config/intelligent_bot.yaml`: Disabled unused strategies
+
+### Performance Impact
+- Clearer configuration: strategies explicitly marked as disabled
+- Better documentation: new developers understand simplified approach
+- No runtime changes: strategies were already unused
+
+### Verification
+- 216 tests pass ✓
+- Pyright: 393 errors (pre-existing technical debt, no new errors)
+
+### Learnings for Future Iterations
+- Heavy integration of unused code makes removal risky - prefer disabling
+- Config files can diverge (trading.yaml vs intelligent_bot.yaml) - document which is primary
+- CLAUDE.md is the first thing new developers see - keep it updated
+- "Remove unused code" often means "disable and document" for heavily integrated components
+
+---

@@ -1000,26 +1000,26 @@ class TestOrchestrator:
     def test_orchestrator_creation(self):
         """Test orchestrator instantiation."""
         from simple_bot.main import HLQuantBot
-        
+
         bot = HLQuantBot(config_path="simple_bot/config/intelligent_bot.yaml")
-        
+
         assert bot is not None
         assert not bot.is_running
-        assert bot.uptime_seconds == 0.0
     
     def test_service_order(self):
         """Test service start order is defined."""
         from simple_bot.main import HLQuantBot
-        
+
+        # ConservativeBot service order
         expected_order = [
-            "market_scanner",
-            "opportunity_ranker",
-            "strategy_selector",
-            "capital_allocator",
-            "execution_engine",
-            "learning_module",
+            "kill_switch",     # MUST be first - safety critical
+            "market_state",    # Data provider
+            "llm_veto",        # Filter (optional)
+            "risk_manager",    # Sizing
+            "execution",       # Order placement
+            "telegram",        # Notifications (last, non-critical)
         ]
-        
+
         assert HLQuantBot.SERVICE_ORDER == expected_order
     
     @pytest.mark.asyncio

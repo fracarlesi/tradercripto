@@ -140,8 +140,8 @@
         "Tests pass"
       ],
       "priority": 9,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Disabled unused strategies in intelligent_bot.yaml (momentum, mean_reversion, breakout, funding_arb). Kept MeanReversionStrategy code for future use since it's heavily integrated. Updated CLAUDE.md with simplified architecture: Current Strategy section, updated Tech Stack (DeepSeek), updated env vars. All 216 tests pass. Pyright: 393 errors (pre-existing)."
     }
   ]
 }

@@ -1,0 +1,127 @@
+<!-- Recent Trade Setups -->
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">
+            <span style="color: var(--warning);">&#128161;</span> Recent Setups
+        </span>
+        <span class="text-xs text-gray-500">Last 10 trading opportunities</span>
+    </div>
+    <div class="card-body p-0">
+        {% if setups %}
+        <div class="overflow-x-auto">
+            <table class="w-full">
+                <thead>
+                    <tr>
+                        <th class="text-left">Time</th>
+                        <th class="text-left">Symbol</th>
+                        <th class="text-left">Direction</th>
+                        <th class="text-left">Entry</th>
+                        <th class="text-left">Stop</th>
+                        <th class="text-center">Quality</th>
+                        <th class="text-left">Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for setup in setups %}
+                    <tr class="border-b border-gray-700/50 hover:bg-gray-800/30 transition">
+                        <td class="py-3 px-4">
+                            <div class="text-xs text-gray-400">
+                                {{ setup.timestamp|ago if setup.timestamp else '-' }}
+                            </div>
+                        </td>
+                        <td class="py-3 px-4">
+                            <div class="font-semibold text-white">{{ setup.symbol }}</div>
+                            <div class="text-xs text-gray-500">{{ setup.setup_type|replace('_', ' ')|title }}</div>
+                        </td>
+                        <td class="py-3 px-4">
+                            <span class="tag text-xs font-semibold
+                                {% if setup.direction == 'long' %}tag-success{% else %}tag-danger{% endif %}">
+                                {{ setup.direction|upper }}
+                            </span>
+                        </td>
+                        <td class="py-3 px-4">
+                            <div class="font-mono text-sm text-gray-300">
+                                ${{ "%.2f"|format(setup.entry_price) if setup.entry_price else '-' }}
+                            </div>
+                        </td>
+                        <td class="py-3 px-4">
+                            <div class="font-mono text-xs text-gray-400">
+                                ${{ "%.2f"|format(setup.stop_price) if setup.stop_price else '-' }}
+                            </div>
+                            <div class="text-xs text-red-400/70">
+                                -{{ "%.1f"|format(setup.stop_distance_pct) if setup.stop_distance_pct else '?' }}%
+                            </div>
+                        </td>
+                        <td class="py-3 px-4 text-center">
+                            {% set quality = (setup.setup_quality * 100)|int if setup.setup_quality else 0 %}
+                            <div class="inline-flex flex-col items-center">
+                                <div class="w-12 bg-gray-700 rounded-full h-1.5 overflow-hidden">
+                                    <div class="h-full 
+                                        {% if quality >= 70 %}bg-green-500
+                                        {% elif quality >= 50 %}bg-yellow-500
+                                        {% else %}bg-red-500{% endif %}"
+                                         style="width: {{ quality }}%"></div>
+                                </div>
+                                <span class="text-xs text-gray-500 mt-1">{{ quality }}%</span>
+                            </div>
+                        </td>
+                        <td class="py-3 px-4">
+                            {% if setup.status == 'executed' %}
+                                <div class="flex items-center gap-2">
+                                    <span class="tag tag-info text-xs">
+                                        &#128202; Executed
+                                    </span>
+                                    {% if setup.final_pnl is not none %}
+                                        <span class="text-xs font-mono 
+                                            {% if setup.final_pnl >= 0 %}text-green-400{% else %}text-red-400{% endif %}">
+                                            {{ '+' if setup.final_pnl >= 0 else '' }}${{ "%.2f"|format(setup.final_pnl) }}
+                                        </span>
+                                    {% endif %}
+                                </div>
+                            {% elif setup.status == 'approved' %}
+                                <div class="flex flex-col gap-1">
+                                    <span class="tag tag-success text-xs">
+                                        &#9989; Approved
+                                    </span>
+                                    {% if setup.llm_confidence %}
+                                        <span class="text-xs text-gray-500">
+                                            LLM: {{ "%.0f"|format(setup.llm_confidence * 100) }}%
+                                        </span>
+                                    {% endif %}
+                                </div>
+                            {% elif setup.status == 'rejected_llm' %}
+                                <div class="flex flex-col gap-1">
+                                    <span class="tag tag-danger text-xs">
+                                        &#10060; Rejected
+                                    </span>
+                                    {% if setup.llm_reason %}
+                                        <span class="text-xs text-gray-500 max-w-32 truncate" 
+                                              title="{{ setup.llm_reason }}">
+                                            {{ setup.llm_reason[:30] }}{% if setup.llm_reason|length > 30 %}...{% endif %}
+                                        </span>
+                                    {% endif %}
+                                </div>
+                            {% elif setup.status == 'pending' %}
+                                <span class="tag tag-warning text-xs animate-pulse">
+                                    &#9203; Pending
+                                </span>
+                            {% else %}
+                                <span class="tag text-xs" style="background: rgba(107, 114, 128, 0.2); color: #9ca3af;">
+                                    {{ setup.status|default('Unknown') }}
+                                </span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="empty-state py-8">
+            <div class="text-4xl mb-2">&#128269;</div>
+            <p class="text-gray-500">No setups generated yet</p>
+            <p class="text-xs text-gray-600 mt-1">Setups will appear here when the bot scans markets</p>
+        </div>
+        {% endif %}
+    </div>
+</div>

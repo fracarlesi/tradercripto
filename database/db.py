@@ -90,6 +90,11 @@ class Database:
         """Execute query and return single value."""
         async with self.pool.acquire() as conn:
             return await conn.fetchval(query, *args)
+
+    async def execute(self, query: str, *args) -> str:
+        """Execute a query without returning results (INSERT, UPDATE, DELETE)."""
+        async with self.pool.acquire() as conn:
+            return await conn.execute(query, *args)
     
     # =========================================================================
     # LIVE ACCOUNT
@@ -989,6 +994,85 @@ class Database:
                     "SELECT * FROM service_health ORDER BY service_name"
                 )
                 return [dict(row) for row in rows]
+
+    # =========================================================================
+    # Cooldowns
+    # =========================================================================
+
+    async def insert_cooldown(
+        self,
+        reason: str,
+        triggered_at: "datetime",
+        cooldown_until: "datetime",
+        details: Optional[dict] = None
+    ) -> int:
+        """
+        Insert a new cooldown record.
+
+        Args:
+            reason: Cooldown reason (StoplossStreak, DailyDrawdown, LowPerformance)
+            triggered_at: When cooldown was triggered
+            cooldown_until: When cooldown expires
+            details: Extra context as dict
+
+        Returns:
+            ID of inserted record
+        """
+        import json
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO cooldowns (reason, triggered_at, cooldown_until, details)
+                VALUES ($1, $2, $3, $4)
+                RETURNING id
+                """,
+                reason,
+                triggered_at,
+                cooldown_until,
+                json.dumps(details) if details else None
+            )
+            return row["id"] if row else 0
+
+    async def get_active_cooldown(self) -> Optional[dict]:
+        """
+        Get the currently active cooldown (if any).
+
+        Returns:
+            Dict with cooldown data or None if no active cooldown
+        """
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT id, reason, triggered_at, cooldown_until, details, created_at
+                FROM cooldowns
+                WHERE cooldown_until > NOW()
+                ORDER BY triggered_at DESC
+                LIMIT 1
+                """
+            )
+            return dict(row) if row else None
+
+    async def get_cooldown_history(self, limit: int = 50) -> list[dict]:
+        """
+        Get cooldown history.
+
+        Args:
+            limit: Max number of records to return
+
+        Returns:
+            List of cooldown records
+        """
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, reason, triggered_at, cooldown_until, details, created_at
+                FROM cooldowns
+                ORDER BY triggered_at DESC
+                LIMIT $1
+                """,
+                limit
+            )
+            return [dict(row) for row in rows]
 
 
 # =============================================================================

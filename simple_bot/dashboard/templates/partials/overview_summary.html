@@ -1,5 +1,117 @@
 <!-- Overview Dashboard Summary -->
 <div class="grid gap-6">
+    <!-- ============================================================ -->
+    <!-- BOT ACTIVITY SECTION - Shows what the bot is doing RIGHT NOW -->
+    <!-- ============================================================ -->
+    
+    <!-- Bot Status Card (Real-time polling) -->
+    <div id="bot-activity-card"
+         hx-get="/api/bot-activity"
+         hx-trigger="load, every 5s"
+         hx-swap="innerHTML">
+        <div class="card">
+            <div class="card-body">
+                <div class="loading py-4">
+                    <span class="spinner mr-2"></span> Loading bot status...
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Recent Setups & LLM Activity Row -->
+    <div class="grid md:grid-cols-2 gap-6">
+        <!-- Recent Setups -->
+        <div id="recent-setups"
+             hx-get="/api/recent-setups"
+             hx-trigger="load, every 10s"
+             hx-swap="innerHTML">
+            <div class="card">
+                <div class="card-body">
+                    <div class="loading py-4">
+                        <span class="spinner mr-2"></span> Loading recent setups...
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- LLM Activity -->
+        <div id="llm-activity"
+             hx-get="/api/llm-activity"
+             hx-trigger="load, every 10s"
+             hx-swap="innerHTML">
+            <div class="card">
+                <div class="card-body">
+                    <div class="loading py-4">
+                        <span class="spinner mr-2"></span> Loading LLM activity...
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Separator -->
+    <div class="border-t border-gray-700/50 my-2"></div>
+    <!-- Cooldown Alert Banner -->
+    {% if cooldown_active and cooldown %}
+    <div class="bg-amber-900/80 border border-amber-500 rounded-lg p-4 shadow-lg animate-pulse">
+        <div class="flex items-center gap-3">
+            <span class="text-3xl">&#128721;</span>
+            <div class="flex-1">
+                <div class="font-bold text-amber-200 text-lg">TRADING PAUSED - COOLDOWN ACTIVE</div>
+                <div class="text-amber-100 text-sm mt-1">
+                    <span class="font-semibold">Reason:</span> {{ cooldown.reason|replace('_', ' ')|title }}
+                    {% if cooldown.details %}
+                        {% if cooldown.details.consecutive_losses %}
+                            ({{ cooldown.details.consecutive_losses }} consecutive stoplosses)
+                        {% elif cooldown.details.drawdown_pct %}
+                            ({{ "%.1f"|format(cooldown.details.drawdown_pct) }}% drawdown)
+                        {% elif cooldown.details.win_rate is defined %}
+                            (win rate {{ "%.0f"|format(cooldown.details.win_rate * 100) }}% on {{ cooldown.details.num_trades }} trades)
+                        {% endif %}
+                    {% endif %}
+                </div>
+                <div class="text-amber-100 text-sm">
+                    <span class="font-semibold">Resuming at:</span> {{ cooldown.cooldown_until.strftime('%Y-%m-%d %H:%M UTC') }}
+                    <span class="ml-2 text-amber-300">({{ cooldown.remaining_hours }}h remaining)</span>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Active Protections Alert Banner -->
+    {% if active_protections and active_protections|length > 0 %}
+    <div class="bg-red-900/80 border border-red-500 rounded-lg p-4 shadow-lg">
+        <div class="flex items-center gap-3">
+            <span class="text-3xl">&#128737;</span>
+            <div class="flex-1">
+                <div class="font-bold text-red-200 text-lg">TRADING PAUSED - PROTECTION ACTIVE</div>
+                {% for prot in active_protections %}
+                <div class="text-red-100 text-sm mt-2 border-l-2 border-red-400 pl-3">
+                    <div class="font-semibold">{{ prot.protection_name|replace('Protection', '')|replace('_', ' ') }}</div>
+                    <div class="text-red-200/80">
+                        {% if prot.trigger_details %}
+                            {% if prot.trigger_details.stoploss_count %}
+                                {{ prot.trigger_details.stoploss_count }} stoplosses in {{ prot.trigger_details.lookback_period_min }}min
+                            {% elif prot.trigger_details.drawdown_pct %}
+                                Drawdown: {{ "%.1f"|format(prot.trigger_details.drawdown_pct) }}%
+                            {% elif prot.trigger_details.win_rate is defined %}
+                                Win rate: {{ "%.0f"|format(prot.trigger_details.win_rate * 100) }}% on {{ prot.trigger_details.total_trades }} trades
+                            {% elif prot.trigger_details.time_since_last_min is defined %}
+                                {{ "%.1f"|format(prot.trigger_details.time_since_last_min) }}min since last trade (min: {{ prot.trigger_details.cooldown_minutes }}min)
+                            {% endif %}
+                        {% endif %}
+                    </div>
+                    <div class="text-xs text-red-300/70 mt-1">
+                        Resuming: {{ prot.protected_until }} | ~{{ prot.remaining_minutes }}min remaining
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
     <!-- Top Row: Key Metrics -->
     <div class="stats-grid">
         <div class="stat-card">
@@ -237,6 +349,39 @@
                     </div>
                 </div>
             </div>
+
+            <!-- Risk-Adjusted Metrics Row (Key Indicators) -->
+            {% if perf_metrics %}
+            <div class="mt-4 pt-4 border-t border-gray-700">
+                <div class="text-xs text-gray-500 mb-2">Risk-Adjusted Metrics</div>
+                <div class="grid grid-cols-4 gap-2">
+                    <div class="text-center bg-gray-800/30 rounded py-2 px-1">
+                        <div class="text-xs text-gray-500">Sharpe</div>
+                        <div class="text-sm font-semibold {% if perf_metrics.sharpe_ratio and perf_metrics.sharpe_ratio > 1 %}text-green-400{% elif perf_metrics.sharpe_ratio and perf_metrics.sharpe_ratio > 0 %}text-yellow-400{% elif perf_metrics.sharpe_ratio %}text-red-400{% else %}text-gray-500{% endif %}">
+                            {{ "%.2f"|format(perf_metrics.sharpe_ratio) if perf_metrics.sharpe_ratio else "N/A" }}
+                        </div>
+                    </div>
+                    <div class="text-center bg-gray-800/30 rounded py-2 px-1">
+                        <div class="text-xs text-gray-500">Max DD</div>
+                        <div class="text-sm font-semibold {% if perf_metrics.max_drawdown_pct > 10 %}text-red-400{% elif perf_metrics.max_drawdown_pct > 5 %}text-yellow-400{% else %}text-green-400{% endif %}">
+                            {{ "%.1f"|format(perf_metrics.max_drawdown_pct) }}%
+                        </div>
+                    </div>
+                    <div class="text-center bg-gray-800/30 rounded py-2 px-1">
+                        <div class="text-xs text-gray-500">PF</div>
+                        <div class="text-sm font-semibold {% if perf_metrics.profit_factor and perf_metrics.profit_factor > 1.5 %}text-green-400{% elif perf_metrics.profit_factor and perf_metrics.profit_factor > 1 %}text-yellow-400{% elif perf_metrics.profit_factor %}text-red-400{% else %}text-gray-500{% endif %}">
+                            {{ "%.2f"|format(perf_metrics.profit_factor) if perf_metrics.profit_factor else "N/A" }}
+                        </div>
+                    </div>
+                    <div class="text-center bg-gray-800/30 rounded py-2 px-1">
+                        <div class="text-xs text-gray-500">SQN</div>
+                        <div class="text-sm font-semibold {% if perf_metrics.sqn and perf_metrics.sqn >= 2.5 %}text-green-400{% elif perf_metrics.sqn and perf_metrics.sqn >= 1.6 %}text-yellow-400{% elif perf_metrics.sqn %}text-red-400{% else %}text-gray-500{% endif %}">
+                            {{ "%.2f"|format(perf_metrics.sqn) if perf_metrics.sqn else "N/A" }}
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
         </div>
     </div>
 </div>
