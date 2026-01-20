@@ -171,9 +171,11 @@ strategies:
 
 # -----------------------------------------------------------------------------
 # LLM Veto Configuration
+# SIMPLIFIED: LLM veto disabled by default to reduce complexity
+# Set enabled: true to re-enable LLM filtering
 # -----------------------------------------------------------------------------
 llm:
-  enabled: true
+  enabled: false               # DISABLED: trades pass directly through
   role: "veto_only"            # Only ALLOW/DENY, no strategy selection
 
   provider: "deepseek"

@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional
 
 from .base import BaseService
 from .message_bus import MessageBus, Message
+from .trade_memory import get_trade_memory, TradeMemory
 from ..core.enums import Topic
 from ..core.models import Setup, MarketState, LLMDecision, Regime
 
@@ -108,6 +109,9 @@ class LLMVetoService(BaseService):
 
         # Market state cache
         self._market_states: Dict[str, MarketState] = {}
+
+        # Trade memory for learning
+        self._trade_memory: TradeMemory = get_trade_memory()
 
         self._logger.info(
             "LLMVetoService initialized: enabled=%s, provider=%s, max_calls=%d/day",
@@ -206,15 +210,21 @@ class LLMVetoService(BaseService):
         """
         Evaluate a setup using LLM.
 
+        When LLM veto is disabled (config.enabled=False), all setups are
+        automatically approved. This allows the strategy signals to pass
+        directly to the risk manager without LLM filtering.
+
         Args:
             setup: Trade setup to evaluate
 
         Returns:
             Tuple of (approved: bool, decision: LLMDecision)
+            When disabled: always returns (True, fallback_decision)
         """
-        # Check if LLM enabled
+        # Check if LLM enabled - if disabled, approve all setups
+        # This is the main bypass for simplicity when LLM is not needed
         if not self._config.enabled:
-            decision = self._create_fallback_decision(setup, "LLM disabled")
+            decision = self._create_fallback_decision(setup, "LLM disabled - trade approved")
             return True, decision
 
         # Check CHAOS regime
@@ -295,33 +305,50 @@ class LLMVetoService(BaseService):
 
     def _get_system_prompt(self) -> str:
         """Get system prompt for LLM."""
-        return """You are a conservative trading risk filter. Your job is to ALLOW or DENY trade setups.
+        return """You are a trading filter. Your job is to ALLOW or DENY trade setups.
 
 RULES:
 1. Only respond with valid JSON in the exact format specified
-2. Be conservative - when in doubt, DENY
-3. Consider regime, indicators, and risk
-4. Do NOT suggest alternatives or modifications
-5. Do NOT explain trading strategies
+2. ALLOW trades when technical setup is valid (ADX > 25 in trend, proper regime)
+3. Only DENY when there's a CLEAR red flag: RSI > 75, RSI < 25, or wrong regime
+4. "No track record" is NOT a reason to deny - we need to build history
+5. If the strategy found a valid setup, default to ALLOW unless something is clearly wrong
+
+ALLOW when:
+- ADX > 25 (strong trend)
+- RSI between 30-70 (not extreme)
+- Regime matches strategy (trend for breakouts)
+
+DENY only when:
+- RSI > 75 (extremely overbought) or RSI < 25 (extremely oversold)
+- ADX < 20 (no trend at all)
+- Clear technical divergence
 
 Response format (EXACT):
-{"decision": "ALLOW", "confidence": 0.75, "reason": "Clear trend with strong ADX confirmation"}
+{"decision": "ALLOW", "confidence": 0.75, "reason": "Valid trend setup with ADX confirmation"}
 or
-{"decision": "DENY", "confidence": 0.85, "reason": "RSI overbought in weakening trend"}"""
+{"decision": "DENY", "confidence": 0.85, "reason": "RSI at 78 - extremely overbought"}"""
 
     def _build_prompt(self, setup: Setup, state: Optional[MarketState]) -> str:
-        """Build prompt for LLM."""
+        """Build prompt for LLM with historical context."""
+        # Get historical context from trade memory
+        history_context = self._trade_memory.get_llm_context(
+            symbol=setup.symbol,
+            regime=setup.regime.value if setup.regime else "unknown",
+        )
+
         prompt_parts = [
-            f"Evaluate this trade setup:",
-            f"",
+            history_context,
+            "=== CURRENT SETUP ===",
+            "",
             f"Asset: {setup.symbol}",
             f"Setup Type: {setup.setup_type.value}",
             f"Direction: {setup.direction.value}",
             f"Regime: {setup.regime.value}",
             f"Entry Price: {setup.entry_price}",
             f"Stop Price: {setup.stop_price} ({setup.stop_distance_pct:.2f}%)",
-            f"",
-            f"Indicators:",
+            "",
+            "Indicators:",
             f"- ADX: {setup.adx}",
             f"- RSI: {setup.rsi}",
             f"- ATR: {setup.atr}",
@@ -337,11 +364,12 @@ or
                 prompt_parts.append(f"- Choppiness: {state.choppiness}")
 
         prompt_parts.extend([
-            f"",
+            "",
             f"Strategy Confidence: {setup.confidence}",
             f"Setup Quality: {setup.setup_quality}",
-            f"",
-            f"Should this trade be ALLOWED or DENIED?",
+            "",
+            "Based on past performance and current setup, should this trade be ALLOWED or DENIED?",
+            "Consider your historical accuracy and the regime-specific win rates.",
         ])
 
         return "\n".join(prompt_parts)
@@ -453,8 +481,88 @@ or
             "calls_remaining": self.get_calls_remaining(),
             "decisions_count": len(self._decisions),
             "client_ready": self._client is not None,
+            "trade_memory_size": self._trade_memory.total_trades,
             **self.get_accuracy_stats(),
         }
+
+    # =========================================================================
+    # Trade Memory Integration
+    # =========================================================================
+
+    def record_trade_entry(
+        self,
+        trade_id: str,
+        setup: Setup,
+        decision: LLMDecision,
+        position_size: float,
+    ) -> None:
+        """
+        Record a trade entry in memory for learning.
+
+        Call this when a trade is actually opened after LLM approval.
+        """
+        state = self._market_states.get(setup.symbol)
+
+        self._trade_memory.record_entry(
+            trade_id=trade_id,
+            symbol=setup.symbol,
+            direction=setup.direction.value,
+            regime=setup.regime.value,
+            entry_price=float(setup.entry_price),
+            position_size=position_size,
+            adx=float(setup.adx) if setup.adx else 0.0,
+            rsi=float(setup.rsi) if setup.rsi else 50.0,
+            atr=float(setup.atr) if setup.atr else 0.0,
+            atr_pct=float(setup.stop_distance_pct) if setup.stop_distance_pct else 0.0,
+            llm_decision=decision.decision,
+            llm_confidence=float(decision.confidence),
+            llm_reason=decision.reason,
+            strategy=setup.setup_type.value if setup.setup_type else "unknown",
+            setup_type=setup.setup_type.value if setup.setup_type else "breakout",
+            ema50=float(state.ema50) if state and state.ema50 else None,
+            ema200=float(state.ema200) if state and state.ema200 else None,
+        )
+
+        self._logger.info(
+            "Recorded trade entry in memory: %s %s %s",
+            trade_id, setup.symbol, setup.direction.value
+        )
+
+    def record_trade_outcome(
+        self,
+        trade_id: str,
+        exit_price: float,
+        pnl: float,
+        pnl_pct: float,
+        duration_minutes: float,
+        exit_reason: str = "unknown",
+    ) -> None:
+        """
+        Record trade outcome in memory for learning.
+
+        Call this when a trade is closed.
+        """
+        self._trade_memory.record_outcome(
+            trade_id=trade_id,
+            exit_price=exit_price,
+            pnl=pnl,
+            pnl_pct=pnl_pct,
+            duration_minutes=duration_minutes,
+            exit_reason=exit_reason,
+        )
+
+        self._logger.info(
+            "Recorded trade outcome in memory: %s P&L=$%.2f",
+            trade_id, pnl
+        )
+
+    async def save_memory(self) -> None:
+        """Persist trade memory to disk."""
+        await self._trade_memory.save()
+
+    def get_memory_summary(self) -> Dict[str, Any]:
+        """Get trade memory summary for monitoring."""
+        return self._trade_memory.get_summary()
 
 
 # =============================================================================
