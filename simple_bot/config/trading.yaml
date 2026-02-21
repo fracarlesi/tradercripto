@@ -28,6 +28,14 @@ universe:
       enabled: true
       min_notional: 10
       max_notional: 50000
+    - symbol: "ETH"
+      enabled: true
+      min_notional: 10
+      max_notional: 50000
+    - symbol: "SOL"
+      enabled: true
+      min_notional: 10
+      max_notional: 50000
 
 # -----------------------------------------------------------------------------
 # Timeframes
@@ -163,6 +171,16 @@ monitoring:
       - "daily_summary"
       - "error"
       - "fill"
+
+  whatsapp:
+    enabled: true
+    topic: ${NTFY_TOPIC:}
+    server: "https://ntfy.sh"
+    alert_on:
+      - "trade_open"
+      - "trade_close"
+      - "kill_switch_trigger"
+      - "error"
 
   log_level: "INFO"
   log_trades: true

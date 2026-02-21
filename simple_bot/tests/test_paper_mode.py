@@ -441,7 +441,7 @@ class TestStrategySimulation:
 
         assets = universe.get("assets", [])
         enabled_assets = [a["symbol"] for a in assets if a.get("enabled")]
-        assert enabled_assets == ["BTC"]
+        assert enabled_assets == ["BTC", "ETH", "SOL"]
 
     def test_daily_trade_limit_configured(self):
         """Test daily trade limit is configured."""

@@ -78,6 +78,7 @@ from .services.execution_engine import (
     create_execution_engine,
 )
 from .services.telegram_service import TelegramService
+from .services.whatsapp_service import WhatsAppService
 from .services.protections import ProtectionManager
 
 # Strategies
@@ -300,7 +301,8 @@ class ConservativeBot:
         "llm_veto",        # Filter (optional)
         "risk_manager",    # Sizing
         "execution",       # Order placement
-        "telegram",        # Notifications (last, non-critical)
+        "telegram",        # Notifications (non-critical)
+        "whatsapp",        # Notifications (non-critical)
     ]
 
     def __init__(
@@ -530,6 +532,14 @@ class ConservativeBot:
                 config=self._raw_config,
             )
             self._services["telegram"] = telegram_service
+
+        # WhatsApp notifications
+        if self._bus is not None:
+            whatsapp_service = WhatsAppService(
+                bus=self._bus,
+                config=self._raw_config,
+            )
+            self._services["whatsapp"] = whatsapp_service
 
         # Market State Service
         ms_config = MarketStateConfig(
