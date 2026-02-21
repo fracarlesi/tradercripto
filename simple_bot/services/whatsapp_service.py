@@ -57,6 +57,16 @@ logger = logging.getLogger(__name__)
 DEFAULT_NTFY_SERVER = "https://ntfy.sh"
 
 
+def _resolve_env(value: str, env_key: str) -> str:
+    """Resolve a config value, falling back to env var.
+
+    Handles YAML templates like ${VAR:} that aren't resolved by yaml.safe_load.
+    """
+    if not value or value.startswith("${"):
+        return os.environ.get(env_key, "")
+    return value
+
+
 class WhatsAppService(BaseService):
     """
     Push notification service for HLQuantBot via ntfy.sh.
@@ -100,10 +110,9 @@ class WhatsAppService(BaseService):
         # Load config from monitoring.whatsapp section
         wa_config = config.get("monitoring", {}).get("whatsapp", {})
         self._enabled = wa_config.get("enabled", False)
-        self._topic = wa_config.get("topic") or os.environ.get("NTFY_TOPIC", "")
+        self._topic = _resolve_env(wa_config.get("topic", ""), "NTFY_TOPIC")
         self._server = (
-            wa_config.get("server")
-            or os.environ.get("NTFY_SERVER", "")
+            _resolve_env(wa_config.get("server", ""), "NTFY_SERVER")
             or DEFAULT_NTFY_SERVER
         )
         self._alert_on = set(wa_config.get("alert_on", [
