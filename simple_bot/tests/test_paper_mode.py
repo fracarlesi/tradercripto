@@ -413,8 +413,8 @@ class TestStrategySimulation:
         assert all(r.setup is not None for r in results)
         assert all(r.setup.direction == Direction.LONG for r in results if r.setup)
 
-    def test_paper_mode_config_loaded(self):
-        """Test that dry_run (paper mode) is enabled in config."""
+    def test_config_loaded(self):
+        """Test that config loads correctly from YAML."""
         import yaml
         from pathlib import Path
 
@@ -422,8 +422,10 @@ class TestStrategySimulation:
         with open(config_path, "r") as f:
             config = yaml.safe_load(f)
 
-        # Verify paper mode is enabled
-        assert config.get("dry_run") is True, "dry_run should be True for paper mode"
+        # Verify config has essential sections
+        assert "risk" in config
+        assert "strategies" in config
+        assert "universe" in config
 
     def test_btc_only_universe(self):
         """Test that only BTC is enabled in universe."""
@@ -442,7 +444,7 @@ class TestStrategySimulation:
         assert enabled_assets == ["BTC"]
 
     def test_daily_trade_limit_configured(self):
-        """Test daily trade limit is set to 3."""
+        """Test daily trade limit is configured."""
         import yaml
         from pathlib import Path
 
@@ -451,10 +453,10 @@ class TestStrategySimulation:
             config = yaml.safe_load(f)
 
         risk = config.get("risk", {})
-        assert risk.get("max_daily_trades") == 3
+        assert risk.get("max_daily_trades") == 8
 
-    def test_llm_veto_disabled(self):
-        """Test LLM veto is disabled for simplified operation."""
+    def test_momentum_scalper_enabled(self):
+        """Test momentum scalper strategy is enabled."""
         import yaml
         from pathlib import Path
 
@@ -462,8 +464,8 @@ class TestStrategySimulation:
         with open(config_path, "r") as f:
             config = yaml.safe_load(f)
 
-        llm = config.get("llm", {})
-        assert llm.get("enabled") is False
+        strategies = config.get("strategies", {})
+        assert strategies.get("momentum_scalper", {}).get("enabled") is True
 
 
 if __name__ == "__main__":

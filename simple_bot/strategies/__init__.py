@@ -1,11 +1,10 @@
-"""Trading strategies for HLQuantBot conservative refactor."""
+"""Trading strategies for HLQuantBot."""
 
 from .base import BaseStrategy, StrategyResult
 from .trend_follow import TrendFollowStrategy
-from .mean_reversion import MeanReversionStrategy
+from .momentum_scalper import MomentumScalperStrategy
 
-# Re-export indicator functions for backward compatibility
-# These are used by opportunity_ranker and other legacy services
+# Re-export indicator functions
 from simple_bot.services.market_state import (
     calculate_adx,
     calculate_atr,
@@ -20,7 +19,7 @@ __all__ = [
     "BaseStrategy",
     "StrategyResult",
     "TrendFollowStrategy",
-    "MeanReversionStrategy",
+    "MomentumScalperStrategy",
     # Indicator functions
     "calculate_adx",
     "calculate_atr",

@@ -321,35 +321,28 @@ class TestTrendFollowStrategy:
         assert "Short positions disabled" in result.reason
 
 
-class TestMeanReversionStrategy:
-    """Test MeanReversionStrategy."""
+class TestMomentumScalperStrategy:
+    """Test MomentumScalperStrategy."""
 
     def test_import(self):
         """Test strategy can be imported."""
-        from simple_bot.strategies import MeanReversionStrategy
-        assert MeanReversionStrategy is not None
+        from simple_bot.strategies import MomentumScalperStrategy
+        assert MomentumScalperStrategy is not None
 
     def test_strategy_initialization(self):
         """Test strategy initialization."""
-        from simple_bot.strategies import MeanReversionStrategy
+        from simple_bot.strategies import MomentumScalperStrategy
 
-        strategy = MeanReversionStrategy()
-        assert strategy.name == "mean_reversion"
-        assert strategy.required_regime == Regime.RANGE
+        strategy = MomentumScalperStrategy()
+        assert strategy.name == "momentum_scalper"
 
-    def test_can_trade_in_range(self, market_state_range):
-        """Test strategy can trade in RANGE regime."""
-        from simple_bot.strategies import MeanReversionStrategy
+    def test_can_trade_in_any_regime(self, market_state_range, market_state_trend):
+        """Test strategy can trade in any regime."""
+        from simple_bot.strategies import MomentumScalperStrategy
 
-        strategy = MeanReversionStrategy()
+        strategy = MomentumScalperStrategy()
         assert strategy.can_trade(market_state_range) == True
-
-    def test_cannot_trade_in_trend(self, market_state_trend):
-        """Test strategy cannot trade in TREND regime."""
-        from simple_bot.strategies import MeanReversionStrategy
-
-        strategy = MeanReversionStrategy()
-        assert strategy.can_trade(market_state_trend) == False
+        assert strategy.can_trade(market_state_trend) == True
 
 
 # =============================================================================
@@ -564,8 +557,12 @@ llm:
 strategies:
   trend_follow:
     enabled: true
-  mean_reversion:
-    enabled: false
+  momentum_scalper:
+    enabled: true
+
+stops:
+  stop_loss_pct: 0.4
+  take_profit_pct: 0.8
 
 environment: "testnet"
 dry_run: false
@@ -583,7 +580,9 @@ dry_run: false
             assert config.per_trade_pct == 0.5
             assert config.max_drawdown_pct == 15.0
             assert config.trend_follow_enabled == True
-            assert config.mean_reversion_enabled == False
+            assert config.momentum_scalper_enabled == True
+            assert config.stop_loss_pct == 0.4
+            assert config.take_profit_pct == 0.8
             assert config.testnet == True
         finally:
             if old_env is not None:

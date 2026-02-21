@@ -44,7 +44,7 @@ class TestImports:
     def test_import_package(self):
         """Test main package import."""
         import simple_bot
-        assert simple_bot.__version__ == "2.0.0"
+        assert simple_bot.__version__ == "3.0.0"
         assert hasattr(simple_bot, "run_bot")
         assert hasattr(simple_bot, "get_version")
     
@@ -71,68 +71,6 @@ class TestImports:
         assert HealthStatus is not None
         assert RetryConfig is not None
     
-    def test_import_market_scanner(self):
-        """Test market scanner imports."""
-        from simple_bot.services import (
-            MarketScannerService,
-            CoinData,
-            ScanMetrics,
-            create_market_scanner,
-        )
-        
-        assert MarketScannerService is not None
-        assert CoinData is not None
-        assert ScanMetrics is not None
-        assert create_market_scanner is not None
-    
-    def test_import_opportunity_ranker(self):
-        """Test opportunity ranker imports."""
-        from simple_bot.services import (
-            OpportunityRankerService,
-            OpportunityScore,
-            SymbolMetrics,
-        )
-        
-        assert OpportunityRankerService is not None
-        assert OpportunityScore is not None
-        assert SymbolMetrics is not None
-    
-    def test_import_strategy_selector(self):
-        """Test strategy selector imports."""
-        from simple_bot.services import (
-            StrategySelectorService,
-            Signal,
-            StrategyPerformance,
-            create_strategy_selector,
-        )
-        
-        assert StrategySelectorService is not None
-        assert Signal is not None
-        assert StrategyPerformance is not None
-        assert create_strategy_selector is not None
-    
-    def test_import_capital_allocator(self):
-        """Test capital allocator imports."""
-        from simple_bot.services import (
-            CapitalAllocatorService,
-            Position,
-            AccountState,
-            SizedSignal,
-            kelly_size,
-            atr_size,
-            risk_parity_weight,
-            create_capital_allocator,
-        )
-        
-        assert CapitalAllocatorService is not None
-        assert Position is not None
-        assert AccountState is not None
-        assert SizedSignal is not None
-        assert kelly_size is not None
-        assert atr_size is not None
-        assert risk_parity_weight is not None
-        assert create_capital_allocator is not None
-    
     def test_import_execution_engine(self):
         """Test execution engine imports."""
         from simple_bot.services import (
@@ -152,22 +90,6 @@ class TestImports:
         assert PositionStatus is not None
         assert ExecutionMetrics is not None
         assert create_execution_engine is not None
-    
-    def test_import_learning_module(self):
-        """Test learning module imports."""
-        from simple_bot.services import (
-            LearningModuleService,
-            StrategyMetrics,
-            OptimizationResult,
-            OptimizationCycle,
-            create_learning_module,
-        )
-        
-        assert LearningModuleService is not None
-        assert StrategyMetrics is not None
-        assert OptimizationResult is not None
-        assert OptimizationCycle is not None
-        assert create_learning_module is not None
     
     def test_import_config(self):
         """Test config loader imports."""
@@ -237,9 +159,9 @@ class TestImports:
     
     def test_import_main_orchestrator(self):
         """Test main orchestrator import."""
-        from simple_bot.main import HLQuantBot, main
-        
-        assert HLQuantBot is not None
+        from simple_bot.main import ConservativeBot, main
+
+        assert ConservativeBot is not None
         assert main is not None
 
 
@@ -899,59 +821,6 @@ class TestFactoryFunctions:
         llm.remaining_requests = 100
         return llm
     
-    def test_create_market_scanner(self, mock_bus, mock_db, mock_exchange):
-        """Test market scanner factory."""
-        from simple_bot.services import create_market_scanner
-        from simple_bot.config.loader import MarketScannerConfig
-        
-        config = MarketScannerConfig()
-        
-        scanner = create_market_scanner(
-            bus=mock_bus,
-            db=mock_db,
-            config=config,
-            testnet=True,
-        )
-        
-        assert scanner is not None
-        assert scanner.name == "market_scanner"
-    
-    def test_create_strategy_selector(self, mock_bus, mock_db, mock_llm):
-        """Test strategy selector factory."""
-        from simple_bot.services import create_strategy_selector
-        from simple_bot.config.loader import StrategySelectorConfig
-        
-        config = StrategySelectorConfig()
-        
-        selector = create_strategy_selector(
-            bus=mock_bus,
-            db=mock_db,
-            config=config,
-        )
-        
-        assert selector is not None
-        assert selector.name == "strategy_selector"
-    
-    def test_create_capital_allocator(self, mock_bus, mock_db, mock_exchange):
-        """Test capital allocator factory."""
-        from simple_bot.services import CapitalAllocatorService
-        from simple_bot.config.loader import CapitalAllocatorConfig, RiskConfig
-        
-        # Create with explicit config to avoid get_config() call
-        config = CapitalAllocatorConfig()
-        risk_config = RiskConfig()
-        
-        allocator = CapitalAllocatorService(
-            bus=mock_bus,
-            db=mock_db,
-            client=mock_exchange,
-            config=config,
-            risk_config=risk_config,
-        )
-        
-        assert allocator is not None
-        assert allocator.name == "capital_allocator"
-    
     def test_create_execution_engine(self, mock_bus, mock_db, mock_exchange):
         """Test execution engine factory."""
         from simple_bot.services import ExecutionEngineService
@@ -975,104 +844,7 @@ class TestFactoryFunctions:
         assert engine is not None
         assert engine.name == "execution_engine"
     
-    def test_create_learning_module(self, mock_bus, mock_db, mock_llm):
-        """Test learning module factory."""
-        from simple_bot.services import create_learning_module
-        
-        module = create_learning_module(
-            bus=mock_bus,
-            db=mock_db,
-            llm=mock_llm,
-            config={},
-        )
-        
-        assert module is not None
-        assert module.name == "learning_module"
-
-
-# =============================================================================
-# Test Orchestrator
-# =============================================================================
-
-class TestOrchestrator:
-    """Test main HLQuantBot orchestrator."""
-    
-    def test_orchestrator_creation(self):
-        """Test orchestrator instantiation."""
-        from simple_bot.main import HLQuantBot
-
-        bot = HLQuantBot(config_path="simple_bot/config/intelligent_bot.yaml")
-
-        assert bot is not None
-        assert not bot.is_running
-    
-    def test_service_order(self):
-        """Test service start order is defined."""
-        from simple_bot.main import HLQuantBot
-
-        # ConservativeBot service order
-        expected_order = [
-            "kill_switch",     # MUST be first - safety critical
-            "market_state",    # Data provider
-            "llm_veto",        # Filter (optional)
-            "risk_manager",    # Sizing
-            "execution",       # Order placement
-            "telegram",        # Notifications (last, non-critical)
-        ]
-
-        assert HLQuantBot.SERVICE_ORDER == expected_order
-    
-    @pytest.mark.asyncio
-    async def test_orchestrator_config_loading(self):
-        """Test orchestrator loads config."""
-        from simple_bot.main import HLQuantBot
-        from simple_bot.config.loader import Config
-        
-        # Create with pre-loaded config
-        config = Config()
-        bot = HLQuantBot(config=config)
-        
-        assert bot.config == config
-
-
-# =============================================================================
-# Test Utility Functions
-# =============================================================================
-
-class TestUtilityFunctions:
-    """Test utility functions."""
-    
-    def test_kelly_size(self):
-        """Test Kelly criterion sizing."""
-        from simple_bot.services import kelly_size
-        
-        # Win rate 60%, win/loss ratio 1.5
-        size = kelly_size(0.6, 1.5, 0.5)
-        
-        assert size > 0
-        assert size <= 0.5  # Half Kelly
-    
-    def test_atr_size(self):
-        """Test ATR-based sizing."""
-        from simple_bot.services import atr_size
-        
-        # $10000 capital, $100 ATR, 1% risk
-        size = atr_size(10000.0, 100.0, 0.01, atr_multiplier=2.0)
-        
-        assert size > 0
-    
-    def test_risk_parity_weight(self):
-        """Test risk parity weighting."""
-        from simple_bot.services import risk_parity_weight
-        
-        volatilities = {"A": 0.2, "B": 0.3, "C": 0.4}
-        weights = [risk_parity_weight(v, volatilities) for s, v in volatilities.items()]
-        
-        # Weights should sum close to 1.0
-        assert abs(sum(weights) - 1.0) < 0.01
-        
-        # Higher volatility should have lower weight
-        assert weights[0] > weights[2]
+    # Removed: test_create_learning_module, TestOrchestrator, TestUtilityFunctions (deleted services)
 
 
 # =============================================================================
@@ -1081,47 +853,7 @@ class TestUtilityFunctions:
 
 class TestDataClasses:
     """Test data class serialization."""
-    
-    def test_coin_data_to_dict(self):
-        """Test CoinData serialization."""
-        from simple_bot.services import CoinData
-        
-        coin = CoinData(
-            symbol="ETH",
-            price=3000.0,
-            volume_24h=1000000.0,
-            change_24h_pct=2.5,
-            open_interest=500000.0,
-            funding_rate=0.01,
-            predicted_funding=0.008,
-            spread_pct=0.05,
-            atr_pct=3.0,
-        )
-        
-        d = coin.to_dict()
-        
-        assert d["symbol"] == "ETH"
-        assert d["price"] == 3000.0
-    
-    def test_order_to_dict(self):
-        """Test Order serialization."""
-        from simple_bot.services import Order, OrderStatus
-        
-        order = Order(
-            symbol="BTC",
-            side="buy",
-            size=0.1,
-            price=50000.0,
-            order_type="limit",
-            status=OrderStatus.PENDING,
-        )
-        
-        d = order.to_dict()
-        
-        assert d["symbol"] == "BTC"
-        assert d["side"] == "buy"
-        assert d["size"] == 0.1
-    
+
     def test_health_status_to_dict(self):
         """Test HealthStatus serialization."""
         from simple_bot.services import HealthStatus, ServiceStatus

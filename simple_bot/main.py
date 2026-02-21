@@ -82,7 +82,7 @@ from .services.protections import ProtectionManager
 
 # Strategies
 from .strategies.trend_follow import TrendFollowStrategy
-from .strategies.mean_reversion import MeanReversionStrategy
+from .strategies.momentum_scalper import MomentumScalperStrategy
 
 # API Client
 from .api.hyperliquid import HyperliquidClient
@@ -194,7 +194,11 @@ class ConservativeConfig:
 
     # Strategies
     trend_follow_enabled: bool
-    mean_reversion_enabled: bool
+    momentum_scalper_enabled: bool
+
+    # Fixed TP/SL
+    stop_loss_pct: float
+    take_profit_pct: float
 
     # Environment
     testnet: bool
@@ -262,7 +266,9 @@ class ConservativeConfig:
             prefer_limit=execution.get("prefer_limit", True),
             max_slippage_pct=execution.get("max_slippage_pct", 0.1),
             trend_follow_enabled=strategies.get("trend_follow", {}).get("enabled", True),
-            mean_reversion_enabled=strategies.get("mean_reversion", {}).get("enabled", False),
+            momentum_scalper_enabled=strategies.get("momentum_scalper", {}).get("enabled", False),
+            stop_loss_pct=stops.get("stop_loss_pct", 0.4),
+            take_profit_pct=stops.get("take_profit_pct", 0.8),
             testnet=env.lower() == "testnet",
             dry_run=data.get("dry_run", False),
         )
@@ -587,8 +593,9 @@ class ConservativeBot:
 
         class _RiskConfig:
             """Minimal risk config for TP/SL defaults."""
-            take_profit_pct = 3.0  # 3% default TP
-            stop_loss_pct = 2.0    # 2% default SL (overridden by ATR)
+            def __init__(self, cfg: ConservativeConfig):
+                self.take_profit_pct = cfg.take_profit_pct
+                self.stop_loss_pct = cfg.stop_loss_pct
 
         class _StopsConfig:
             """Stops configuration including time-based ROI."""
@@ -605,7 +612,7 @@ class ConservativeBot:
             """Config adapter for ExecutionEngineService."""
             def __init__(self, cfg: ConservativeConfig):
                 self.services = _ServicesConfig(_ExecConfig(cfg))
-                self.risk = _RiskConfig()
+                self.risk = _RiskConfig(cfg)
                 self.stops = _StopsConfig(cfg)
 
         self._services["execution"] = ExecutionEngineService(
@@ -645,17 +652,22 @@ class ConservativeBot:
             self._strategies.append(TrendFollowStrategy(config=trend_config))
             logger.info("Initialized TrendFollowStrategy")
 
-        # Mean Reversion (optional, disabled by default)
-        if cfg.mean_reversion_enabled:
-            mr_config = {
-                "bb_period": 20,
-                "bb_std": 2.0,
-                "rsi_oversold": 30,
-                "rsi_overbought": 70,
-                "exit_at_mid": True,
+        # Momentum Scalper (aggressive EMA crossover)
+        if cfg.momentum_scalper_enabled:
+            strategies_yaml = self._raw_config.get("strategies", {})
+            ms_yaml = strategies_yaml.get("momentum_scalper", {})
+            ms_config = {
+                "allow_short": ms_yaml.get("allow_short", True),
+                "min_atr_pct": ms_yaml.get("min_atr_pct", 0.1),
+                "stop_loss_pct": cfg.stop_loss_pct,
+                "take_profit_pct": cfg.take_profit_pct,
+                "rsi_long_min": ms_yaml.get("rsi_long_min", 30),
+                "rsi_long_max": ms_yaml.get("rsi_long_max", 65),
+                "rsi_short_min": ms_yaml.get("rsi_short_min", 35),
+                "rsi_short_max": ms_yaml.get("rsi_short_max", 70),
             }
-            self._strategies.append(MeanReversionStrategy(config=mr_config))
-            logger.info("Initialized MeanReversionStrategy")
+            self._strategies.append(MomentumScalperStrategy(config=ms_config))
+            logger.info("Initialized MomentumScalperStrategy")
 
         logger.info("Initialized %d strategies", len(self._strategies))
 

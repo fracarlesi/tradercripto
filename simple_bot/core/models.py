@@ -82,6 +82,10 @@ class MarketState(BaseModel):
     sma20: Decimal = Field(..., ge=0, description="SMA(20)")
     sma50: Decimal = Field(..., ge=0, description="SMA(50)")
 
+    # Fast EMAs for momentum scalper strategy
+    ema9: Optional[Decimal] = Field(None, ge=0, description="EMA(9)")
+    ema21: Optional[Decimal] = Field(None, ge=0, description="EMA(21)")
+
     # Previous candle data for candlestick pattern detection
     prev_open: Optional[Decimal] = Field(None, ge=0, description="Previous candle open")
     prev_high: Optional[Decimal] = Field(None, ge=0, description="Previous candle high")

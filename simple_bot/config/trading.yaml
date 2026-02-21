@@ -1,23 +1,20 @@
 # =============================================================================
-# HLQuantBot Conservative Trading Configuration
+# HLQuantBot v3.0 - Momentum Scalper Configuration
 # =============================================================================
-# Objective: "Boring but scalable" system on 2-3 liquid assets
-# Target: 1-3% monthly, max 5-15 trades/month, strict risk control
+# Strategy: EMA9/EMA21 crossover on 15m with RSI filter
+# Target: Aggressive growth on small account ($86 USDC)
+# Risk: Fixed TP/SL (0.8%/0.4%), 10x leverage, LONG+SHORT
 # =============================================================================
 
 # -----------------------------------------------------------------------------
-# Universe: Dynamic asset selection
+# Universe
 # -----------------------------------------------------------------------------
 universe:
-  # Mode: "all" = fetch all from Hyperliquid, "manual" = use assets list below
-  # SIMPLIFIED: Using manual mode with only BTC to focus capital and reduce complexity
   mode: "manual"
 
-  # Filters for "all" mode
-  min_volume_24h: 100000      # Min 24h volume in USD (filter illiquid coins)
-  min_market_cap: 0           # Min market cap (0 = no filter)
+  min_volume_24h: 100000
+  min_market_cap: 0
 
-  # Symbols to exclude (stablecoins, wrapped, etc.)
   exclude_symbols:
     - "USDC"
     - "USDT"
@@ -26,203 +23,139 @@ universe:
     - "FDUSD"
     - "TUSD"
 
-  # Manual asset list (used when mode: "manual")
-  # SIMPLIFIED: Only BTC is enabled to focus capital on the most liquid asset
   assets:
     - symbol: "BTC"
       enabled: true
-      min_notional: 100      # Min trade size in USD
-      max_notional: 50000    # Max trade size in USD
-
-    - symbol: "ETH"
-      enabled: false         # DISABLED: Focusing on BTC only
-      min_notional: 100
-      max_notional: 30000
-
-    - symbol: "SOL"
-      enabled: false         # DISABLED: Focusing on BTC only
-      min_notional: 50
-      max_notional: 10000
+      min_notional: 10
+      max_notional: 50000
 
 # -----------------------------------------------------------------------------
 # Timeframes
 # -----------------------------------------------------------------------------
 timeframes:
-  primary: "1h"              # Main decision timeframe
-  secondary: "15m"           # For confirmation (optional)
-  bars_to_fetch: 200         # History depth for indicators
-  scan_interval_minutes: 15  # How often to scan all assets (was 4h, now 15min)
+  primary: "15m"
+  bars_to_fetch: 200
+  scan_interval_minutes: 5
 
 # -----------------------------------------------------------------------------
-# Risk Management - CRITICAL SECTION
+# Risk Management
 # -----------------------------------------------------------------------------
 risk:
-  # Per-trade risk
-  per_trade_pct: 2.0         # Risk 2% of equity per trade (increased from 1%)
-  max_per_trade_pct: 3.0     # Absolute max per trade
+  per_trade_pct: 5.0
+  max_per_trade_pct: 8.0
 
-  # Position limits
-  max_positions: 3           # Max 3 concurrent positions (was 5) - focus capital
-  max_exposure_pct: 150      # Max total notional as % of equity (allow some leverage)
+  max_positions: 3
+  max_exposure_pct: 300
+  max_position_pct: 70
 
-  # Leverage
-  leverage: 5                # Increased to 5x for meaningful trade sizes
-  max_leverage: 10           # Absolute max leverage allowed
+  leverage: 10
+  max_leverage: 20
 
-  # Correlation control
-  correlation_limit: 0.7     # Don't open BTC+ETH if corr > 0.7
-
-  # Daily trade limit
-  max_daily_trades: 3        # Max 3 trades per day (resets at UTC midnight)
+  correlation_limit: 0.7
+  max_daily_trades: 8
 
 # -----------------------------------------------------------------------------
-# Kill Switch - NON-NEGOTIABLE
+# Kill Switch
 # -----------------------------------------------------------------------------
 kill_switch:
   enabled: true
 
-  # Daily protection
-  daily_loss_pct: 2.0        # Pause trading if daily loss > 2%
+  daily_loss_pct: 8.0
   daily_loss_action: "pause_until_tomorrow"
 
-  # Weekly protection
-  weekly_loss_pct: 5.0       # Pause 3 days if weekly loss > 5%
+  weekly_loss_pct: 15.0
   weekly_loss_action: "pause_3_days"
 
-  # Max drawdown
-  max_drawdown_pct: 15.0     # STOP EVERYTHING if DD > 15%
+  max_drawdown_pct: 30.0
   max_drawdown_action: "stop_all"
 
-  # Equity monitoring interval
   check_interval_seconds: 60
 
 # -----------------------------------------------------------------------------
-# Stop Loss Configuration
+# Stops - Fixed TP/SL
 # -----------------------------------------------------------------------------
 stops:
-  initial_atr_mult: 2.5      # Initial stop = 2.5 ATR from entry
-  trailing_atr_mult: 2.5     # Trail at 2.5 ATR from favorable extreme
-  use_server_side: true      # Place stop on exchange
-  trailing_update_interval: 300  # Update trailing every 5 min
+  stop_loss_pct: 0.4
+  take_profit_pct: 0.8
+  use_server_side: true
 
-  # ROI graduato time-based (take profit dinamico)
-  # Le chiavi sono minuti dall'apertura, i valori sono % di profitto richiesto
-  # Cattura profitti early quando disponibili, permette respiro ai trade
-  minimal_roi:
-    "0": 0.03      # 3% profit target nei primi minuti
-    "30": 0.02     # 2% profit dopo 30 minuti
-    "60": 0.015    # 1.5% profit dopo 1 ora
-    "120": 0.01    # 1% profit dopo 2 ore
-    "240": 0.005   # 0.5% profit dopo 4 ore
-    "480": 0.005   # 0.5% profit dopo 8 ore (era BE, ora cattura più profitto)
-    "720": 0.0     # Break-even dopo 12 ore (esci a qualsiasi profitto)
+  # ATR-based trailing (for reference, not primary)
+  initial_atr_mult: 2.5
+  trailing_atr_mult: 2.5
+  trailing_update_interval: 300
+
+  # Graduated ROI disabled - using fixed TP instead
+  minimal_roi: {}
 
 # -----------------------------------------------------------------------------
 # Regime Detection
 # -----------------------------------------------------------------------------
 regime:
-  # ADX thresholds
-  trend_adx_min: 25          # ADX > 25 = TREND
-  range_adx_max: 20          # ADX < 20 = RANGE
-  # Between 20-25 = CHAOS (no trade)
-
-  # EMA slope thresholds (normalized)
+  trend_adx_min: 25
+  range_adx_max: 20
   ema_slope_threshold: 0.001
-
-  # Choppiness index (optional)
-  choppiness_range_min: 60   # CI > 60 = RANGE confirmation
-
-  # Hysteresis: require N bars of confirmation before regime change
+  choppiness_range_min: 60
   confirmation_bars: 2
 
 # -----------------------------------------------------------------------------
-# Strategy: Trend Following (Primary)
+# Strategies
 # -----------------------------------------------------------------------------
 strategies:
   trend_follow:
+    enabled: false
+
+  momentum_scalper:
     enabled: true
-    regime_required: "trend"
-    allow_short: false         # Only long positions (shorts failing in bullish market)
-
-    # Entry conditions
-    breakout_period: 20        # Breakout of N-bar high/low
-    price_above_ema200: true   # Price must be above EMA200 for long
-    atr_filter: true           # ATR must be above average
-    atr_lookback: 14
-
-    # Volume confirmation (optional)
-    volume_confirmation: false
-    volume_mult: 1.5
-
-  mean_reversion:
-    enabled: false             # DISABLED until validated
-    regime_required: "range"
-
-    # Bollinger Bands
-    bb_period: 20
-    bb_std: 2.0
-
-    # RSI extremes
-    rsi_oversold: 30
-    rsi_overbought: 70
-
-    # Exit at mid-band
-    exit_at_mid: true
+    allow_short: true
+    min_atr_pct: 0.1
+    rsi_long_min: 30
+    rsi_long_max: 65
+    rsi_short_min: 35
+    rsi_short_max: 70
 
 # -----------------------------------------------------------------------------
-# LLM Veto Configuration
-# SIMPLIFIED: LLM veto disabled by default to reduce complexity
-# Set enabled: true to re-enable LLM filtering
+# LLM Veto - DeepSeek confirmation/veto
 # -----------------------------------------------------------------------------
 llm:
-  enabled: false               # DISABLED: trades pass directly through
-  role: "veto_only"            # Only ALLOW/DENY, no strategy selection
+  enabled: true
+  role: "veto_only"
 
   provider: "deepseek"
   model: "deepseek-chat"
   api_key_env: "DEEPSEEK_API_KEY"
 
-  # Rate limiting
-  max_calls_per_day: 6         # 1 call per 4h window
+  max_calls_per_day: 20
   timeout_seconds: 30
 
-  # Fallback behavior
-  fallback_on_error: "allow"   # If LLM fails, allow trade (rules already filtered)
-  fallback_on_chaos: "deny"    # Always deny in CHAOS regime
+  fallback_on_error: "allow"
+  fallback_on_chaos: "deny"
 
-  # Decision thresholds
-  min_confidence: 0.6          # Require 60% confidence to ALLOW
+  min_confidence: 0.6
 
 # -----------------------------------------------------------------------------
 # Execution
 # -----------------------------------------------------------------------------
 execution:
-  # Order preference
   prefer_limit: true
-  limit_timeout_seconds: 60    # Cancel limit after 60s, use market
+  limit_timeout_seconds: 60
 
-  # Slippage protection
-  max_slippage_pct: 0.1        # Max 0.1% slippage on market orders
+  max_slippage_pct: 0.1
 
-  # Retry logic
   max_retries: 3
   retry_delay_seconds: 5
 
-  # Server-side stops
   place_stop_immediately: true
 
 # -----------------------------------------------------------------------------
 # Monitoring & Alerts
 # -----------------------------------------------------------------------------
 monitoring:
-  # Equity snapshots
-  equity_snapshot_interval: 300  # Every 5 min
+  equity_snapshot_interval: 300
 
-  # Telegram alerts
   telegram:
     enabled: true
-    token: ${TELEGRAM_BOT_TOKEN:}      # From @BotFather
-    chat_id: ${TELEGRAM_CHAT_ID:}      # Your chat ID
+    token: ${TELEGRAM_BOT_TOKEN:}
+    chat_id: ${TELEGRAM_CHAT_ID:}
     alert_on:
       - "trade_open"
       - "trade_close"
@@ -231,43 +164,40 @@ monitoring:
       - "error"
       - "fill"
 
-  # Logging
   log_level: "INFO"
   log_trades: true
   log_decisions: true
 
 # -----------------------------------------------------------------------------
-# Protections - Automatic trading pause in adverse conditions
+# Protections
 # -----------------------------------------------------------------------------
-# Protections are PROACTIVE (prevent disaster) vs Cooldown which is REACTIVE
-# Each protection can be enabled/disabled by adding/removing from this list
 protections:
   - name: "StoplossGuard"
-    lookback_period_min: 60      # Check last 60 minutes
-    stoploss_limit: 3            # If 3+ stoplosses...
-    stop_duration_min: 360       # ...block trading for 6 hours
+    lookback_period_min: 60
+    stoploss_limit: 3
+    stop_duration_min: 360
 
   - name: "MaxDrawdown"
-    lookback_period_min: 1440    # Check last 24 hours
-    max_drawdown_pct: 5.0        # If drawdown > 5%...
-    stop_duration_min: 720       # ...block trading for 12 hours
+    lookback_period_min: 1440
+    max_drawdown_pct: 8.0
+    stop_duration_min: 720
 
   - name: "CooldownPeriod"
-    cooldown_minutes: 5          # Minimum 5 min between trades
+    cooldown_minutes: 3
 
   - name: "LowPerformance"
-    min_trades: 20               # Need at least 20 trades
-    min_win_rate: 0.30           # If win rate < 30%...
-    stop_duration_min: 1440      # ...block trading for 24 hours
+    min_trades: 20
+    min_win_rate: 0.25
+    stop_duration_min: 1440
 
 # -----------------------------------------------------------------------------
-# Performance Metrics (for offline analysis)
+# Performance Metrics
 # -----------------------------------------------------------------------------
 metrics:
   track:
     - "win_rate"
     - "profit_factor"
-    - "average_r"              # Average R-multiple
+    - "average_r"
     - "max_drawdown"
     - "sharpe_ratio"
     - "calmar_ratio"
@@ -275,11 +205,10 @@ metrics:
     - "slippage_avg"
     - "fees_total"
 
-  # Regime-specific metrics
   track_by_regime: true
 
 # -----------------------------------------------------------------------------
 # Environment
 # -----------------------------------------------------------------------------
-environment: "testnet"         # "testnet" or "mainnet"
-dry_run: true                  # PAPER MODE: Simulate trades without execution
+environment: "mainnet"
+dry_run: false

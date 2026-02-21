@@ -1,31 +1,35 @@
 # HLQuantBot - Claude Code Configuration
 
-> Simplified BTC-only trading bot for Hyperliquid DEX with SMA crossover strategy
+> BTC trading bot for Hyperliquid DEX - EMA Momentum Scalper strategy, live on mainnet
 
 ---
 
-## Current Strategy: Simplified SMA Crossover
-
-The bot has been simplified from a multi-asset, multi-strategy system to focus on:
+## Current Strategy: EMA Momentum Scalper
 
 | Aspect | Configuration |
 |--------|---------------|
-| **Asset** | BTC only (single position) |
-| **Strategy** | SMA20/SMA50 crossover with candle confirmation |
-| **Entry (LONG)** | Price > SMA20 > SMA50 + bullish engulfing |
-| **Entry (SHORT)** | Disabled by default (`allow_short: false`) |
-| **Risk** | 1.5% stop loss, 3% take profit (1:2 ratio) |
-| **Limits** | Max 3 trades/day, 30% position size |
-| **LLM Veto** | Disabled (`llm.enabled: false`) |
-| **Mode** | Paper trading (`dry_run: true`) |
+| **Asset** | BTC only |
+| **Timeframe** | 15m (scan every 5 min) |
+| **Strategy** | EMA9/EMA21 crossover + RSI filter |
+| **Entry LONG** | EMA9 > EMA21, RSI 30-65 |
+| **Entry SHORT** | EMA9 < EMA21, RSI 35-70 (enabled) |
+| **TP / SL** | 0.8% / 0.4% (1:2 R:R) |
+| **Leverage** | 10x |
+| **Position Size** | Max 70% account |
+| **Limits** | Max 8 trades/day |
+| **LLM Veto** | Enabled (DeepSeek, max 20 calls/day) |
+| **Mode** | **LIVE mainnet** (`dry_run: false`) |
 
-### Key Files for Strategy
+### Key Files
 
 | File | Purpose |
 |------|---------|
-| `strategies/trend_follow.py` | SMA crossover logic |
-| `services/market_state.py` | Indicator calculation (SMA, engulfing patterns) |
+| `strategies/momentum_scalper.py` | EMA9/21 crossover + RSI + ATR filter |
+| `strategies/trend_follow.py` | Legacy SMA crossover (disabled) |
+| `services/market_state.py` | Indicator calculation (EMA, SMA, RSI, ATR) |
+| `services/llm_veto.py` | DeepSeek LLM confirmation/veto |
 | `config/trading.yaml` | Primary configuration |
+| `main.py` | Entry point, orchestration |
 
 ---
 
@@ -45,13 +49,14 @@ The bot has been simplified from a multi-asset, multi-strategy system to focus o
 
 ```
 simple_bot/
-├── agents/           # Trading agents (execution, market data, regime)
-├── config/           # YAML configurations
+├── config/           # trading.yaml (primary config)
+├── core/             # models.py (MarketState, Regime, Direction)
+├── services/         # risk_manager, execution_engine, market_state, llm_veto, kill_switch
+├── strategies/       # momentum_scalper (active), trend_follow (disabled)
 ├── dashboard/        # Flask + HTMX frontend
 ├── database/         # PostgreSQL models e migrations
-├── services/         # Core services (risk manager, LLM veto)
-├── strategies/       # Trading strategies
-└── main_conservative.py  # Entry point
+├── tests/            # pytest test suite (218 tests)
+└── main.py           # Entry point
 ```
 
 ---
@@ -60,28 +65,33 @@ simple_bot/
 
 ### Testing
 ```bash
-cd simple_bot && python -m pytest tests/ -v
-cd simple_bot && python -m pytest tests/ --cov=. --cov-report=html
+cd simple_bot && python3 -m pytest tests/ -v
+cd simple_bot && python3 -m pytest tests/ --cov=. --cov-report=html
 ```
 
 ### Code Quality
 ```bash
-pyright simple_bot/                 # Type checking (run from project root)
+pyright simple_bot/                 # Type checking (from project root)
 cd simple_bot && ruff check .       # Linting
 cd simple_bot && black .            # Formatting
 ```
 
-### Database
-```bash
-# Migrazioni in simple_bot/database/migrations/
-python -c "from database.database import run_migrations; import asyncio; asyncio.run(run_migrations())"
-```
-
 ### Running
 ```bash
-cd simple_bot && python main_conservative.py   # Bot
-cd simple_bot && python -m dashboard.app       # Dashboard only
+cd simple_bot && python3 main.py              # Bot (live)
+cd simple_bot && python3 -m dashboard.app     # Dashboard only
 ```
+
+---
+
+## Deploy Workflow: Locale -> Hetzner
+
+1. **Sviluppo locale**: modifica codice
+2. **Test**: `cd simple_bot && python3 -m pytest tests/ -v`
+3. **Lint**: `pyright simple_bot/ && cd simple_bot && ruff check .`
+4. **Commit + push**: solo dopo che tutti i test passano
+5. **Deploy**: `./deploy.sh` (rsync + docker rebuild)
+6. **Verifica**: `ssh root@<VPS_IP_REDACTED> "cd /opt/hlquantbot && docker compose logs -f bot"`
 
 ---
 
@@ -93,7 +103,7 @@ cd simple_bot && python -m dashboard.app       # Dashboard only
 | **Exchange** | Hyperliquid SDK, WebSocket |
 | **Database** | PostgreSQL, asyncpg |
 | **Frontend** | Flask, HTMX, TailwindCSS |
-| **AI/ML** | DeepSeek LLM veto (disabled), custom regime detection |
+| **AI/ML** | DeepSeek LLM veto, custom regime detection |
 | **Quality** | Pyright, Ruff, Black, pytest |
 
 ---
@@ -113,23 +123,9 @@ cd simple_bot && python -m dashboard.app       # Dashboard only
 - Loggare tutte le operazioni finanziarie
 - Gestire gracefully disconnessioni WebSocket
 
-### Async Patterns
-```python
-# ✅ Corretto
-async def fetch_data():
-    async with aiohttp.ClientSession() as session:
-        return await session.get(url)
-
-# ❌ Sbagliato - blocking call in async
-async def fetch_data():
-    return requests.get(url)  # BLOCKING!
-```
-
 ---
 
 ## Available Agents
-
-Usa `Task(subagent_type="agent-name")` per invocare:
 
 | Agent | Uso |
 |-------|-----|
@@ -143,16 +139,6 @@ Usa `Task(subagent_type="agent-name")` per invocare:
 
 ---
 
-## MCP Servers
-
-Configurati in `.mcp.json`:
-
-| Server | Funzione |
-|--------|----------|
-| `github` | Gestione repo, PR, issues |
-
----
-
 ## Environment Variables
 
 Required in `.env`:
@@ -160,61 +146,29 @@ Required in `.env`:
 DATABASE_URL=postgresql://...
 HYPERLIQUID_WALLET_ADDRESS=...
 HYPERLIQUID_PRIVATE_KEY=...
-DEEPSEEK_API_KEY=...  # Per LLM veto (optional, disabled by default)
+DEEPSEEK_API_KEY=...
+GITHUB_PERSONAL_ACCESS_TOKEN=...
 ```
 
 ---
 
 ## Security Guidelines
 
-### CRITICAL: Mai Hardcodare Secrets
-
-**MAI scrivere API keys, private keys, o password nel codice.**
-
-```python
-# ❌ SBAGLIATO
-PRIVATE_KEY = "0x1234567890abcdef..."
-API_KEY = "sk-proj-..."
-
-# ✅ CORRETTO
-import os
-PRIVATE_KEY = os.environ.get("HYPERLIQUID_PRIVATE_KEY")
-API_KEY = os.environ.get("OPENAI_API_KEY")
-```
-
-### Secrets da Proteggere
+**MAI hardcodare secrets nel codice.** Usare sempre `os.environ.get()` o `python-dotenv`.
 
 | Secret | Rischio se esposto |
 |--------|-------------------|
-| `HYPERLIQUID_PRIVATE_KEY` | **CRITICO** - Accesso completo al wallet, perdita fondi |
-| `HYPERLIQUID_WALLET_ADDRESS` | Medio - Visibilità posizioni |
-| `DATABASE_URL` | Alto - Accesso DB, manipolazione dati |
-| `OPENAI_API_KEY` | Medio - Costi API non autorizzati |
+| `HYPERLIQUID_PRIVATE_KEY` | **CRITICO** - Perdita fondi |
+| `DATABASE_URL` | Alto - Accesso DB |
+| `DEEPSEEK_API_KEY` | Medio - Costi API |
+| `GITHUB_PERSONAL_ACCESS_TOKEN` | Medio - Accesso repo |
 
-### Quando Crei Script con Secrets
-
-1. Usa `os.environ.get()` o `python-dotenv`
-2. Aggiungi variabile a `.env.example` con placeholder
-3. Verifica che `.env` sia in `.gitignore`
-4. Mai loggare valori di secrets (usa `***` per mascherare)
-
-### Se Committi Accidentalmente un Secret
-
-1. **Revoca IMMEDIATAMENTE** la chiave/token
-2. Genera nuova chiave
-3. Aggiorna `.env` locale e su server
-4. La vecchia chiave è compromessa per sempre (git history)
-
-> **ATTENZIONE**: Per `HYPERLIQUID_PRIVATE_KEY`, un commit accidentale significa potenziale perdita di TUTTI i fondi nel wallet. Genera sempre un nuovo wallet se esposto.
-
----
-
-## Safety Rules
+### Safety Rules
 
 1. **Mai** committare `.env` o chiavi private
 2. **Mai** eseguire ordini live senza conferma esplicita
 3. **Sempre** verificare posizioni prima di modifiche al trading
-4. **Sempre** usare paper trading per test nuove strategie
+4. **Sempre** testare nuove strategie in paper mode prima del live
 5. **Mai** usare `float` per importi finanziari
 
 ---
@@ -227,31 +181,15 @@ API_KEY = os.environ.get("OPENAI_API_KEY")
 | **SSH** | `ssh root@<VPS_IP_REDACTED>` |
 | **Deploy Dir** | `/opt/hlquantbot` |
 | **Dashboard** | http://<VPS_IP_REDACTED>:5000/ |
-| **Frontend** | http://<VPS_IP_REDACTED>:5611/ |
 | **PostgreSQL** | `<VPS_IP_REDACTED>:5432` |
 
-### Deploy
-```bash
-./deploy.sh  # Rsync + Docker rebuild
-```
-
-### Comandi Utili sul Server
+### Comandi Server
 ```bash
 ssh root@<VPS_IP_REDACTED>
 cd /opt/hlquantbot
-docker compose ps                # Status servizi
+docker compose ps                # Status
 docker compose logs -f bot       # Log bot
-docker compose logs -f dashboard # Log dashboard
-docker compose restart bot       # Restart bot
-```
-
-### Database Remoto
-```bash
-# Connessione diretta
-psql -h <VPS_IP_REDACTED> -U trader -d trading_db
-
-# Nel .env per sviluppo locale con DB remoto:
-DATABASE_URL=postgresql://trader:trader_password@<VPS_IP_REDACTED>:5432/trading_db
+docker compose restart bot       # Restart
 ```
 
 ---
@@ -259,6 +197,5 @@ DATABASE_URL=postgresql://trader:trader_password@<VPS_IP_REDACTED>:5432/trading_
 ## Resources
 
 - [Hyperliquid Docs](https://hyperliquid.gitbook.io/)
-- [Claude Code Changelog](https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md)
 - Dashboard locale: http://localhost:5001
 - Dashboard Hetzner: http://<VPS_IP_REDACTED>:5000/

@@ -441,6 +441,10 @@ class MarketStateService(BaseService):
             sma20 = calculate_sma(close, 20)
             sma50_arr = calculate_sma(close, 50)
 
+            # Fast EMAs for momentum scalper
+            ema9 = calculate_ema(close, 9)
+            ema21 = calculate_ema(close, 21)
+
             # ADX
             adx_values = calculate_adx(high, low, close, 14)
             adx = Decimal(str(max(0, min(100, adx_values[-1]))))
@@ -509,6 +513,8 @@ class MarketStateService(BaseService):
                 ema200_slope=Decimal(str(ema200_slope)),
                 sma20=Decimal(str(sma20[-1])),
                 sma50=Decimal(str(sma50_arr[-1])),
+                ema9=Decimal(str(ema9[-1])),
+                ema21=Decimal(str(ema21[-1])),
                 prev_open=prev_open,
                 prev_high=prev_high,
                 prev_low=prev_low,
