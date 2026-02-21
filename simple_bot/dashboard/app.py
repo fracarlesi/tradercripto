@@ -1,8 +1,8 @@
 """
-HLQuantBot v2.0 Dashboard - Flask Application
+HLQuantBot v3.0 Dashboard - Flask Application
 ==============================================
 
-Main Flask application with routes for the HLQuantBot v2.0 dashboard.
+Main Flask application with routes for the HLQuantBot v3.0 dashboard.
 
 Run:
     python app.py
@@ -218,7 +218,7 @@ def inject_globals():
     return {
         "now": datetime.now(timezone.utc),
         "environment": os.getenv("HLQUANTBOT_ENV", "MAINNET"),
-        "version": "2.0.0",
+        "version": "3.0.0",
     }
 
 
@@ -341,7 +341,7 @@ def api_kill_switch():
     async def _get_data():
         try:
             db = await get_db()
-            # Get latest equity snapshot
+            # Try equity_curve first, fallback to live_account
             result = await db.fetchrow("""
                 SELECT equity, peak_equity, drawdown_pct,
                        daily_pnl_pct, weekly_pnl_pct,
@@ -350,10 +350,10 @@ def api_kill_switch():
                 ORDER BY timestamp DESC
                 LIMIT 1
             """)
-            if result:
+            if result and result["equity"]:
                 return {
                     "status": result["kill_switch_status"] or "ok",
-                    "equity": float(result["equity"]) if result["equity"] else 0,
+                    "equity": float(result["equity"]),
                     "peak_equity": float(result["peak_equity"]) if result["peak_equity"] else 0,
                     "drawdown_pct": float(result["drawdown_pct"]) if result["drawdown_pct"] else 0,
                     "daily_pnl_pct": float(result["daily_pnl_pct"]) if result["daily_pnl_pct"] else 0,
@@ -361,7 +361,19 @@ def api_kill_switch():
                     "positions_count": result["positions_count"] or 0,
                     "resume_time": None,
                 }
-            return {"status": "ok", "resume_time": None}
+            # Fallback: get equity from live_account
+            account = await db.get_account()
+            equity = float(account.get("equity", 0)) if account else 0
+            return {
+                "status": "ok",
+                "equity": equity,
+                "peak_equity": equity,
+                "drawdown_pct": 0,
+                "daily_pnl_pct": 0,
+                "weekly_pnl_pct": 0,
+                "positions_count": 0,
+                "resume_time": None,
+            }
         except Exception as e:
             print(f"[Dashboard] Error fetching kill switch: {e}")
             return {"status": "unknown", "error": str(e)}
@@ -2048,7 +2060,7 @@ def run_dashboard(host: str = "0.0.0.0", port: int = 5611, debug: bool = None):
     if debug is None:
         debug = os.getenv("FLASK_DEBUG", "0") == "1"
 
-    print(f"Starting HLQuantBot v2.0 Dashboard on http://{host}:{port}")
+    print(f"Starting HLQuantBot v3.0 Dashboard on http://{host}:{port}")
     # use_reloader=False prevents Flask from forking which breaks background event loop
     app.run(host=host, port=port, debug=debug, use_reloader=False)
 

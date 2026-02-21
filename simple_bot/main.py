@@ -691,19 +691,19 @@ class ConservativeBot:
         # Initial delay to let services initialize
         await asyncio.sleep(10)
 
-        # Calculate loop interval from timeframe
-        tf_seconds = TIMEFRAME_SECONDS.get(self.config.primary_timeframe, 3600)
+        # Use configured scan interval (not timeframe duration)
+        scan_seconds = self.config.scan_interval_minutes * 60
 
         while self._running and not self._shutdown_event.is_set():
             try:
                 await self._evaluate_all_assets()
 
-                # Wait for next evaluation based on timeframe
-                logger.info("Next scan in %d minutes", tf_seconds // 60)
+                # Wait for next evaluation
+                logger.info("Next scan in %d minutes", self.config.scan_interval_minutes)
                 try:
                     await asyncio.wait_for(
                         self._shutdown_event.wait(),
-                        timeout=tf_seconds,
+                        timeout=scan_seconds,
                     )
                     break  # Shutdown requested
                 except asyncio.TimeoutError:
@@ -867,7 +867,7 @@ class ConservativeBot:
                         await self._db.update_service_health(
                             service_name=name,
                             status="healthy" if health.healthy else "unhealthy",
-                            message=health.message or "OK",
+                            metadata={"message": health.message or "OK"},
                         )
                     except Exception as e:
                         logger.debug("Could not update service health in DB: %s", e)

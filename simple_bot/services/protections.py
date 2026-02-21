@@ -33,6 +33,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import json
 import logging
 
+from .base import HealthStatus, ServiceStatus
+
 logger = logging.getLogger(__name__)
 
 
@@ -728,15 +730,19 @@ class ProtectionManager:
             "protection_names": self.protection_names,
         }
 
-    async def health_check(self) -> Dict[str, Any]:
+    async def health_check(self) -> HealthStatus:
         """
         Health check for monitoring system.
 
         Returns:
-            Dictionary with health status and protection info
+            HealthStatus with check results
         """
-        return {
-            "status": "healthy",
-            "protections_count": len(self.protections),
-            "protections": self.protection_names,
-        }
+        return HealthStatus(
+            healthy=True,
+            status=ServiceStatus.RUNNING,
+            message="OK",
+            details={
+                "protections_count": len(self.protections),
+                "protections": self.protection_names,
+            },
+        )

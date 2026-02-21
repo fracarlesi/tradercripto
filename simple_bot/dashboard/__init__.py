@@ -1,8 +1,8 @@
 """
-HLQuantBot v2.0 Dashboard
+HLQuantBot v3.0 Dashboard
 =========================
 
-Modern Flask dashboard for the HLQuantBot v2.0 microservices architecture.
+Modern Flask dashboard for the HLQuantBot v3.0 microservices architecture.
 
 Features:
 - Real-time service health monitoring
