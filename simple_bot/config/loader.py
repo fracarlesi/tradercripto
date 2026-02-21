@@ -1,5 +1,5 @@
 """
-HLQuantBot v2.0 - Configuration Loader
+HLQuantBot v3.0 - Configuration Loader
 
 Provides:
 - YAML configuration loading with validation
@@ -199,135 +199,9 @@ class DatabaseConfig(BaseConfig):
 # Service Configurations
 # =============================================================================
 
-class MarketScannerConfig(BaseConfig):
-    """Market scanner service configuration."""
-    
-    enabled: bool = Field(default=True, description="Enable market scanner")
-    interval_seconds: int = Field(
-        default=300,
-        ge=60,
-        le=3600,
-        description="Scan interval in seconds"
-    )
-    coins_limit: int = Field(
-        default=200,
-        ge=10,
-        le=500,
-        description="Maximum coins to scan"
-    )
-    min_volume_24h: float = Field(
-        default=1_000_000,
-        ge=0,
-        description="Minimum 24h volume filter"
-    )
-    exclude_symbols: list[str] = Field(
-        default_factory=lambda: ["USDC", "USDT", "DAI"],
-        description="Symbols to exclude from scanning"
-    )
-
-
-class OpportunityWeights(BaseConfig):
-    """Weights for opportunity ranking."""
-    
-    trend_strength: float = Field(default=0.25, ge=0, le=1)
-    volatility: float = Field(default=0.20, ge=0, le=1)
-    volume: float = Field(default=0.15, ge=0, le=1)
-    funding: float = Field(default=0.15, ge=0, le=1)
-    liquidity: float = Field(default=0.15, ge=0, le=1)
-    momentum: float = Field(default=0.10, ge=0, le=1)
-    
-    @model_validator(mode="after")
-    def validate_weights_sum(self) -> "OpportunityWeights":
-        total = (
-            self.trend_strength + self.volatility + self.volume +
-            self.funding + self.liquidity + self.momentum
-        )
-        if not (0.99 <= total <= 1.01):
-            raise ValueError(
-                f"Opportunity weights must sum to 1.0, got {total:.2f}. "
-                f"Adjust weights to balance correctly."
-            )
-        return self
-
-
-class OpportunityRankerConfig(BaseConfig):
-    """Opportunity ranker service configuration."""
-    
-    enabled: bool = Field(default=True, description="Enable opportunity ranker")
-    top_n: int = Field(
-        default=20,
-        ge=1,
-        le=100,
-        description="Number of top opportunities to track"
-    )
-    min_score: float = Field(
-        default=0.6,
-        ge=0,
-        le=1,
-        description="Minimum score threshold"
-    )
-    weights: OpportunityWeights = Field(default_factory=OpportunityWeights)
-
-
-class StrategySelectorConfig(BaseConfig):
-    """Strategy selector service configuration."""
-    
-    enabled: bool = Field(default=True, description="Enable strategy selector")
-    use_llm: bool = Field(
-        default=True,
-        description="Use LLM for strategy selection"
-    )
-    fallback_strategy: Literal["momentum", "mean_reversion", "breakout", "funding_arb"] = Field(
-        default="momentum",
-        description="Fallback strategy if LLM unavailable"
-    )
-    reselect_interval_minutes: int = Field(
-        default=60,
-        ge=5,
-        le=1440,
-        description="Strategy reselection interval in minutes"
-    )
-
-
-class CapitalAllocatorConfig(BaseConfig):
-    """Capital allocator service configuration."""
-    
-    enabled: bool = Field(default=True, description="Enable capital allocator")
-    max_positions: int = Field(
-        default=5,
-        ge=1,
-        le=20,
-        description="Maximum concurrent positions"
-    )
-    reserve_pct: float = Field(
-        default=0.20,
-        ge=0,
-        le=0.5,
-        description="Reserve capital percentage"
-    )
-    max_position_pct: float = Field(
-        default=0.30,
-        ge=0.05,
-        le=0.5,
-        description="Maximum position size as percentage of capital (conservative: 30%)"
-    )
-    max_correlated_pct: float = Field(
-        default=0.30,
-        ge=0.1,
-        le=0.8,
-        description="Maximum allocation to correlated assets"
-    )
-    rebalance_threshold_pct: float = Field(
-        default=0.10,
-        ge=0.01,
-        le=0.5,
-        description="Threshold to trigger rebalancing"
-    )
-
-
 class ExecutionEngineConfig(BaseConfig):
     """Execution engine service configuration."""
-    
+
     enabled: bool = Field(default=True, description="Enable execution engine")
     order_type: Literal["limit", "market", "smart"] = Field(
         default="smart",
@@ -357,44 +231,10 @@ class ExecutionEngineConfig(BaseConfig):
     )
 
 
-class LearningModuleConfig(BaseConfig):
-    """Learning module service configuration."""
-    
-    enabled: bool = Field(default=True, description="Enable learning module")
-    optimization_interval_hours: int = Field(
-        default=1,
-        ge=1,
-        le=24,
-        description="Optimization cycle interval in hours"
-    )
-    min_trades_for_optimization: int = Field(
-        default=10,
-        ge=5,
-        le=100,
-        description="Minimum trades required for optimization"
-    )
-    performance_window_hours: int = Field(
-        default=24,
-        ge=1,
-        le=168,
-        description="Performance evaluation window in hours"
-    )
-    rollback_threshold_pct: float = Field(
-        default=-5.0,
-        le=0,
-        description="Performance threshold to trigger rollback"
-    )
-
-
 class ServicesConfig(BaseConfig):
     """All services configuration."""
-    
-    market_scanner: MarketScannerConfig = Field(default_factory=MarketScannerConfig)
-    opportunity_ranker: OpportunityRankerConfig = Field(default_factory=OpportunityRankerConfig)
-    strategy_selector: StrategySelectorConfig = Field(default_factory=StrategySelectorConfig)
-    capital_allocator: CapitalAllocatorConfig = Field(default_factory=CapitalAllocatorConfig)
+
     execution_engine: ExecutionEngineConfig = Field(default_factory=ExecutionEngineConfig)
-    learning_module: LearningModuleConfig = Field(default_factory=LearningModuleConfig)
 
 
 # =============================================================================
@@ -602,141 +442,10 @@ class MomentumStrategyConfig(BaseConfig):
         return self
 
 
-class MeanReversionStrategyConfig(BaseConfig):
-    """Mean reversion strategy configuration."""
-    
-    enabled: bool = Field(default=True, description="Enable strategy")
-    weight: float = Field(
-        default=0.25,
-        ge=0,
-        le=1,
-        description="Strategy weight in portfolio"
-    )
-    timeframe: str = Field(default="15m", description="Candlestick timeframe")
-    rsi_period: int = Field(default=14, ge=5, le=50, description="RSI period")
-    rsi_oversold: int = Field(
-        default=20,
-        ge=5,
-        le=40,
-        description="RSI oversold threshold"
-    )
-    rsi_overbought: int = Field(
-        default=80,
-        ge=60,
-        le=95,
-        description="RSI overbought threshold"
-    )
-    bb_period: int = Field(default=20, ge=10, le=50, description="Bollinger Bands period")
-    bb_std: float = Field(
-        default=2.0,
-        ge=1.0,
-        le=3.0,
-        description="Bollinger Bands standard deviation"
-    )
-    min_bb_width: float = Field(
-        default=0.02,
-        ge=0.01,
-        le=0.1,
-        description="Minimum Bollinger Band width"
-    )
-
-
-class BreakoutStrategyConfig(BaseConfig):
-    """Breakout strategy configuration."""
-    
-    enabled: bool = Field(default=True, description="Enable strategy")
-    weight: float = Field(
-        default=0.25,
-        ge=0,
-        le=1,
-        description="Strategy weight in portfolio"
-    )
-    timeframe: str = Field(default="1h", description="Candlestick timeframe")
-    lookback_periods: int = Field(
-        default=20,
-        ge=5,
-        le=100,
-        description="Lookback periods for high/low"
-    )
-    min_breakout_pct: float = Field(
-        default=1.5,
-        ge=0.1,
-        le=5,
-        description="Minimum breakout percentage"
-    )
-    atr_multiplier: float = Field(
-        default=2.0,
-        ge=1,
-        le=5,
-        description="ATR multiplier for stop loss"
-    )
-    atr_period: int = Field(default=14, ge=5, le=50, description="ATR period")
-    volume_surge_multiplier: float = Field(
-        default=1.5,
-        ge=1,
-        le=5,
-        description="Volume surge multiplier for confirmation"
-    )
-
-
-class FundingArbStrategyConfig(BaseConfig):
-    """Funding arbitrage strategy configuration."""
-    
-    enabled: bool = Field(default=True, description="Enable strategy")
-    weight: float = Field(
-        default=0.15,
-        ge=0,
-        le=1,
-        description="Strategy weight in portfolio"
-    )
-    min_funding_rate: float = Field(
-        default=0.05,
-        ge=0.01,
-        le=0.2,
-        description="Minimum funding rate percentage"
-    )
-    max_funding_rate: float = Field(
-        default=0.5,
-        ge=0.1,
-        le=2,
-        description="Maximum funding rate percentage (risk cap)"
-    )
-    holding_period_hours: int = Field(
-        default=8,
-        ge=1,
-        le=24,
-        description="Holding period in hours"
-    )
-    hedge_spot: bool = Field(
-        default=False,
-        description="Hedge with spot position"
-    )
-
-
 class StrategiesConfig(BaseConfig):
     """All strategies configuration."""
-    
+
     momentum: MomentumStrategyConfig = Field(default_factory=MomentumStrategyConfig)
-    mean_reversion: MeanReversionStrategyConfig = Field(default_factory=MeanReversionStrategyConfig)
-    breakout: BreakoutStrategyConfig = Field(default_factory=BreakoutStrategyConfig)
-    funding_arb: FundingArbStrategyConfig = Field(default_factory=FundingArbStrategyConfig)
-    
-    @model_validator(mode="after")
-    def validate_strategy_weights(self) -> "StrategiesConfig":
-        enabled_weights = []
-        for strategy_name in ["momentum", "mean_reversion", "breakout", "funding_arb"]:
-            strategy = getattr(self, strategy_name)
-            if strategy.enabled:
-                enabled_weights.append((strategy_name, strategy.weight))
-        
-        if enabled_weights:
-            total = sum(w for _, w in enabled_weights)
-            if not (0.99 <= total <= 1.01):
-                logger.warning(
-                    f"Strategy weights for enabled strategies sum to {total:.2f}, "
-                    f"not 1.0. Weights will be normalized at runtime."
-                )
-        return self
 
 
 # =============================================================================
@@ -802,8 +511,8 @@ class HealthConfig(BaseConfig):
 # =============================================================================
 
 class Config(BaseConfig):
-    """Main configuration container for HLQuantBot v2.0."""
-    
+    """Main configuration container for HLQuantBot v3.0."""
+
     system: SystemConfig = Field(default_factory=SystemConfig)
     hyperliquid: HyperliquidConfig = Field(default_factory=HyperliquidConfig)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
@@ -813,31 +522,20 @@ class Config(BaseConfig):
     strategies: StrategiesConfig = Field(default_factory=StrategiesConfig)
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
     health: HealthConfig = Field(default_factory=HealthConfig)
-    
+
     # Metadata
     _loaded_at: datetime | None = None
     _config_path: Path | None = None
-    
+
     @model_validator(mode="after")
     def validate_cross_config(self) -> "Config":
         """Validate cross-configuration dependencies."""
-        # Ensure max_positions is consistent
-        if self.services.capital_allocator.max_positions != self.risk.max_positions:
-            logger.warning(
-                f"max_positions mismatch: capital_allocator has "
-                f"{self.services.capital_allocator.max_positions}, risk has "
-                f"{self.risk.max_positions}. Using risk.max_positions."
-            )
-            self.services.capital_allocator.max_positions = self.risk.max_positions
-        
-        # Validate mode consistency
         if self.system.mode == "mainnet" and self.hyperliquid.testnet:
             raise ValueError(
                 "Configuration error: system.mode is 'mainnet' but "
                 "hyperliquid.testnet is True. Set hyperliquid.testnet to False "
                 "for mainnet trading."
             )
-        
         return self
 
 

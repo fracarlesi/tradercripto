@@ -1,5 +1,5 @@
 """
-HLQuantBot v2.0 - Integration Tests
+HLQuantBot v3.0 - Integration Tests
 ====================================
 
 Comprehensive integration tests for the trading system.
@@ -113,29 +113,6 @@ class TestImports:
         assert load_config is not None
         assert get_config is not None
         assert reload_config is not None
-    
-    def test_import_llm_client(self):
-        """Test LLM client imports."""
-        from simple_bot.llm.client import (
-            DeepSeekClient,
-            StrategyDecision,
-            MarketAnalysis,
-            StrategyType,
-            DirectionType,
-            create_deepseek_client,
-            RateLimiter,
-            LLMError,
-            RateLimitExceeded,
-            APIError,
-            ParseError,
-        )
-        
-        assert DeepSeekClient is not None
-        assert StrategyDecision is not None
-        assert MarketAnalysis is not None
-        assert StrategyType is not None
-        assert DirectionType is not None
-        assert create_deepseek_client is not None
     
     def test_import_api_client(self):
         """Test Hyperliquid API client imports."""
@@ -401,30 +378,6 @@ class TestConfiguration:
         assert config.stop_loss_pct == 2.0
         assert config.take_profit_pct == 1.0
     
-    def test_opportunity_weights_sum(self):
-        """Test opportunity weights must sum to 1.0."""
-        from simple_bot.config.loader import OpportunityWeights
-        from pydantic import ValidationError
-        
-        # Valid weights
-        valid = OpportunityWeights(
-            trend_strength=0.25,
-            volatility=0.20,
-            volume=0.15,
-            funding=0.15,
-            liquidity=0.15,
-            momentum=0.10,
-        )
-        assert valid is not None
-        
-        # Invalid weights (don't sum to 1.0)
-        with pytest.raises(ValidationError):
-            OpportunityWeights(
-                trend_strength=0.5,
-                volatility=0.5,
-                volume=0.5,  # Sum > 1.0
-            )
-    
     def test_strategy_ema_validation(self):
         """Test momentum strategy EMA validation."""
         from simple_bot.config.loader import MomentumStrategyConfig
@@ -678,106 +631,6 @@ class TestServiceLifecycle:
         
         await service.stop()
         await mock_bus.stop()
-
-
-# =============================================================================
-# Test LLM Client
-# =============================================================================
-
-class TestLLMClient:
-    """Test DeepSeek LLM client."""
-    
-    def test_client_creation(self):
-        """Test client creation without API key."""
-        import os
-        from simple_bot.llm.client import DeepSeekClient
-
-        # Clear API key env var to test client without credentials
-        old_key = os.environ.pop("DEEPSEEK_API_KEY", None)
-        try:
-            client = DeepSeekClient(api_key=None)
-
-            assert client.is_available is False
-            assert client.remaining_requests == 300
-        finally:
-            if old_key is not None:
-                os.environ["DEEPSEEK_API_KEY"] = old_key
-    
-    def test_rate_limiter(self):
-        """Test rate limiter functionality."""
-        from simple_bot.llm.client import RateLimiter
-        
-        limiter = RateLimiter(max_per_day=5)
-        
-        assert limiter.can_make_request()
-        assert limiter.remaining_today == 5
-        
-        # Record some requests
-        for _ in range(5):
-            limiter.record_request()
-        
-        assert not limiter.can_make_request()
-        assert limiter.remaining_today == 0
-    
-    def test_strategy_decision_model(self):
-        """Test StrategyDecision model validation."""
-        from simple_bot.llm.client import (
-            StrategyDecision,
-            StrategyType,
-            DirectionType,
-        )
-        
-        decision = StrategyDecision(
-            strategy=StrategyType.MOMENTUM,
-            confidence=0.85,
-            direction=DirectionType.LONG,
-            reasoning="Strong uptrend with volume",
-            entry_conditions=["EMA crossover", "RSI above 50"],
-            risk_factors=["High volatility"],
-        )
-        
-        assert decision.strategy == StrategyType.MOMENTUM
-        assert decision.confidence == 0.85
-        assert decision.direction == DirectionType.LONG
-    
-    def test_confidence_normalization(self):
-        """Test confidence value normalization."""
-        from simple_bot.llm.client import StrategyDecision, StrategyType, DirectionType
-        
-        # Test percentage string
-        decision = StrategyDecision(
-            strategy=StrategyType.MOMENTUM,
-            confidence="85%",  # type: ignore[arg-type]  # Test validator converts string to float
-            direction=DirectionType.LONG,
-            reasoning="Test",
-        )
-        assert decision.confidence == 0.85
-        
-        # Test value > 1 (percentage as number)
-        decision2 = StrategyDecision(
-            strategy=StrategyType.MOMENTUM,
-            confidence=75,  # Should convert to 0.75
-            direction=DirectionType.LONG,
-            reasoning="Test",
-        )
-        assert decision2.confidence == 0.75
-    
-    def test_market_analysis_model(self):
-        """Test MarketAnalysis model."""
-        from simple_bot.llm.client import MarketAnalysis, StrategyType
-        
-        analysis = MarketAnalysis(
-            regime="bullish",
-            trend_strength=0.8,
-            risk_level="medium",
-            summary="Market is trending up",
-            recommended_strategies=[StrategyType.MOMENTUM],
-            avoid_strategies=[StrategyType.MEAN_REVERSION],
-        )
-        
-        assert analysis.regime == "bullish"
-        assert analysis.trend_strength == 0.8
-        assert StrategyType.MOMENTUM in analysis.recommended_strategies
 
 
 # =============================================================================
