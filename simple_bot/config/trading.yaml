@@ -152,7 +152,7 @@ strategies:
   trend_follow:
     enabled: false
 
-  momentum_scalper:
+  trend_momentum:
     enabled: true
     allow_short: true
     min_atr_pct: 0.1

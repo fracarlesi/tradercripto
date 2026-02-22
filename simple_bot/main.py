@@ -197,7 +197,7 @@ class ConservativeConfig:
 
     # Strategies
     trend_follow_enabled: bool
-    momentum_scalper_enabled: bool
+    trend_momentum_enabled: bool
 
     # Fixed TP/SL
     stop_loss_pct: float
@@ -271,7 +271,7 @@ class ConservativeConfig:
             prefer_limit=execution.get("prefer_limit", True),
             max_slippage_pct=execution.get("max_slippage_pct", 0.1),
             trend_follow_enabled=strategies.get("trend_follow", {}).get("enabled", True),
-            momentum_scalper_enabled=strategies.get("momentum_scalper", {}).get("enabled", False),
+            trend_momentum_enabled=strategies.get("trend_momentum", {}).get("enabled", False),
             stop_loss_pct=stops.get("stop_loss_pct", 0.4),
             take_profit_pct=stops.get("take_profit_pct", 0.8),
             testnet=env.lower() == "testnet",
@@ -668,10 +668,10 @@ class ConservativeBot:
             self._strategies.append(TrendFollowStrategy(config=trend_config))
             logger.info("Initialized TrendFollowStrategy")
 
-        # Momentum Scalper (aggressive EMA crossover)
-        if cfg.momentum_scalper_enabled:
+        # Trend Momentum (EMA crossover, TREND regime only)
+        if cfg.trend_momentum_enabled:
             strategies_yaml = self._raw_config.get("strategies", {})
-            ms_yaml = strategies_yaml.get("momentum_scalper", {})
+            ms_yaml = strategies_yaml.get("trend_momentum", {})
             ms_config = {
                 "allow_short": ms_yaml.get("allow_short", True),
                 "min_atr_pct": ms_yaml.get("min_atr_pct", 0.1),

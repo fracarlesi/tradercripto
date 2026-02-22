@@ -316,7 +316,7 @@ class TestOrderEvents:
                 "signal": {
                     "symbol": "BTC",
                     "direction": "long",
-                    "strategy": "momentum_scalper",
+                    "strategy": "trend_momentum",
                     "tp_price": "96000",
                     "sl_price": "94000",
                 },
@@ -346,7 +346,7 @@ class TestOrderEvents:
                 "signal": {
                     "symbol": "ETH",
                     "direction": "short",
-                    "strategy": "momentum_scalper",
+                    "strategy": "trend_momentum",
                     "tp_price": "3000",
                     "sl_price": "3200",
                 },

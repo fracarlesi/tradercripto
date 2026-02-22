@@ -338,5 +338,5 @@ class TestCanTrade:
         assert strategy.can_trade(_make_state(regime=Regime.CHAOS)) is False
 
     def test_name(self, strategy):
-        """Strategy name should be momentum_scalper."""
-        assert strategy.name == "momentum_scalper"
+        """Strategy name should be trend_momentum."""
+        assert strategy.name == "trend_momentum"

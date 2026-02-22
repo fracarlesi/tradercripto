@@ -334,7 +334,7 @@ class TestMomentumScalperStrategy:
         from simple_bot.strategies import MomentumScalperStrategy
 
         strategy = MomentumScalperStrategy()
-        assert strategy.name == "momentum_scalper"
+        assert strategy.name == "trend_momentum"
 
     def test_can_trade_only_in_trend_regime(self, market_state_range, market_state_trend):
         """Test strategy only trades in TREND regime."""
@@ -557,7 +557,7 @@ llm:
 strategies:
   trend_follow:
     enabled: true
-  momentum_scalper:
+  trend_momentum:
     enabled: true
 
 stops:
@@ -580,7 +580,7 @@ dry_run: false
             assert config.per_trade_pct == 0.5
             assert config.max_drawdown_pct == 15.0
             assert config.trend_follow_enabled == True
-            assert config.momentum_scalper_enabled == True
+            assert config.trend_momentum_enabled == True
             assert config.stop_loss_pct == 0.4
             assert config.take_profit_pct == 0.8
             assert config.testnet == True

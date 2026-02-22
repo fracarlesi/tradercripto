@@ -448,8 +448,8 @@ class TestStrategySimulation:
         risk = config.get("risk", {})
         assert risk.get("max_daily_trades") == 8
 
-    def test_momentum_scalper_enabled(self):
-        """Test momentum scalper strategy is enabled."""
+    def test_trend_momentum_enabled(self):
+        """Test trend momentum strategy is enabled."""
         import yaml
         from pathlib import Path
 
@@ -458,7 +458,7 @@ class TestStrategySimulation:
             config = yaml.safe_load(f)
 
         strategies = config.get("strategies", {})
-        assert strategies.get("momentum_scalper", {}).get("enabled") is True
+        assert strategies.get("trend_momentum", {}).get("enabled") is True
 
 
 if __name__ == "__main__":

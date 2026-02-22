@@ -60,7 +60,7 @@ class MomentumScalperStrategy(BaseStrategy):
 
     @property
     def name(self) -> str:
-        return "momentum_scalper"
+        return "trend_momentum"
 
     @property
     def required_regime(self) -> Regime:
