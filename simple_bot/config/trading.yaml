@@ -89,8 +89,8 @@ timeframes:
 # Risk Management
 # -----------------------------------------------------------------------------
 risk:
-  per_trade_pct: 5.0
-  max_per_trade_pct: 8.0
+  per_trade_pct: 10.0
+  max_per_trade_pct: 15.0
 
   max_positions: 3
   max_exposure_pct: 300
