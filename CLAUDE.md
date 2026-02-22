@@ -1,32 +1,49 @@
 # HLQuantBot - Claude Code Configuration
 
-> BTC trading bot for Hyperliquid DEX - EMA Momentum Scalper strategy, live on mainnet
+> Trading bot for Hyperliquid DEX - All assets, EMA Momentum strategy, live on mainnet
+
+## Startup: Activate Serena
+
+All'inizio di ogni conversazione, attiva il progetto Serena con:
+```
+mcp__plugin_serena_serena__activate_project(project="trader_bitcoin")
+```
+
+## Workflow: Teammate Agents + Background
+
+- Usa SEMPRE i teammate agents specializzati (Task tool) in parallelo dove possibile.
+- Lancia SEMPRE i task in **background** (`run_in_background: true`) così l'utente può continuare a lavorare.
+- Non bloccare mai la conversazione aspettando un agent - lancia in background e rispondi subito.
+- Agents: hlquantbot-debugger, hyperliquid-trade-verifier, trading-code-reviewer, hlquantbot-developer.
 
 ---
 
-## Current Strategy: EMA Momentum Scalper
+## Current Strategy: Trend Momentum (EMA Crossover)
 
 | Aspect | Configuration |
 |--------|---------------|
-| **Asset** | BTC only |
+| **Universe** | ALL assets su Hyperliquid (`mode: "all"`) |
 | **Timeframe** | 15m (scan every 5 min) |
-| **Strategy** | EMA9/EMA21 crossover + RSI filter |
-| **Entry LONG** | EMA9 > EMA21, RSI 30-65 |
+| **Strategy** | `trend_momentum` - EMA9/EMA21 crossover + RSI filter |
+| **Entry LONG** | EMA9 > EMA21, RSI 30-65, regime TREND (ADX>25) |
 | **Entry SHORT** | EMA9 < EMA21, RSI 35-70 (enabled) |
 | **TP / SL** | 0.8% / 0.4% (1:2 R:R) |
 | **Leverage** | 10x |
-| **Position Size** | Max 70% account |
-| **Limits** | Max 8 trades/day |
+| **Max Positions** | 3 concurrent |
 | **LLM Veto** | Enabled (DeepSeek, max 20 calls/day) |
 | **Mode** | **LIVE mainnet** (`dry_run: false`) |
+| **Database** | Solo cooldowns + protections (analytics DB rimosso) |
+| **Dashboard** | Rimossa (commit 3afca98) |
 
 ### Key Files
 
 | File | Purpose |
 |------|---------|
-| `strategies/momentum_scalper.py` | EMA9/21 crossover + RSI + ATR filter |
-| `strategies/trend_follow.py` | Legacy SMA crossover (disabled) |
-| `services/market_state.py` | Indicator calculation (EMA, SMA, RSI, ATR) |
+| `strategies/momentum_scalper.py` | Trend momentum strategy (EMA9/21 + RSI + ATR) |
+| `services/market_state.py` | Indicator calculation |
+| `services/execution_engine.py` | Order execution + TP/SL |
+| `services/risk_manager.py` | Position sizing + in-memory trade counter |
+| `services/kill_switch.py` | Circuit breaker |
 | `services/llm_veto.py` | DeepSeek LLM confirmation/veto |
 | `config/trading.yaml` | Primary configuration |
 | `main.py` | Entry point, orchestration |
@@ -40,7 +57,6 @@
 | `/test` | Esegui test suite |
 | `/lint` | Type-check e linting |
 | `/review` | Code review con trading-code-reviewer agent |
-| `/db-migrate` | Gestione migrazioni database |
 | `/start-bot` | Avvia il trading bot |
 
 ---
@@ -53,10 +69,11 @@ simple_bot/
 ├── core/             # models.py (MarketState, Regime, Direction)
 ├── services/         # risk_manager, execution_engine, market_state, llm_veto, kill_switch
 ├── strategies/       # momentum_scalper (active), trend_follow (disabled)
-├── dashboard/        # Flask + HTMX frontend
-├── database/         # PostgreSQL models e migrations
-├── tests/            # pytest test suite (218 tests)
+├── tests/            # pytest test suite (236 tests)
 └── main.py           # Entry point
+database/
+├── db.py             # Solo cooldowns + protections (analytics rimosso)
+└── schema.sql        # Schema minimale
 ```
 
 ---
@@ -78,8 +95,7 @@ cd simple_bot && black .            # Formatting
 
 ### Running
 ```bash
-cd simple_bot && python3 main.py              # Bot (live)
-cd simple_bot && python3 -m dashboard.app     # Dashboard only
+cd simple_bot && python3 main.py    # Bot (live)
 ```
 
 ---
@@ -100,10 +116,10 @@ cd simple_bot && python3 -m dashboard.app     # Dashboard only
 | Category | Tools |
 |----------|-------|
 | **Core** | Python 3.11+, asyncio, Pydantic |
-| **Exchange** | Hyperliquid SDK, WebSocket |
-| **Database** | PostgreSQL, asyncpg |
-| **Frontend** | Flask, HTMX, TailwindCSS |
-| **AI/ML** | DeepSeek LLM veto, custom regime detection |
+| **Exchange** | Hyperliquid SDK |
+| **Database** | PostgreSQL (solo cooldowns/protections) |
+| **AI/ML** | DeepSeek LLM veto, regime detection (ADX) |
+| **Notifications** | ntfy.sh push notifications |
 | **Quality** | Pyright, Ruff, Black, pytest |
 
 ---
@@ -132,9 +148,6 @@ cd simple_bot && python3 -m dashboard.app     # Dashboard only
 | `hlquantbot-developer` | Sviluppo features Python |
 | `hlquantbot-debugger` | Debug real-time, query DB |
 | `trading-code-reviewer` | Review codice trading |
-| `postgres-dba-expert` | Schema, migrations, query |
-| `flask-htmx-frontend` | Dashboard e UI |
-| `frontend-qa-verifier` | Visual QA dashboard |
 | `hyperliquid-trade-verifier` | Verifica posizioni exchange |
 
 ---
@@ -147,7 +160,7 @@ DATABASE_URL=postgresql://...
 HYPERLIQUID_WALLET_ADDRESS=...
 HYPERLIQUID_PRIVATE_KEY=...
 DEEPSEEK_API_KEY=...
-GITHUB_PERSONAL_ACCESS_TOKEN=...
+NTFY_TOPIC=...
 ```
 
 ---
@@ -156,20 +169,12 @@ GITHUB_PERSONAL_ACCESS_TOKEN=...
 
 **MAI hardcodare secrets nel codice.** Usare sempre `os.environ.get()` o `python-dotenv`.
 
-| Secret | Rischio se esposto |
-|--------|-------------------|
-| `HYPERLIQUID_PRIVATE_KEY` | **CRITICO** - Perdita fondi |
-| `DATABASE_URL` | Alto - Accesso DB |
-| `DEEPSEEK_API_KEY` | Medio - Costi API |
-| `GITHUB_PERSONAL_ACCESS_TOKEN` | Medio - Accesso repo |
-
 ### Safety Rules
 
 1. **Mai** committare `.env` o chiavi private
 2. **Mai** eseguire ordini live senza conferma esplicita
 3. **Sempre** verificare posizioni prima di modifiche al trading
-4. **Sempre** testare nuove strategie in paper mode prima del live
-5. **Mai** usare `float` per importi finanziari
+4. **Mai** usare `float` per importi finanziari
 
 ---
 
@@ -180,8 +185,6 @@ GITHUB_PERSONAL_ACCESS_TOKEN=...
 | **IP** | `<VPS_IP_REDACTED>` |
 | **SSH** | `ssh root@<VPS_IP_REDACTED>` |
 | **Deploy Dir** | `/opt/hlquantbot` |
-| **Dashboard** | http://<VPS_IP_REDACTED>:5000/ |
-| **PostgreSQL** | `<VPS_IP_REDACTED>:5432` |
 
 ### Comandi Server
 ```bash
@@ -191,11 +194,3 @@ docker compose ps                # Status
 docker compose logs -f bot       # Log bot
 docker compose restart bot       # Restart
 ```
-
----
-
-## Resources
-
-- [Hyperliquid Docs](https://hyperliquid.gitbook.io/)
-- Dashboard locale: http://localhost:5001
-- Dashboard Hetzner: http://<VPS_IP_REDACTED>:5000/
