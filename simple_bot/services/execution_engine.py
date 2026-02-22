@@ -59,6 +59,11 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# Minimum acceptable distance between entry and TP/SL after rounding.
+# If rounding collapses the distance below this (e.g. low-price assets),
+# the trade is rejected to prevent instant SL triggers.
+MIN_STOP_DISTANCE_PCT = 0.001  # 0.1%
+
 
 # =============================================================================
 # Data Classes
@@ -129,7 +134,8 @@ class Order:
     avg_price: Optional[float] = None
     filled_size: float = 0.0
     fee: float = 0.0
-    
+    original_signal: Optional[Dict[str, Any]] = None  # Stored for deferred fill handling
+
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary."""
         return {
@@ -313,7 +319,7 @@ class ExecutionEngineService(BaseService):
         self.pending_orders: Dict[str, Order] = {}
         self.active_positions: Dict[str, ExecutionPosition] = {}
         self.processed_signals: Set[str] = set()
-        self._external_positions_logged: Set[str] = set()  # Track externally-discovered positions already logged
+        self._tp_sl_confirmed: Set[str] = set()  # Positions with TP/SL confirmed (retry on each sync until success)
         self._closing_positions: Set[str] = set()  # Positions with close order already sent (prevent SL/TP spam)
         
         # Metrics
@@ -520,8 +526,8 @@ class ExecutionEngineService(BaseService):
                 tp_pct = signal.get("tp_pct", self._bot_config.risk.take_profit_pct / 100)
                 tp_price = entry_price * (1 + tp_pct) if is_long else entry_price * (1 - tp_pct)
 
-                enriched_signal["tp_price"] = round(tp_price, 2)
-                enriched_signal["sl_price"] = round(sl_price, 2)
+                enriched_signal["tp_price"] = round(tp_price, 6)
+                enriched_signal["sl_price"] = round(sl_price, 6)
 
                 # Publish order event for notifications
                 await self.publish(Topic.ORDERS, {
@@ -534,7 +540,8 @@ class ExecutionEngineService(BaseService):
                 if order_result.status == OrderStatus.FILLED:
                     await self._handle_order_filled(signal, order_result)
                 else:
-                    # Track pending order
+                    # Track pending order with original signal for deferred fill handling
+                    order_result.original_signal = signal
                     self.pending_orders[order_result.order_id] = order_result
                     
         except Exception as e:
@@ -986,6 +993,28 @@ class ExecutionEngineService(BaseService):
             symbol, tp_price, tp_pct * 100, sl_price, sl_pct * 100
         )
 
+        # Validate stop distance after rounding
+        if not self._validate_stop_distance(entry_price, tp_price, sl_price, symbol):
+            self._logger.error(
+                "CLOSING %s: TP/SL distance collapsed after rounding — position unprotectable",
+                symbol,
+            )
+            await self._send_alert(
+                f"External position {symbol} unprotectable: TP/SL too small after rounding"
+            )
+            try:
+                await self.client.place_order(
+                    symbol=symbol,
+                    is_buy=not is_long,
+                    size=size,
+                    price=None,
+                    order_type="market",
+                    reduce_only=True,
+                )
+            except Exception as e:
+                self._logger.error("Failed to close unprotectable position %s: %s", symbol, e)
+            return
+
         # Check if price has already passed TP level — trigger orders won't fire retroactively
         current_price = position.current_price
         tp_already_passed = (
@@ -1018,39 +1047,127 @@ class ExecutionEngineService(BaseService):
                 self._logger.error("Failed immediate %s close for %s: %s", reason, symbol, e)
             return
 
-        # Place TP order using TRIGGER order (proper take profit - shows in TP/SL column)
+        # Place TP order with retry
         try:
-            tp_result = await self.client.place_trigger_order(
+            tp_result = await self._place_trigger_with_retry(
                 symbol=symbol,
                 is_buy=not is_long,
                 size=size,
                 trigger_price=tp_price,
-                limit_price=None,  # Market order when triggered
-                tpsl="tp",  # Take profit type - shows in native TP/SL column
-                reduce_only=True,
+                tpsl="tp",
             )
             position.tp_order_id = tp_result.get("orderId")
             position.tp_price = tp_price
             self._logger.info("TP trigger order placed for %s: %s @ %.4f", symbol, position.tp_order_id, tp_price)
         except Exception as e:
-            self._logger.error("Failed to place TP trigger order for %s: %s", symbol, e)
+            self._logger.error("Failed to place TP trigger order for %s after retries: %s", symbol, e)
 
-        # Place SL order using trigger order
+        # Place SL order with retry
         try:
-            sl_result = await self.client.place_trigger_order(
+            sl_result = await self._place_trigger_with_retry(
                 symbol=symbol,
                 is_buy=not is_long,
                 size=size,
                 trigger_price=sl_price,
-                limit_price=None,
                 tpsl="sl",
-                reduce_only=True,
             )
             position.sl_order_id = sl_result.get("orderId")
             position.sl_price = sl_price
             self._logger.info("SL trigger order placed for %s: %s @ %.4f", symbol, position.sl_order_id, sl_price)
         except Exception as e:
-            self._logger.error("Failed to place SL order for %s: %s", symbol, e)
+            self._logger.error("Failed to place SL order for %s after retries: %s", symbol, e)
+
+    def _validate_stop_distance(
+        self,
+        entry_price: float,
+        tp_price: float,
+        sl_price: float,
+        symbol: str,
+    ) -> bool:
+        """
+        Validate TP/SL distance after rounding is sufficient.
+
+        Returns True if distances are acceptable, False if too small.
+        """
+        tp_rounded = self.client._round_price(tp_price)
+        sl_rounded = self.client._round_price(sl_price)
+        entry_rounded = self.client._round_price(entry_price)
+
+        if entry_rounded <= 0:
+            return False
+
+        tp_dist = abs(tp_rounded - entry_rounded) / entry_rounded
+        sl_dist = abs(sl_rounded - entry_rounded) / entry_rounded
+
+        if tp_dist < MIN_STOP_DISTANCE_PCT:
+            self._logger.warning(
+                "TP distance too small after rounding for %s: "
+                "entry=%.6f, tp=%.6f, dist=%.4f%%",
+                symbol, entry_rounded, tp_rounded, tp_dist * 100,
+            )
+            return False
+
+        if sl_dist < MIN_STOP_DISTANCE_PCT:
+            self._logger.warning(
+                "SL distance too small after rounding for %s: "
+                "entry=%.6f, sl=%.6f, dist=%.4f%%",
+                symbol, entry_rounded, sl_rounded, sl_dist * 100,
+            )
+            return False
+
+        return True
+
+    async def _place_trigger_with_retry(
+        self,
+        symbol: str,
+        is_buy: bool,
+        size: float,
+        trigger_price: float,
+        tpsl: str,
+        max_retries: int = 3,
+    ) -> Dict[str, Any]:
+        """Place a trigger order with retry and exponential backoff."""
+        for attempt in range(max_retries):
+            try:
+                result = await self.client.place_trigger_order(
+                    symbol=symbol,
+                    is_buy=is_buy,
+                    size=size,
+                    trigger_price=trigger_price,
+                    limit_price=None,
+                    tpsl=tpsl,
+                    reduce_only=True,
+                )
+                return result
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    delay = 2 ** attempt  # 1s, 2s, 4s
+                    self._logger.warning(
+                        "%s placement attempt %d/%d failed for %s: %s. Retrying in %ds",
+                        tpsl.upper(), attempt + 1, max_retries, symbol, e, delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                self._logger.error(
+                    "CRITICAL: Failed to place %s for %s after %d retries: %s",
+                    tpsl.upper(), symbol, max_retries, e,
+                )
+                await self._send_alert(
+                    f"CRITICAL: {tpsl.upper()} placement failed for {symbol} after {max_retries} retries: {e}"
+                )
+                raise
+
+    async def _send_alert(self, message: str) -> None:
+        """Send critical alert via notification bus."""
+        self._logger.critical(message)
+        try:
+            await self.publish(Topic.ORDERS, {
+                "event": "critical_alert",
+                "message": message,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+        except Exception:
+            pass  # Best-effort alert
 
     async def _set_tp_sl(
         self,
@@ -1102,41 +1219,59 @@ class ExecutionEngineService(BaseService):
             sl_distance_pct
         )
 
-        # Place TP order using TRIGGER order (proper take profit - shows in TP/SL column)
+        # Validate stop distance after rounding (prevents 0% SL on low-price assets)
+        if not self._validate_stop_distance(entry_price, tp_price, sl_price, symbol):
+            self._logger.error(
+                "CLOSING %s: TP/SL distance collapsed after rounding — position unprotectable",
+                symbol,
+            )
+            await self._send_alert(
+                f"Trade rejected: {symbol} TP/SL too small after rounding (entry={entry_price:.6f})"
+            )
+            try:
+                await self.client.place_order(
+                    symbol=symbol,
+                    is_buy=not is_long,
+                    size=size,
+                    price=None,
+                    order_type="market",
+                    reduce_only=True,
+                )
+            except Exception as e:
+                self._logger.error("Failed to close unprotectable position %s: %s", symbol, e)
+            return
+
+        # Place TP order with retry
         try:
-            tp_result = await self.client.place_trigger_order(
+            tp_result = await self._place_trigger_with_retry(
                 symbol=symbol,
-                is_buy=not is_long,  # Opposite side to close
+                is_buy=not is_long,
                 size=size,
                 trigger_price=tp_price,
-                limit_price=None,  # Market order when triggered
-                tpsl="tp",  # Take profit type - shows in native TP/SL column
-                reduce_only=True,
+                tpsl="tp",
             )
             position.tp_order_id = tp_result.get("orderId")
             position.tp_price = tp_price
             self._logger.info("TP trigger order placed: %s @ %.4f", position.tp_order_id, tp_price)
 
         except Exception as e:
-            self._logger.error("Failed to place TP trigger order: %s", e)
+            self._logger.error("Failed to place TP trigger order after retries: %s", e)
 
-        # Place SL order using TRIGGER order (proper stop loss)
+        # Place SL order with retry
         try:
-            sl_result = await self.client.place_trigger_order(
+            sl_result = await self._place_trigger_with_retry(
                 symbol=symbol,
-                is_buy=not is_long,  # Opposite side to close
+                is_buy=not is_long,
                 size=size,
                 trigger_price=sl_price,
-                limit_price=None,  # Market order when triggered
-                tpsl="sl",  # Stop loss type
-                reduce_only=True,
+                tpsl="sl",
             )
             position.sl_order_id = sl_result.get("orderId")
             position.sl_price = sl_price
             self._logger.info("SL trigger order placed: %s @ %.4f", position.sl_order_id, sl_price)
 
         except Exception as e:
-            self._logger.error("Failed to place SL trigger order: %s", e)
+            self._logger.error("Failed to place SL trigger order after retries: %s", e)
     
     # =========================================================================
     # Position Monitoring
@@ -1195,12 +1330,88 @@ class ExecutionEngineService(BaseService):
                     "reason": "stale_timeout",
                 })
 
+    async def _poll_pending_order_fills(self) -> None:
+        """Poll exchange for fills on pending limit orders.
+
+        Checks if pending orders have disappeared from open orders,
+        indicating they were either filled or cancelled externally.
+        If a position exists for the symbol, treats it as a fill and
+        triggers SL/TP placement.
+        """
+        if not self.pending_orders:
+            return
+
+        try:
+            open_orders = await self.client.get_open_orders()
+            open_order_ids = {str(o["orderId"]) for o in open_orders}
+        except Exception as e:
+            self._logger.warning("Failed to poll open orders: %s", e)
+            return
+
+        for order_id, order in list(self.pending_orders.items()):
+            if str(order_id) in open_order_ids:
+                continue  # Still open, nothing to do
+
+            # Order no longer open -> filled or cancelled externally
+            try:
+                positions = await self.client.get_positions()
+                pos = next(
+                    (p for p in positions
+                     if p["symbol"] == order.symbol and abs(p.get("size", 0)) > 0.0001),
+                    None,
+                )
+
+                if pos:
+                    # Order was filled — process as fill
+                    self._logger.info(
+                        "Pending order %s for %s detected as FILLED via polling",
+                        order_id, order.symbol,
+                    )
+                    order.status = OrderStatus.FILLED
+                    order.avg_price = pos.get("entryPrice", 0)
+                    order.filled_size = abs(pos.get("size", 0))
+                    order.filled_at = datetime.now(timezone.utc)
+
+                    signal = order.original_signal or {
+                        "symbol": order.symbol,
+                        "direction": "long" if order.side == "buy" else "short",
+                        "entry_price": order.avg_price,
+                        "size": order.filled_size,
+                        "strategy": order.strategy,
+                    }
+                    await self._handle_order_filled(signal, order)
+                    self.pending_orders.pop(order_id, None)
+                    self.metrics.orders_filled += 1
+                else:
+                    # No position -> order was cancelled externally
+                    self._logger.info(
+                        "Pending order %s for %s cancelled externally",
+                        order_id, order.symbol,
+                    )
+                    order.status = OrderStatus.CANCELLED
+                    self.pending_orders.pop(order_id, None)
+                    self.metrics.orders_cancelled += 1
+                    await self.publish(Topic.ORDERS, {
+                        "event": "order_cancelled",
+                        "symbol": order.symbol,
+                        "order_id": order_id,
+                        "reason": "external_cancel",
+                    })
+
+            except Exception as e:
+                self._logger.error(
+                    "Error checking fill status for order %s: %s", order_id, e
+                )
+
     async def _monitor_positions(self) -> None:
         """Background task to monitor positions and fills."""
         self._logger.info("Position monitoring started")
 
         while True:
             try:
+                # Poll for limit order fills (detect filled orders and set TP/SL)
+                await self._poll_pending_order_fills()
+
                 # Cancel stale limit orders that exceeded timeout
                 await self._cancel_stale_orders()
 
@@ -1214,7 +1425,7 @@ class ExecutionEngineService(BaseService):
                 await self._check_roi_exits()
 
                 await asyncio.sleep(5)  # Check every 5 seconds
-                
+
             except asyncio.CancelledError:
                 self._logger.debug("Position monitoring cancelled")
                 break
@@ -1232,45 +1443,52 @@ class ExecutionEngineService(BaseService):
             for pos in exchange_positions:
                 symbol = pos["symbol"]
                 size = pos.get("size", 0)
+                entry_px = pos.get("entryPrice", 0)
+                notional = abs(size) * entry_px
 
-                if abs(size) > 0.0001:
-                    exchange_symbols.add(symbol)
+                # Filter dust positions (< $1 notional) to prevent ghost blocking
+                if abs(size) < 0.0001 or notional < 1.0:
+                    continue
 
-                    if symbol in self.active_positions:
-                        # Update existing position
-                        local_pos = self.active_positions[symbol]
-                        local_pos.current_price = pos.get("markPrice", local_pos.entry_price)
-                        local_pos.unrealized_pnl = pos.get("unrealizedPnl", 0)
-                        local_pos.size = abs(size)
-                    else:
-                        # New position (opened externally or before service start)
-                        # Only log and process once to avoid spam
-                        if symbol in self._external_positions_logged:
-                            continue
-                        self._external_positions_logged.add(symbol)
+                exchange_symbols.add(symbol)
 
-                        new_pos = ExecutionPosition(
-                            symbol=symbol,
-                            side="long" if size > 0 else "short",
-                            size=abs(size),
-                            entry_price=pos.get("entryPrice", 0),
-                            current_price=pos.get("markPrice", 0),
-                            unrealized_pnl=pos.get("unrealizedPnl", 0),
-                            leverage=pos.get("leverage", 1),
-                            status=PositionStatus.OPEN,
-                            opened_at=datetime.now(timezone.utc),
-                        )
-                        self.active_positions[symbol] = new_pos
-                        self._logger.info(
-                            "Synced existing position: %s %s %.4f",
-                            new_pos.side,
-                            symbol,
-                            abs(size)
-                        )
+                if symbol in self.active_positions:
+                    # Update existing position
+                    local_pos = self.active_positions[symbol]
+                    local_pos.current_price = pos.get("markPrice", local_pos.entry_price)
+                    local_pos.unrealized_pnl = pos.get("unrealizedPnl", 0)
+                    local_pos.size = abs(size)
+                else:
+                    # New position (opened externally or before service start)
+                    # Retry TP/SL on each sync until confirmed
+                    if symbol in self._tp_sl_confirmed:
+                        continue
 
-                        # Check and set SL/TP for newly discovered positions
-                        await self._ensure_tp_sl_for_position(new_pos)
-            
+                    new_pos = ExecutionPosition(
+                        symbol=symbol,
+                        side="long" if size > 0 else "short",
+                        size=abs(size),
+                        entry_price=pos.get("entryPrice", 0),
+                        current_price=pos.get("markPrice", 0),
+                        unrealized_pnl=pos.get("unrealizedPnl", 0),
+                        leverage=pos.get("leverage", 1),
+                        status=PositionStatus.OPEN,
+                        opened_at=datetime.now(timezone.utc),
+                    )
+                    self.active_positions[symbol] = new_pos
+                    self._logger.info(
+                        "Synced existing position: %s %s %.4f",
+                        new_pos.side,
+                        symbol,
+                        abs(size)
+                    )
+
+                    # Check and set SL/TP for newly discovered positions
+                    await self._ensure_tp_sl_for_position(new_pos)
+                    # Mark TP/SL as confirmed if both were set
+                    if new_pos.tp_order_id and new_pos.sl_order_id:
+                        self._tp_sl_confirmed.add(symbol)
+
             # Check for closed positions
             closed_symbols = set(self.active_positions.keys()) - exchange_symbols
             for symbol in closed_symbols:
@@ -1534,7 +1752,7 @@ class ExecutionEngineService(BaseService):
         })
         
         # Clean up tracking sets
-        self._external_positions_logged.discard(symbol)
+        self._tp_sl_confirmed.discard(symbol)
         self._closing_positions.discard(symbol)
 
         # Clean up - remove from active after a delay

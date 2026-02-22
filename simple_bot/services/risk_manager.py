@@ -193,11 +193,11 @@ class RiskManagerService(BaseService):
                 symbol = pos.get("symbol")
                 size = pos.get("size", 0)
 
-                # Only track positions with actual size
-                if abs(size) > 0.0001:
-                    synced_symbols.add(symbol)
-                    entry_price = pos.get("entryPrice", 0)
-                    notional = abs(size) * entry_price
+                # Only track positions with actual size and notional > $1
+                # (filters dust positions left after SL closes)
+                entry_price = pos.get("entryPrice", 0)
+                notional = abs(size) * entry_price
+                if abs(size) > 0.0001 and notional >= 1.0:
 
                     self._open_positions[symbol] = {
                         "symbol": symbol,

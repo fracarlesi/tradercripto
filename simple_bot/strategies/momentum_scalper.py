@@ -111,6 +111,17 @@ class MomentumScalperStrategy(BaseStrategy):
         stop_price = self._calculate_fixed_stop(entry_price, direction)
         stop_distance_pct = Decimal(str(self.stop_loss_pct))
 
+        # Pre-validate: reject if stop distance is too small for price precision.
+        # Hyperliquid rounds prices to 4 decimals + 5 sig figs. If SL would
+        # collapse to entry after rounding, the trade is unprotectable.
+        min_tick = self._estimate_min_tick(entry_price)
+        if abs(entry_price - stop_price) < min_tick * 2:
+            return self.reject(
+                f"Stop distance too small for price precision: "
+                f"|{float(entry_price):.6f} - {float(stop_price):.6f}| < "
+                f"2 * tick({float(min_tick):.6f})"
+            )
+
         # Quality score
         quality = self._calculate_quality(state, direction)
 
@@ -188,6 +199,22 @@ class MomentumScalperStrategy(BaseStrategy):
             return entry_price * (Decimal("1") - sl_mult)
         else:
             return entry_price * (Decimal("1") + sl_mult)
+
+    @staticmethod
+    def _estimate_min_tick(price: Decimal) -> Decimal:
+        """Estimate minimum price increment for Hyperliquid rounding.
+
+        Mirrors _round_price logic: 4 decimal places + 5 significant figures.
+        Returns the smallest meaningful price change for this price level.
+        """
+        from math import log10, floor
+
+        p = float(price)
+        if p <= 0:
+            return Decimal("0.0001")
+        magnitude = floor(log10(p))
+        max_decimals = min(4, max(0, 4 - magnitude))
+        return Decimal(str(10 ** (-max_decimals)))
 
     def _calculate_quality(
         self, state: MarketState, direction: Direction

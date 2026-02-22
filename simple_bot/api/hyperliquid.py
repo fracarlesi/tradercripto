@@ -956,7 +956,11 @@ class HyperliquidClient:
 
         max_leverage = self._symbol_info[symbol].get("maxLeverage", 100)
         if leverage > max_leverage:
-            raise InvalidOrderError(f"Leverage {leverage} exceeds max {max_leverage} for {symbol}")
+            logger.warning(
+                "Leverage %dx exceeds max %dx for %s, capping to %dx",
+                leverage, max_leverage, symbol, max_leverage,
+            )
+            leverage = max_leverage
 
         logger.info(f"Setting leverage for {symbol} to {leverage}x")
 
