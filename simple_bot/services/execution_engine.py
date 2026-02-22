@@ -1355,16 +1355,25 @@ class ExecutionEngineService(BaseService):
         position = self.active_positions[symbol]
         position.status = PositionStatus.CLOSED
         position.closed_at = datetime.now(timezone.utc)
-        
+
+        # Cancel remaining TP/SL orders (the one that didn't trigger)
+        for order_id in [position.tp_order_id, position.sl_order_id]:
+            if order_id:
+                try:
+                    await self.client.cancel_order(symbol, int(order_id))
+                    self._logger.info("Cancelled residual order %s for %s", order_id, symbol)
+                except Exception as e:
+                    self._logger.debug("Could not cancel order %s (likely already filled): %s", order_id, e)
+
         self.metrics.positions_closed += 1
-        
+
         self._logger.info(
             "Position closed: %s %s - PnL: %.2f",
             position.side,
             symbol,
             position.unrealized_pnl
         )
-        
+
         # Publish fill/close event
         await self.publish(Topic.FILLS, {
             "event": "position_closed",

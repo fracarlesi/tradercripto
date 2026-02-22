@@ -542,8 +542,82 @@ class TestExecutionPositionModel:
     def test_position_exit_reason_default_none(self):
         """exit_reason should default to None."""
         position = create_position()
-        
+
         assert position.exit_reason is None
-        
+
         data = position.to_dict()
         assert data["exit_reason"] is None
+
+
+# =============================================================================
+# Orphan TP/SL Order Cancellation Tests
+# =============================================================================
+
+class TestOrphanOrderCancellation:
+    """Tests for cancelling residual TP/SL orders when position is closed by exchange."""
+
+    @pytest.mark.asyncio
+    async def test_handle_position_closed_cancels_tp_and_sl(self, execution_engine, mock_client):
+        """When a position is closed by the exchange, both TP and SL orders should be cancelled."""
+        position = create_position(symbol="BTC")
+        position.tp_order_id = "111"
+        position.sl_order_id = "222"
+        execution_engine.active_positions["BTC"] = position
+
+        await execution_engine._handle_position_closed("BTC")
+
+        mock_client.cancel_order.assert_any_call("BTC", 111)
+        mock_client.cancel_order.assert_any_call("BTC", 222)
+        assert mock_client.cancel_order.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_handle_position_closed_only_tp(self, execution_engine, mock_client):
+        """If only TP order exists, only that one is cancelled."""
+        position = create_position(symbol="BTC")
+        position.tp_order_id = "111"
+        position.sl_order_id = None
+        execution_engine.active_positions["BTC"] = position
+
+        await execution_engine._handle_position_closed("BTC")
+
+        mock_client.cancel_order.assert_called_once_with("BTC", 111)
+
+    @pytest.mark.asyncio
+    async def test_handle_position_closed_only_sl(self, execution_engine, mock_client):
+        """If only SL order exists, only that one is cancelled."""
+        position = create_position(symbol="BTC")
+        position.tp_order_id = None
+        position.sl_order_id = "222"
+        execution_engine.active_positions["BTC"] = position
+
+        await execution_engine._handle_position_closed("BTC")
+
+        mock_client.cancel_order.assert_called_once_with("BTC", 222)
+
+    @pytest.mark.asyncio
+    async def test_handle_position_closed_no_orders(self, execution_engine, mock_client):
+        """If no TP/SL orders exist, cancel_order should not be called."""
+        position = create_position(symbol="BTC")
+        position.tp_order_id = None
+        position.sl_order_id = None
+        execution_engine.active_positions["BTC"] = position
+
+        await execution_engine._handle_position_closed("BTC")
+
+        mock_client.cancel_order.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_handle_position_closed_cancel_failure_ignored(self, execution_engine, mock_client):
+        """If cancel_order fails (order already filled), it should not raise."""
+        position = create_position(symbol="BTC")
+        position.tp_order_id = "111"
+        position.sl_order_id = "222"
+        execution_engine.active_positions["BTC"] = position
+
+        # First call succeeds (residual order), second fails (already filled)
+        mock_client.cancel_order.side_effect = [None, Exception("Order not found")]
+
+        await execution_engine._handle_position_closed("BTC")
+
+        assert mock_client.cancel_order.call_count == 2
+        assert "BTC" not in execution_engine.active_positions
