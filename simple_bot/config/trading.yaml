@@ -161,16 +161,7 @@ monitoring:
   equity_snapshot_interval: 300
 
   telegram:
-    enabled: true
-    token: ${TELEGRAM_BOT_TOKEN:}
-    chat_id: ${TELEGRAM_CHAT_ID:}
-    alert_on:
-      - "trade_open"
-      - "trade_close"
-      - "kill_switch_trigger"
-      - "daily_summary"
-      - "error"
-      - "fill"
+    enabled: false
 
   whatsapp:
     enabled: true
