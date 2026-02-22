@@ -399,8 +399,10 @@ class MarketStateService(BaseService):
                 if state:
                     self._market_states[symbol] = state
                     await self._publish_state(state)
-                # Rate limiting: 100ms delay between API calls to avoid 429 errors
-                await asyncio.sleep(0.1)
+                # Rate limiting: 700ms delay between API calls to stay under
+                # CloudFront's ~120 req/min limit (~85 req/min with this delay).
+                # With 229 symbols, a full scan takes ~160s (within the 300s scan interval).
+                await asyncio.sleep(0.7)
             except Exception as e:
                 self._logger.error("Failed to fetch state for %s: %s", symbol, e)
 
