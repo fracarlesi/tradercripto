@@ -612,6 +612,7 @@ class ConservativeBot:
             def __init__(self, cfg: ConservativeConfig):
                 self.take_profit_pct = cfg.take_profit_pct
                 self.stop_loss_pct = cfg.stop_loss_pct
+                self.leverage = int(cfg.leverage)
 
         class _StopsConfig:
             """Stops configuration including time-based ROI."""
@@ -789,6 +790,13 @@ class ConservativeBot:
         Args:
             state: Current market state for the asset
         """
+        # Early gate: skip evaluation if already at max positions
+        risk_svc = self._services.get("risk_manager")
+        if risk_svc:
+            pos_count = len(risk_svc._open_positions) + len(risk_svc._pending_intents)
+            if pos_count >= self.config.max_positions:
+                return
+
         logger.debug(
             "Evaluating %s: regime=%s, ADX=%.1f",
             state.symbol,

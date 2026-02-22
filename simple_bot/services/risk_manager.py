@@ -291,12 +291,13 @@ class RiskManagerService(BaseService):
     # =========================================================================
 
     async def _handle_order_event(self, message: Message) -> None:
-        """Clear pending intent when an order is submitted, cancelled, or rejected.
+        """Clear pending intent when an order fails or is cancelled.
 
-        The execution engine publishes to Topic.ORDERS with events like
-        ``order_submitted``, ``order_error``.  In all cases the intent has
-        transitioned out of the *pending* state and should no longer block
-        new trades.
+        The pending intent is NOT cleared on ``order_submitted`` because the
+        position hasn't appeared in ``_open_positions`` yet (synced every 60s).
+        Clearing too early creates a TOCTOU race where new trades bypass
+        ``max_positions``.  The intent is cleared later by the
+        ``position_opened`` fill event (see ``_handle_fill_event``).
         """
         try:
             payload = message.payload
@@ -312,7 +313,7 @@ class RiskManagerService(BaseService):
             if not symbol:
                 return
 
-            if event in ("order_submitted", "order_error", "order_cancelled"):
+            if event in ("order_error", "order_cancelled"):
                 self.clear_pending_intent(symbol)
                 self._logger.debug(
                     "Cleared pending intent for %s on %s event", symbol, event
@@ -321,17 +322,37 @@ class RiskManagerService(BaseService):
             self._logger.debug("Error handling order event: %s", e)
 
     async def _handle_fill_event(self, message: Message) -> None:
-        """Clear pending intent when a position is closed.
+        """Track position opens/closes from fill events.
 
-        The execution engine publishes to Topic.FILLS with event
-        ``position_closed``.  This is a safety net in case the ORDERS
-        event was missed.
+        On ``position_opened``: immediately add to ``_open_positions`` and
+        clear the pending intent.  This closes the TOCTOU gap between order
+        submission and the next 60-second exchange sync.
+
+        On ``position_closed``: remove from ``_open_positions`` and clear
+        any stale pending intent.
         """
         try:
             payload = message.payload
+            event = payload.get("event", "")
             symbol = payload.get("symbol")
-            if symbol:
+            if not symbol:
+                return
+
+            if event == "position_opened":
+                self._open_positions[symbol] = {
+                    "symbol": symbol,
+                    "side": payload.get("direction", "long"),
+                    "size": payload.get("size", 0),
+                    "entry_price": payload.get("entry_price", 0),
+                    "notional": payload.get("notional", 0),
+                }
                 self.clear_pending_intent(symbol)
+                self._logger.info("Position tracked from fill: %s", symbol)
+
+            elif event == "position_closed":
+                self._open_positions.pop(symbol, None)
+                self.clear_pending_intent(symbol)
+
         except Exception as e:
             self._logger.debug("Error handling fill event: %s", e)
 

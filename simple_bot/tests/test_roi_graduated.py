@@ -30,6 +30,9 @@ from simple_bot.services.execution_engine import (
     OrderStatus,
     PositionStatus,
 )
+from simple_bot.services.risk_manager import RiskManagerService, RiskConfig
+from simple_bot.services.message_bus import Message
+from simple_bot.core.enums import Topic
 
 
 # =============================================================================
@@ -751,3 +754,250 @@ class TestStaleLimitOrderCancel:
 
         mock_client.cancel_order.assert_not_called()
         assert "6666" in execution_engine.pending_orders
+
+
+# =============================================================================
+# Race Condition Fix Tests - Pending Intent Lifecycle
+# =============================================================================
+
+@pytest.fixture
+def risk_manager():
+    """Create a RiskManagerService for testing pending intent lifecycle."""
+    config = RiskConfig(max_positions=3)
+    rm = RiskManagerService(config=config)
+    rm._current_equity = Decimal("10000")
+    return rm
+
+
+class TestPendingIntentLifecycle:
+    """Tests for TOCTOU race condition fix in pending intent handling."""
+
+    @pytest.mark.asyncio
+    async def test_pending_intent_not_cleared_on_order_submitted(self, risk_manager):
+        """order_submitted should NOT clear the pending intent (TOCTOU fix)."""
+        from simple_bot.core.models import TradeIntent, Direction, SetupType
+
+        intent = TradeIntent(
+            id="intent_test",
+            setup_id="setup_1",
+            symbol="BTC",
+            timestamp=datetime.now(timezone.utc),
+            direction=Direction.LONG,
+            setup_type=SetupType.TREND_BREAKOUT,
+            entry_price=Decimal("50000"),
+            position_size=Decimal("0.01"),
+            notional_value=Decimal("500"),
+            stop_price=Decimal("49500"),
+            risk_amount=Decimal("50"),
+            risk_pct=Decimal("0.5"),
+        )
+        risk_manager._pending_intents["BTC"] = intent
+
+        msg = Message(
+            topic=Topic.ORDERS,
+            payload={
+                "event": "order_submitted",
+                "signal": {"symbol": "BTC"},
+            },
+        )
+        await risk_manager._handle_order_event(msg)
+
+        # Pending intent should still be there
+        assert "BTC" in risk_manager._pending_intents
+
+    @pytest.mark.asyncio
+    async def test_pending_intent_cleared_on_order_error(self, risk_manager):
+        """order_error should clear the pending intent."""
+        from simple_bot.core.models import TradeIntent, Direction, SetupType
+
+        intent = TradeIntent(
+            id="intent_test",
+            setup_id="setup_1",
+            symbol="ETH",
+            timestamp=datetime.now(timezone.utc),
+            direction=Direction.LONG,
+            setup_type=SetupType.TREND_BREAKOUT,
+            entry_price=Decimal("3000"),
+            position_size=Decimal("0.1"),
+            notional_value=Decimal("300"),
+            stop_price=Decimal("2950"),
+            risk_amount=Decimal("50"),
+            risk_pct=Decimal("0.5"),
+        )
+        risk_manager._pending_intents["ETH"] = intent
+
+        msg = Message(
+            topic=Topic.ORDERS,
+            payload={
+                "event": "order_error",
+                "signal": {"symbol": "ETH"},
+            },
+        )
+        await risk_manager._handle_order_event(msg)
+
+        assert "ETH" not in risk_manager._pending_intents
+
+    @pytest.mark.asyncio
+    async def test_pending_intent_cleared_on_order_cancelled(self, risk_manager):
+        """order_cancelled should clear the pending intent."""
+        from simple_bot.core.models import TradeIntent, Direction, SetupType
+
+        intent = TradeIntent(
+            id="intent_test",
+            setup_id="setup_1",
+            symbol="SOL",
+            timestamp=datetime.now(timezone.utc),
+            direction=Direction.SHORT,
+            setup_type=SetupType.TREND_BREAKOUT,
+            entry_price=Decimal("100"),
+            position_size=Decimal("1"),
+            notional_value=Decimal("100"),
+            stop_price=Decimal("105"),
+            risk_amount=Decimal("50"),
+            risk_pct=Decimal("0.5"),
+        )
+        risk_manager._pending_intents["SOL"] = intent
+
+        msg = Message(
+            topic=Topic.ORDERS,
+            payload={
+                "event": "order_cancelled",
+                "symbol": "SOL",
+            },
+        )
+        await risk_manager._handle_order_event(msg)
+
+        assert "SOL" not in risk_manager._pending_intents
+
+
+# =============================================================================
+# Race Condition Fix Tests - Fill Event Position Tracking
+# =============================================================================
+
+class TestFillEventPositionTracking:
+    """Tests for position_opened/position_closed fill event handling."""
+
+    @pytest.mark.asyncio
+    async def test_position_tracked_on_fill_event(self, risk_manager):
+        """position_opened event should add symbol to _open_positions."""
+        msg = Message(
+            topic=Topic.FILLS,
+            payload={
+                "event": "position_opened",
+                "symbol": "BTC",
+                "direction": "long",
+                "size": 0.01,
+                "entry_price": 50000,
+                "notional": 500,
+            },
+        )
+        await risk_manager._handle_fill_event(msg)
+
+        assert "BTC" in risk_manager._open_positions
+        pos = risk_manager._open_positions["BTC"]
+        assert pos["side"] == "long"
+        assert pos["size"] == 0.01
+        assert pos["entry_price"] == 50000
+
+    @pytest.mark.asyncio
+    async def test_position_opened_clears_pending_intent(self, risk_manager):
+        """position_opened event should also clear the pending intent."""
+        from simple_bot.core.models import TradeIntent, Direction, SetupType
+
+        intent = TradeIntent(
+            id="intent_test",
+            setup_id="setup_1",
+            symbol="BTC",
+            timestamp=datetime.now(timezone.utc),
+            direction=Direction.LONG,
+            setup_type=SetupType.TREND_BREAKOUT,
+            entry_price=Decimal("50000"),
+            position_size=Decimal("0.01"),
+            notional_value=Decimal("500"),
+            stop_price=Decimal("49500"),
+            risk_amount=Decimal("50"),
+            risk_pct=Decimal("0.5"),
+        )
+        risk_manager._pending_intents["BTC"] = intent
+
+        msg = Message(
+            topic=Topic.FILLS,
+            payload={
+                "event": "position_opened",
+                "symbol": "BTC",
+                "direction": "long",
+                "size": 0.01,
+                "entry_price": 50000,
+                "notional": 500,
+            },
+        )
+        await risk_manager._handle_fill_event(msg)
+
+        assert "BTC" not in risk_manager._pending_intents
+        assert "BTC" in risk_manager._open_positions
+
+    @pytest.mark.asyncio
+    async def test_position_removed_on_close_event(self, risk_manager):
+        """position_closed event should remove from _open_positions."""
+        risk_manager._open_positions["ETH"] = {
+            "symbol": "ETH",
+            "side": "short",
+            "size": 1.0,
+            "entry_price": 3000,
+            "notional": 3000,
+        }
+
+        msg = Message(
+            topic=Topic.FILLS,
+            payload={
+                "event": "position_closed",
+                "symbol": "ETH",
+            },
+        )
+        await risk_manager._handle_fill_event(msg)
+
+        assert "ETH" not in risk_manager._open_positions
+
+    @pytest.mark.asyncio
+    async def test_max_positions_enforced_with_fills(self, risk_manager):
+        """After 3 position_opened fills, a 4th setup should be rejected."""
+        from simple_bot.core.models import Setup, Direction, SetupType
+
+        # Simulate 3 position fills
+        for i, symbol in enumerate(["BTC", "ETH", "SOL"]):
+            msg = Message(
+                topic=Topic.FILLS,
+                payload={
+                    "event": "position_opened",
+                    "symbol": symbol,
+                    "direction": "long",
+                    "size": 0.01,
+                    "entry_price": 1000 * (i + 1),
+                    "notional": 10 * (i + 1),
+                },
+            )
+            await risk_manager._handle_fill_event(msg)
+
+        assert len(risk_manager._open_positions) == 3
+
+        # 4th setup should be rejected by _calculate_risk_params
+        from simple_bot.core.models import Regime
+        setup = Setup(
+            id="setup_test_4th",
+            symbol="DOGE",
+            timestamp=datetime.now(timezone.utc),
+            direction=Direction.LONG,
+            setup_type=SetupType.TREND_BREAKOUT,
+            regime=Regime.TREND,
+            entry_price=Decimal("0.10"),
+            stop_price=Decimal("0.095"),
+            stop_distance_pct=Decimal("5.0"),
+            atr=Decimal("0.005"),
+            adx=Decimal("30"),
+            rsi=Decimal("50"),
+            confidence=Decimal("0.8"),
+        )
+
+        risk_params = risk_manager._calculate_risk_params(setup)
+        assert risk_params.size_approved is False
+        assert "Max positions reached" in (risk_params.rejection_reason or "")

@@ -644,7 +644,16 @@ class ExecutionEngineService(BaseService):
             symbol,
             f"{entry_price:.2f}" if order_type == "limit" else "MARKET"
         )
-        
+
+        # Ensure configured leverage is set before placing the order
+        configured_leverage = getattr(self._bot_config.risk, "leverage", None)
+        if configured_leverage:
+            try:
+                await self.client.update_leverage(symbol, int(configured_leverage))
+                self._logger.debug("Leverage set to %dx for %s", configured_leverage, symbol)
+            except Exception as e:
+                self._logger.warning("Failed to set leverage for %s: %s", symbol, e)
+
         # Execute with retry
         for attempt in range(self._exec_config.retry_attempts):
             try:
@@ -898,7 +907,7 @@ class ExecutionEngineService(BaseService):
         
         self.active_positions[symbol] = position
         self.metrics.positions_opened += 1
-        
+
         self._logger.info(
             "Position opened: %s %s %.4f @ %.2f",
             direction.upper(),
@@ -906,7 +915,18 @@ class ExecutionEngineService(BaseService):
             size,
             entry_price
         )
-        
+
+        # Notify risk manager so it tracks the position immediately
+        await self.publish(Topic.FILLS, {
+            "event": "position_opened",
+            "symbol": symbol,
+            "direction": direction,
+            "size": float(size),
+            "entry_price": float(entry_price),
+            "notional": float(size * entry_price),
+            "strategy": signal.get("strategy"),
+        })
+
         # Set TP/SL orders
         await self._set_tp_sl(signal, order, position)
     
