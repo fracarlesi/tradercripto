@@ -336,12 +336,12 @@ class TestMomentumScalperStrategy:
         strategy = MomentumScalperStrategy()
         assert strategy.name == "momentum_scalper"
 
-    def test_can_trade_in_any_regime(self, market_state_range, market_state_trend):
-        """Test strategy can trade in any regime."""
+    def test_can_trade_only_in_trend_regime(self, market_state_range, market_state_trend):
+        """Test strategy only trades in TREND regime."""
         from simple_bot.strategies import MomentumScalperStrategy
 
         strategy = MomentumScalperStrategy()
-        assert strategy.can_trade(market_state_range) == True
+        assert strategy.can_trade(market_state_range) == False
         assert strategy.can_trade(market_state_trend) == True
 
 

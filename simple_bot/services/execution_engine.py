@@ -313,6 +313,8 @@ class ExecutionEngineService(BaseService):
         self.pending_orders: Dict[str, Order] = {}
         self.active_positions: Dict[str, ExecutionPosition] = {}
         self.processed_signals: Set[str] = set()
+        self._external_positions_logged: Set[str] = set()  # Track externally-discovered positions already logged
+        self._closing_positions: Set[str] = set()  # Positions with close order already sent (prevent SL/TP spam)
         
         # Metrics
         self.metrics = ExecutionMetrics()
@@ -1165,6 +1167,13 @@ class ExecutionEngineService(BaseService):
                 )
             finally:
                 self.pending_orders.pop(order_id, None)
+                # Notify risk manager so it clears its pending intent
+                await self.publish(Topic.ORDERS, {
+                    "event": "order_cancelled",
+                    "symbol": order.symbol,
+                    "order_id": order_id,
+                    "reason": "stale_timeout",
+                })
 
     async def _monitor_positions(self) -> None:
         """Background task to monitor positions and fills."""
@@ -1215,6 +1224,11 @@ class ExecutionEngineService(BaseService):
                         local_pos.size = abs(size)
                     else:
                         # New position (opened externally or before service start)
+                        # Only log and process once to avoid spam
+                        if symbol in self._external_positions_logged:
+                            continue
+                        self._external_positions_logged.add(symbol)
+
                         new_pos = ExecutionPosition(
                             symbol=symbol,
                             side="long" if size > 0 else "short",
@@ -1247,43 +1261,73 @@ class ExecutionEngineService(BaseService):
             self._logger.error("Failed to sync positions: %s", e)
     
     async def _check_closed_positions(self) -> None:
-        """Check for positions that have been closed."""
+        """Check for positions whose price crossed TP or SL.
+
+        When a TP/SL level is breached, a market-close order is sent and the
+        position is marked CLOSING so that subsequent iterations do not
+        re-trigger the same close (preventing log spam).
+        """
         for symbol, position in list(self.active_positions.items()):
-            if position.status == PositionStatus.CLOSED:
+            if position.status in (PositionStatus.CLOSED, PositionStatus.CLOSING):
                 continue
-            
+
+            # Skip if a close order was already sent for this position
+            if symbol in self._closing_positions:
+                continue
+
             # Check if TP or SL was hit based on price
-            if position.tp_price and position.sl_price:
-                if position.side == "long":
-                    if position.current_price >= position.tp_price:
-                        self._logger.info(
-                            "%s TP hit: %.2f >= %.2f",
-                            symbol,
-                            position.current_price,
-                            position.tp_price
-                        )
-                    elif position.current_price <= position.sl_price:
-                        self._logger.info(
-                            "%s SL hit: %.2f <= %.2f",
-                            symbol,
-                            position.current_price,
-                            position.sl_price
-                        )
-                else:
-                    if position.current_price <= position.tp_price:
-                        self._logger.info(
-                            "%s TP hit: %.2f <= %.2f",
-                            symbol,
-                            position.current_price,
-                            position.tp_price
-                        )
-                    elif position.current_price >= position.sl_price:
-                        self._logger.info(
-                            "%s SL hit: %.2f >= %.2f",
-                            symbol,
-                            position.current_price,
-                            position.sl_price
-                        )
+            if not (position.tp_price and position.sl_price):
+                continue
+
+            hit_reason: Optional[str] = None
+
+            if position.side == "long":
+                if position.current_price >= position.tp_price:
+                    hit_reason = "take_profit"
+                    self._logger.info(
+                        "%s TP hit: %.2f >= %.2f",
+                        symbol,
+                        position.current_price,
+                        position.tp_price,
+                    )
+                elif position.current_price <= position.sl_price:
+                    hit_reason = "stop_loss"
+                    self._logger.info(
+                        "%s SL hit: %.2f <= %.2f",
+                        symbol,
+                        position.current_price,
+                        position.sl_price,
+                    )
+            else:
+                if position.current_price <= position.tp_price:
+                    hit_reason = "take_profit"
+                    self._logger.info(
+                        "%s TP hit: %.2f <= %.2f",
+                        symbol,
+                        position.current_price,
+                        position.tp_price,
+                    )
+                elif position.current_price >= position.sl_price:
+                    hit_reason = "stop_loss"
+                    self._logger.info(
+                        "%s SL hit: %.2f >= %.2f",
+                        symbol,
+                        position.current_price,
+                        position.sl_price,
+                    )
+
+            if hit_reason:
+                # Guard: mark immediately so the next iteration won't re-fire
+                self._closing_positions.add(symbol)
+                position.status = PositionStatus.CLOSING
+                position.exit_reason = hit_reason
+
+                try:
+                    await self.close_position(symbol)
+                except Exception as e:
+                    self._logger.error(
+                        "Failed to close %s after %s: %s", symbol, hit_reason, e
+                    )
 
     async def should_exit_on_roi(self, position: ExecutionPosition) -> tuple[bool, float, float]:
         """
@@ -1469,6 +1513,10 @@ class ExecutionEngineService(BaseService):
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
         
+        # Clean up tracking sets
+        self._external_positions_logged.discard(symbol)
+        self._closing_positions.discard(symbol)
+
         # Clean up - remove from active after a delay
         # to allow fill processing
         await asyncio.sleep(1)

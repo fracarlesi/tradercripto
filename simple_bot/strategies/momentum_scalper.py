@@ -67,8 +67,8 @@ class MomentumScalperStrategy(BaseStrategy):
         return Regime.TREND
 
     def can_trade(self, state: MarketState) -> bool:
-        """Trade in all regimes - momentum signals are self-contained."""
-        return True
+        """Only trade in TREND regime - confirmed by backtest results."""
+        return state.regime == Regime.TREND
 
     def evaluate(self, state: MarketState) -> StrategyResult:
         """

@@ -141,7 +141,9 @@ class RiskManagerService(BaseService):
 
         if self.bus:
             await self.subscribe(Topic.SETUPS, self._handle_setup)
-            self._logger.info("Subscribed to SETUPS topic")
+            await self.subscribe(Topic.ORDERS, self._handle_order_event)
+            await self.subscribe(Topic.FILLS, self._handle_fill_event)
+            self._logger.info("Subscribed to SETUPS, ORDERS and FILLS topics")
 
         # Fetch initial equity from exchange
         await self._update_equity()
@@ -283,6 +285,55 @@ class RiskManagerService(BaseService):
 
         except Exception as e:
             self._logger.error("Error handling setup: %s", e, exc_info=True)
+
+    # =========================================================================
+    # Pending Intent Cleanup (Order / Fill events)
+    # =========================================================================
+
+    async def _handle_order_event(self, message: Message) -> None:
+        """Clear pending intent when an order is submitted, cancelled, or rejected.
+
+        The execution engine publishes to Topic.ORDERS with events like
+        ``order_submitted``, ``order_error``.  In all cases the intent has
+        transitioned out of the *pending* state and should no longer block
+        new trades.
+        """
+        try:
+            payload = message.payload
+            event = payload.get("event", "")
+
+            # Extract symbol from nested signal dict or flat payload
+            symbol = None
+            signal = payload.get("signal")
+            if isinstance(signal, dict):
+                symbol = signal.get("symbol")
+            if not symbol:
+                symbol = payload.get("symbol")
+            if not symbol:
+                return
+
+            if event in ("order_submitted", "order_error", "order_cancelled"):
+                self.clear_pending_intent(symbol)
+                self._logger.debug(
+                    "Cleared pending intent for %s on %s event", symbol, event
+                )
+        except Exception as e:
+            self._logger.debug("Error handling order event: %s", e)
+
+    async def _handle_fill_event(self, message: Message) -> None:
+        """Clear pending intent when a position is closed.
+
+        The execution engine publishes to Topic.FILLS with event
+        ``position_closed``.  This is a safety net in case the ORDERS
+        event was missed.
+        """
+        try:
+            payload = message.payload
+            symbol = payload.get("symbol")
+            if symbol:
+                self.clear_pending_intent(symbol)
+        except Exception as e:
+            self._logger.debug("Error handling fill event: %s", e)
 
     # =========================================================================
     # Position Sizing

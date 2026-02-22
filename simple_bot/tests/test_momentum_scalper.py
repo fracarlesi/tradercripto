@@ -331,11 +331,11 @@ class TestQualityScore:
 class TestCanTrade:
     """Test regime handling."""
 
-    def test_trades_in_all_regimes(self, strategy):
-        """Strategy should trade in any regime."""
-        for regime in Regime:
-            state = _make_state(regime=regime)
-            assert strategy.can_trade(state) is True
+    def test_trades_only_in_trend_regime(self, strategy):
+        """Strategy should only trade in TREND regime."""
+        assert strategy.can_trade(_make_state(regime=Regime.TREND)) is True
+        assert strategy.can_trade(_make_state(regime=Regime.RANGE)) is False
+        assert strategy.can_trade(_make_state(regime=Regime.CHAOS)) is False
 
     def test_name(self, strategy):
         """Strategy name should be momentum_scalper."""
