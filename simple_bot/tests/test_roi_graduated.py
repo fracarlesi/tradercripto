@@ -26,6 +26,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from simple_bot.services.execution_engine import (
     ExecutionEngineService,
     ExecutionPosition,
+    Order,
+    OrderStatus,
     PositionStatus,
 )
 
@@ -621,3 +623,131 @@ class TestOrphanOrderCancellation:
 
         assert mock_client.cancel_order.call_count == 2
         assert "BTC" not in execution_engine.active_positions
+
+
+# =============================================================================
+# Stale Limit Order Auto-Cancel Tests
+# =============================================================================
+
+class TestStaleLimitOrderCancel:
+    """Tests for auto-cancelling stale pending limit orders."""
+
+    @pytest.mark.asyncio
+    async def test_cancel_stale_order_after_timeout(self, execution_engine, mock_client):
+        """A pending order older than limit_timeout_seconds should be cancelled."""
+        order = Order(
+            order_id="9999",
+            symbol="BTC",
+            side="buy",
+            size=0.01,
+            price=95000.0,
+            order_type="limit",
+            status=OrderStatus.SUBMITTED,
+            submitted_at=datetime.now(timezone.utc) - timedelta(seconds=120),
+        )
+        execution_engine.pending_orders["9999"] = order
+
+        await execution_engine._cancel_stale_orders()
+
+        mock_client.cancel_order.assert_called_once_with("BTC", 9999)
+        assert "9999" not in execution_engine.pending_orders
+        assert execution_engine.metrics.orders_cancelled == 1
+
+    @pytest.mark.asyncio
+    async def test_fresh_order_not_cancelled(self, execution_engine, mock_client):
+        """A pending order younger than limit_timeout_seconds should not be cancelled."""
+        order = Order(
+            order_id="8888",
+            symbol="BTC",
+            side="buy",
+            size=0.01,
+            price=95000.0,
+            order_type="limit",
+            status=OrderStatus.SUBMITTED,
+            submitted_at=datetime.now(timezone.utc) - timedelta(seconds=10),
+        )
+        execution_engine.pending_orders["8888"] = order
+
+        await execution_engine._cancel_stale_orders()
+
+        mock_client.cancel_order.assert_not_called()
+        assert "8888" in execution_engine.pending_orders
+
+    @pytest.mark.asyncio
+    async def test_cancel_failure_removes_from_pending(self, execution_engine, mock_client):
+        """Even if cancel_order raises, the stale order should be removed from pending."""
+        order = Order(
+            order_id="7777",
+            symbol="ETH",
+            side="sell",
+            size=0.5,
+            price=3000.0,
+            order_type="limit",
+            status=OrderStatus.SUBMITTED,
+            submitted_at=datetime.now(timezone.utc) - timedelta(seconds=120),
+        )
+        execution_engine.pending_orders["7777"] = order
+        mock_client.cancel_order.side_effect = Exception("Order not found")
+
+        await execution_engine._cancel_stale_orders()
+
+        mock_client.cancel_order.assert_called_once_with("ETH", 7777)
+        assert "7777" not in execution_engine.pending_orders
+
+    @pytest.mark.asyncio
+    async def test_no_pending_orders_noop(self, execution_engine, mock_client):
+        """No pending orders means nothing to cancel."""
+        assert len(execution_engine.pending_orders) == 0
+
+        await execution_engine._cancel_stale_orders()
+
+        mock_client.cancel_order.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_mixed_stale_and_fresh_orders(self, execution_engine, mock_client):
+        """Only stale orders are cancelled; fresh orders remain."""
+        stale_order = Order(
+            order_id="1111",
+            symbol="BTC",
+            side="buy",
+            size=0.01,
+            order_type="limit",
+            status=OrderStatus.SUBMITTED,
+            submitted_at=datetime.now(timezone.utc) - timedelta(seconds=120),
+        )
+        fresh_order = Order(
+            order_id="2222",
+            symbol="ETH",
+            side="sell",
+            size=0.1,
+            order_type="limit",
+            status=OrderStatus.SUBMITTED,
+            submitted_at=datetime.now(timezone.utc) - timedelta(seconds=5),
+        )
+        execution_engine.pending_orders["1111"] = stale_order
+        execution_engine.pending_orders["2222"] = fresh_order
+
+        await execution_engine._cancel_stale_orders()
+
+        mock_client.cancel_order.assert_called_once_with("BTC", 1111)
+        assert "1111" not in execution_engine.pending_orders
+        assert "2222" in execution_engine.pending_orders
+
+    @pytest.mark.asyncio
+    async def test_order_without_submitted_at_not_cancelled(self, execution_engine, mock_client):
+        """An order without submitted_at should not be cancelled (no way to determine age)."""
+        order = Order(
+            order_id="6666",
+            symbol="BTC",
+            side="buy",
+            size=0.01,
+            order_type="limit",
+            status=OrderStatus.SUBMITTED,
+            submitted_at=None,
+        )
+        execution_engine.pending_orders["6666"] = order
+
+        await execution_engine._cancel_stale_orders()
+
+        mock_client.cancel_order.assert_not_called()
+        assert "6666" in execution_engine.pending_orders

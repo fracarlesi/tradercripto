@@ -1120,21 +1120,70 @@ class ExecutionEngineService(BaseService):
     # Position Monitoring
     # =========================================================================
     
+    async def _cancel_stale_orders(self) -> None:
+        """Cancel pending limit orders that exceeded the timeout.
+
+        Iterates over ``self.pending_orders`` and cancels any order whose
+        age exceeds ``limit_timeout_seconds`` (default 60 s from config).
+        Cancelled orders are removed from local tracking and metrics are
+        updated.
+        """
+        timeout = timedelta(seconds=self._exec_config.limit_timeout_seconds)
+        now = datetime.now(timezone.utc)
+
+        stale_ids: List[str] = []
+        for order_id, order in self.pending_orders.items():
+            if order.submitted_at and (now - order.submitted_at) > timeout:
+                stale_ids.append(order_id)
+
+        for order_id in stale_ids:
+            order = self.pending_orders[order_id]
+            age_seconds = (
+                (now - order.submitted_at).total_seconds()
+                if order.submitted_at
+                else 0
+            )
+            self._logger.warning(
+                "Auto-cancelling stale %s order %s for %s "
+                "(age: %.0fs, timeout: %.0fs)",
+                order.order_type,
+                order_id,
+                order.symbol,
+                age_seconds,
+                timeout.total_seconds(),
+            )
+            try:
+                await self.client.cancel_order(order.symbol, int(order_id))
+                order.status = OrderStatus.CANCELLED
+                self.metrics.orders_cancelled += 1
+                self._logger.info(
+                    "Stale order %s cancelled successfully", order_id
+                )
+            except Exception as e:
+                self._logger.error(
+                    "Failed to cancel stale order %s: %s", order_id, e
+                )
+            finally:
+                self.pending_orders.pop(order_id, None)
+
     async def _monitor_positions(self) -> None:
         """Background task to monitor positions and fills."""
         self._logger.info("Position monitoring started")
-        
+
         while True:
             try:
+                # Cancel stale limit orders that exceeded timeout
+                await self._cancel_stale_orders()
+
                 # Sync positions from exchange
                 await self._sync_positions_from_exchange()
-                
+
                 # Check for closed positions (SL/TP hit)
                 await self._check_closed_positions()
-                
+
                 # Check for ROI-based exits (time-based take profit)
                 await self._check_roi_exits()
-                
+
                 await asyncio.sleep(5)  # Check every 5 seconds
                 
             except asyncio.CancelledError:
