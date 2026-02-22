@@ -964,6 +964,38 @@ class ExecutionEngineService(BaseService):
             symbol, tp_price, tp_pct * 100, sl_price, sl_pct * 100
         )
 
+        # Check if price has already passed TP level — trigger orders won't fire retroactively
+        current_price = position.current_price
+        tp_already_passed = (
+            (is_long and current_price >= tp_price) or
+            (not is_long and current_price <= tp_price)
+        )
+        sl_already_passed = (
+            (is_long and current_price <= sl_price) or
+            (not is_long and current_price >= sl_price)
+        )
+
+        if tp_already_passed or sl_already_passed:
+            reason = "TP" if tp_already_passed else "SL"
+            self._logger.warning(
+                "%s: price %.4f already beyond %s level %.4f — closing at market",
+                symbol, current_price, reason,
+                tp_price if tp_already_passed else sl_price
+            )
+            try:
+                await self.client.place_order(
+                    symbol=symbol,
+                    is_buy=not is_long,
+                    size=size,
+                    price=None,
+                    order_type="market",
+                    reduce_only=True,
+                )
+                self._logger.info("Immediate %s market close sent for %s", reason, symbol)
+            except Exception as e:
+                self._logger.error("Failed immediate %s close for %s: %s", reason, symbol, e)
+            return
+
         # Place TP order using TRIGGER order (proper take profit - shows in TP/SL column)
         try:
             tp_result = await self.client.place_trigger_order(
