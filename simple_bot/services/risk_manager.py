@@ -200,9 +200,10 @@ class RiskManagerService(BaseService):
                 if abs(size) > 0.0001 and notional >= 1.0:
                     synced_symbols.add(symbol)
 
+                    side = pos.get("side", "long")
                     self._open_positions[symbol] = {
                         "symbol": symbol,
-                        "side": "long" if size > 0 else "short",
+                        "side": side,
                         "size": abs(size),
                         "entry_price": entry_price,
                         "notional": notional,
@@ -211,7 +212,7 @@ class RiskManagerService(BaseService):
                     }
                     self._logger.debug(
                         "Synced position: %s %s %.4f @ %.2f",
-                        "LONG" if size > 0 else "SHORT",
+                        side.upper(),
                         symbol,
                         abs(size),
                         entry_price,

@@ -1466,7 +1466,7 @@ class ExecutionEngineService(BaseService):
 
                     new_pos = ExecutionPosition(
                         symbol=symbol,
-                        side="long" if size > 0 else "short",
+                        side=pos.get("side", "long"),
                         size=abs(size),
                         entry_price=pos.get("entryPrice", 0),
                         current_price=pos.get("markPrice", 0),
