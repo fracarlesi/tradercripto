@@ -198,6 +198,7 @@ class RiskManagerService(BaseService):
                 entry_price = pos.get("entryPrice", 0)
                 notional = abs(size) * entry_price
                 if abs(size) > 0.0001 and notional >= 1.0:
+                    synced_symbols.add(symbol)
 
                     self._open_positions[symbol] = {
                         "symbol": symbol,
