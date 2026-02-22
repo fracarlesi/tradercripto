@@ -437,7 +437,7 @@ class TestStrategySimulation:
             config = yaml.safe_load(f)
 
         universe = config.get("universe", {})
-        assert universe.get("mode") == "manual"
+        assert universe.get("mode") == "all"
 
         assets = universe.get("assets", [])
         enabled_assets = [a["symbol"] for a in assets if a.get("enabled")]

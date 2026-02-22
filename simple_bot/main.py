@@ -181,6 +181,8 @@ class ConservativeConfig:
     # Regime
     trend_adx_min: float
     range_adx_max: float
+    ema_slope_threshold: float
+    choppiness_range_min: float
     regime_confirmation_bars: int
 
     # LLM
@@ -259,6 +261,8 @@ class ConservativeConfig:
             minimal_roi=stops.get("minimal_roi", {}),
             trend_adx_min=regime.get("trend_adx_min", 25.0),
             range_adx_max=regime.get("range_adx_max", 20.0),
+            ema_slope_threshold=regime.get("ema_slope_threshold", 0.001),
+            choppiness_range_min=regime.get("choppiness_range_min", 60.0),
             regime_confirmation_bars=regime.get("confirmation_bars", 2),
             llm_enabled=llm.get("enabled", True),
             llm_provider=llm.get("provider", "deepseek"),
@@ -549,6 +553,8 @@ class ConservativeBot:
             interval_seconds=cfg.scan_interval_minutes * 60,  # Convert minutes to seconds
             trend_adx_min=cfg.trend_adx_min,
             range_adx_max=cfg.range_adx_max,
+            ema_slope_threshold=cfg.ema_slope_threshold,
+            choppiness_range_min=cfg.choppiness_range_min,
             regime_confirmation_bars=cfg.regime_confirmation_bars,
         )
         self._services["market_state"] = create_market_state_service(
