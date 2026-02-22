@@ -404,24 +404,7 @@ class KillSwitchService(BaseService):
 
     async def _send_alert(self, event: KillSwitchEvent) -> None:
         """Send alert (Telegram, etc.)."""
-        # In production, integrate with Telegram alerter
         self._logger.warning("ALERT: %s", event.message)
-
-        # Store event in database if available
-        if self.db:
-            try:
-                await self.db.execute(
-                    """
-                    INSERT INTO kill_switch_log (timestamp, trigger_type, trigger_value, action_taken)
-                    VALUES ($1, $2, $3, $4)
-                    """,
-                    event.timestamp,
-                    event.trigger_type,
-                    event.trigger_value,
-                    event.action,
-                )
-            except Exception as e:
-                self._logger.error("Failed to log event: %s", e)
 
     # =========================================================================
     # Public API

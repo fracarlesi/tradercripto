@@ -29,7 +29,7 @@ from .base import BaseService
 from .message_bus import Message, MessageBus
 from ..core.enums import Topic
 from ..core.models import (
-    Setup, TradeIntent, RiskParams, Direction, CooldownState, CooldownReason, PerformanceMetrics
+    Setup, TradeIntent, RiskParams, Direction, CooldownState, CooldownReason
 )
 
 
@@ -115,6 +115,10 @@ class RiskManagerService(BaseService):
 
         # Cooldown state
         self._cooldown_state: Optional[CooldownState] = None
+
+        # In-memory daily trade counter (resets at UTC midnight)
+        self._trades_today: int = 0
+        self._last_trade_day: Optional[datetime] = None
 
         self._logger.info(
             "RiskManagerService initialized: risk=%.1f%%, max_pos=%d, max_exposure=%.0f%%",
@@ -570,57 +574,40 @@ class RiskManagerService(BaseService):
         return False, None
 
     async def _get_recent_trades(self, hours: int) -> List[Dict]:
-        """Get trades from the last N hours."""
-        if not self.db:
-            return []
-
-        try:
-            cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-            # Query closed trades from the last N hours
-            query = """
-                SELECT trade_id, symbol, side, net_pnl, exit_time, notes
-                FROM trades
-                WHERE is_closed = true
-                  AND exit_time >= $1
-                ORDER BY exit_time DESC
-            """
-            rows = await self.db.fetch(query, cutoff)
-            return [dict(row) for row in rows]
-        except Exception as e:
-            self._logger.warning("Failed to get recent trades: %s", e)
-            return []
+        """Get trades from the last N hours. Stubbed - no DB trades table."""
+        return []
 
     async def _get_today_trade_count(self) -> int:
         """
         Get the number of trades opened today (since UTC midnight).
 
-        Used to enforce max_daily_trades limit to prevent overtrading.
-        Resets automatically at UTC midnight.
+        Uses in-memory counter that resets at UTC midnight.
 
         Returns:
             Number of trades opened today
         """
-        if not self.db:
-            return 0
+        now = datetime.now(timezone.utc)
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
-        try:
-            # Calculate UTC midnight today
-            now = datetime.now(timezone.utc)
-            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        # Reset counter at midnight
+        if self._last_trade_day is None or self._last_trade_day < today_start:
+            self._trades_today = 0
+            self._last_trade_day = today_start
 
-            # Query trades opened today (not just closed)
-            query = """
-                SELECT COUNT(*) as count
-                FROM trades
-                WHERE entry_time >= $1
-            """
-            row = await self.db.fetchrow(query, today_start)
-            count = row["count"] if row else 0
-            self._logger.debug("Daily trade count: %d (since %s)", count, today_start.isoformat())
-            return count
-        except Exception as e:
-            self._logger.warning("Failed to get today's trade count: %s", e)
-            return 0
+        self._logger.debug("Daily trade count: %d (in-memory)", self._trades_today)
+        return self._trades_today
+
+    def increment_trade_count(self) -> None:
+        """Increment the daily trade counter. Call when a trade is opened."""
+        now = datetime.now(timezone.utc)
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        if self._last_trade_day is None or self._last_trade_day < today_start:
+            self._trades_today = 0
+            self._last_trade_day = today_start
+
+        self._trades_today += 1
+        self._logger.info("Daily trade count incremented to %d", self._trades_today)
 
     def _count_consecutive_stoplosses(self, trades: List[Dict]) -> int:
         """Count consecutive stoploss exits from most recent trade."""
@@ -792,276 +779,6 @@ class RiskManagerService(BaseService):
             "cooldown": cooldown_info,
         }
 
-
-    # =========================================================================
-    # Performance Metrics Calculation
-    # =========================================================================
-
-    async def calculate_performance_metrics(
-        self,
-        risk_free_rate: Decimal = Decimal("0.03")
-    ) -> PerformanceMetrics:
-        """
-        Calculate comprehensive performance metrics from trade history.
-
-        This method aggregates all closed trades and calculates:
-        - Risk-adjusted returns (Sharpe, Sortino, Calmar)
-        - Drawdown metrics
-        - Trade quality metrics (profit factor, win rate, expectancy)
-        - System Quality Number (SQN)
-
-        Args:
-            risk_free_rate: Annual risk-free rate for Sharpe/Sortino (default 3%)
-
-        Returns:
-            PerformanceMetrics object with all calculated values
-        """
-        # Fetch all closed trades
-        closed_trades = await self._get_all_closed_trades()
-        initial_equity = await self._get_initial_equity()
-        current_equity = self._current_equity
-
-        # Return empty metrics if no trades
-        if not closed_trades:
-            return PerformanceMetrics.empty_metrics(current_equity, initial_equity)
-
-        # Separate winning and losing trades
-        winning_trades = [t for t in closed_trades if (t.get("net_pnl") or 0) > 0]
-        losing_trades = [t for t in closed_trades if (t.get("net_pnl") or 0) < 0]
-
-        # Calculate basic stats
-        total_trades = len(closed_trades)
-        winning_count = len(winning_trades)
-        losing_count = len(losing_trades)
-
-        win_rate = Decimal(str(winning_count / total_trades)) if total_trades > 0 else Decimal("0")
-
-        # Calculate PnL metrics
-        total_pnl = sum(Decimal(str(t.get("net_pnl") or 0)) for t in closed_trades)
-        total_fees = sum(Decimal(str(t.get("fees") or 0)) for t in closed_trades)
-
-        total_pnl_pct = Decimal("0")
-        if initial_equity > 0:
-            total_pnl_pct = (total_pnl / initial_equity) * 100
-
-        # Gross profit and loss
-        gross_profit = sum(Decimal(str(t.get("net_pnl") or 0)) for t in winning_trades)
-        gross_loss = sum(Decimal(str(t.get("net_pnl") or 0)) for t in losing_trades)
-
-        # Average win/loss
-        avg_win = gross_profit / winning_count if winning_count > 0 else Decimal("0")
-        avg_loss = gross_loss / losing_count if losing_count > 0 else Decimal("0")
-
-        # Avg win/loss ratio
-        avg_win_loss_ratio = None
-        if avg_loss != 0:
-            avg_win_loss_ratio = abs(avg_win / avg_loss)
-
-        # Largest win and loss
-        pnls = [Decimal(str(t.get("net_pnl") or 0)) for t in closed_trades]
-        largest_win = max(pnls) if pnls else Decimal("0")
-        largest_loss = min(pnls) if pnls else Decimal("0")
-
-        # Average trade duration
-        durations = [t.get("duration_seconds") for t in closed_trades if t.get("duration_seconds")]
-        avg_duration = int(sum(durations) / len(durations)) if durations else None
-
-        # Calculate daily returns for Sharpe/Sortino
-        daily_returns = await self._calculate_daily_returns(closed_trades, initial_equity)
-
-        # Risk-adjusted metrics
-        sharpe_ratio = PerformanceMetrics.calculate_sharpe_ratio(daily_returns, risk_free_rate)
-        sortino_ratio = PerformanceMetrics.calculate_sortino_ratio(daily_returns, risk_free_rate)
-
-        # Drawdown metrics
-        equity_curve = await self._build_equity_curve(closed_trades, initial_equity)
-        max_dd_pct, max_dd_abs, current_dd_pct = PerformanceMetrics.calculate_max_drawdown(equity_curve)
-
-        # Calmar ratio (annualized return / max drawdown)
-        calmar_ratio = None
-        if max_dd_pct > 0 and total_pnl_pct != 0:
-            # Estimate annualized return based on trading period
-            trading_days = await self._calculate_trading_days(closed_trades)
-            if trading_days > 0:
-                annual_return_pct = (total_pnl_pct / trading_days) * 365
-                calmar_ratio = PerformanceMetrics.calculate_calmar_ratio(annual_return_pct, max_dd_pct)
-
-        # Trade quality metrics
-        profit_factor = PerformanceMetrics.calculate_profit_factor(gross_profit, gross_loss)
-        expectancy = PerformanceMetrics.calculate_expectancy(avg_win, avg_loss, win_rate)
-        sqn = PerformanceMetrics.calculate_sqn(pnls)
-
-        return PerformanceMetrics(
-            timestamp=datetime.now(timezone.utc),
-            equity=current_equity,
-            initial_equity=initial_equity,
-            total_pnl=total_pnl,
-            total_pnl_pct=total_pnl_pct,
-            sharpe_ratio=sharpe_ratio,
-            sortino_ratio=sortino_ratio,
-            calmar_ratio=calmar_ratio,
-            max_drawdown_pct=max_dd_pct,
-            max_drawdown_abs=max_dd_abs,
-            current_drawdown_pct=current_dd_pct,
-            profit_factor=profit_factor,
-            win_rate=win_rate,
-            avg_win=avg_win,
-            avg_loss=avg_loss,
-            avg_win_loss_ratio=avg_win_loss_ratio,
-            expectancy=expectancy,
-            sqn=sqn,
-            total_trades=total_trades,
-            winning_trades=winning_count,
-            losing_trades=losing_count,
-            total_fees=total_fees,
-            avg_trade_duration_seconds=avg_duration,
-            largest_win=largest_win,
-            largest_loss=largest_loss,
-        )
-
-    async def _get_all_closed_trades(self) -> List[Dict]:
-        """Get all closed trades from database."""
-        if not self.db:
-            return []
-
-        try:
-            rows = await self.db.fetch(
-                """
-                SELECT
-                    trade_id, symbol, side, size,
-                    entry_price, entry_time,
-                    exit_price, exit_time,
-                    gross_pnl, fees, net_pnl,
-                    strategy, duration_seconds, notes
-                FROM trades
-                WHERE is_closed = true
-                ORDER BY exit_time ASC
-                """
-            )
-            return [dict(row) for row in rows]
-        except Exception as e:
-            self._logger.error("Failed to fetch closed trades: %s", e)
-            return []
-
-    async def _get_initial_equity(self) -> Decimal:
-        """Get initial equity (earliest live_account record or config)."""
-        if not self.db:
-            return self._current_equity
-
-        try:
-            # Try to get the earliest equity record
-            row = await self.db.fetchrow(
-                """
-                SELECT equity FROM live_account
-                ORDER BY updated_at ASC
-                LIMIT 1
-                """
-            )
-
-            if row and row["equity"]:
-                return Decimal(str(row["equity"]))
-
-            # Fallback: calculate from current equity minus total PnL
-            pnl_row = await self.db.fetchrow(
-                """
-                SELECT COALESCE(SUM(net_pnl), 0) as total_pnl
-                FROM trades
-                WHERE is_closed = true
-                """
-            )
-
-            if pnl_row:
-                total_pnl = Decimal(str(pnl_row["total_pnl"]))
-                return self._current_equity - total_pnl
-
-            return self._current_equity
-
-        except Exception as e:
-            self._logger.warning("Failed to get initial equity: %s", e)
-            return self._current_equity
-
-    async def _calculate_daily_returns(
-        self,
-        trades: List[Dict],
-        initial_equity: Decimal
-    ) -> List[Decimal]:
-        """
-        Calculate daily returns from trade history.
-
-        Groups trades by exit date and calculates daily return %.
-        """
-        if not trades:
-            return []
-
-        from collections import defaultdict
-
-        # Group PnL by exit date
-        daily_pnl: Dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
-
-        for trade in trades:
-            exit_time = trade.get("exit_time")
-            if exit_time:
-                date_key = exit_time.date().isoformat()
-                daily_pnl[date_key] += Decimal(str(trade.get("net_pnl") or 0))
-
-        if not daily_pnl:
-            return []
-
-        # Calculate daily returns as % of running equity
-        running_equity = initial_equity
-        returns = []
-
-        for date_key in sorted(daily_pnl.keys()):
-            pnl = daily_pnl[date_key]
-            if running_equity > 0:
-                daily_return = pnl / running_equity
-                returns.append(daily_return)
-                running_equity += pnl
-
-        return returns
-
-    async def _build_equity_curve(
-        self,
-        trades: List[Dict],
-        initial_equity: Decimal
-    ) -> List[tuple[datetime, Decimal]]:
-        """
-        Build equity curve from trade history.
-
-        Returns list of (timestamp, equity) tuples.
-        """
-        if not trades:
-            return [(datetime.now(timezone.utc), initial_equity)]
-
-        curve = [(trades[0].get("entry_time") or datetime.now(timezone.utc), initial_equity)]
-        running_equity = initial_equity
-
-        for trade in trades:
-            exit_time = trade.get("exit_time")
-            net_pnl = Decimal(str(trade.get("net_pnl") or 0))
-
-            if exit_time:
-                running_equity += net_pnl
-                curve.append((exit_time, running_equity))
-
-        return curve
-
-    async def _calculate_trading_days(self, trades: List[Dict]) -> int:
-        """Calculate number of calendar days between first and last trade."""
-        if not trades:
-            return 0
-
-        first_trade = trades[0]
-        last_trade = trades[-1]
-
-        first_time = first_trade.get("entry_time")
-        last_time = last_trade.get("exit_time") or last_trade.get("entry_time")
-
-        if not first_time or not last_time:
-            return 0
-
-        delta = last_time - first_time
-        return max(1, delta.days)
 
 
 # =============================================================================

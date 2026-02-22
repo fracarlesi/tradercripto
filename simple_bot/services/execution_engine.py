@@ -319,7 +319,6 @@ class ExecutionEngineService(BaseService):
         
         # Background tasks
         self._position_monitor_task: Optional[asyncio.Task] = None
-        self._fill_sync_task: Optional[asyncio.Task] = None
         
         # Configuration shortcuts
         self._exec_config = self._bot_config.services.execution_engine
@@ -346,10 +345,6 @@ class ExecutionEngineService(BaseService):
             self._monitor_positions(),
             name="execution_position_monitor"
         )
-        self._fill_sync_task = asyncio.create_task(
-            self._sync_fills(),
-            name="execution_fill_sync"
-        )
         
         # Sync existing positions from exchange
         await self._sync_positions_from_exchange()
@@ -364,7 +359,7 @@ class ExecutionEngineService(BaseService):
         self._logger.info("Stopping ExecutionEngine service")
         
         # Cancel background tasks
-        for task in [self._position_monitor_task, self._fill_sync_task]:
+        for task in [self._position_monitor_task]:
             if task and not task.done():
                 task.cancel()
                 try:
@@ -508,10 +503,29 @@ class ExecutionEngineService(BaseService):
             order_result = await self._execute_order(signal, signal_id)
             
             if order_result:
-                # Publish order event
+                # Enrich signal with TP/SL prices for notifications
+                enriched_signal = dict(signal)
+                entry_price = order_result.avg_price or signal["entry_price"]
+                is_long = signal["direction"] == "long"
+
+                sl_price = signal.get("stop_price")
+                if sl_price is None:
+                    sl_pct = signal.get("sl_pct", self._bot_config.risk.stop_loss_pct / 100)
+                    sl_price = entry_price * (1 - sl_pct) if is_long else entry_price * (1 + sl_pct)
+                else:
+                    sl_price = float(sl_price)
+
+                tp_pct = signal.get("tp_pct", self._bot_config.risk.take_profit_pct / 100)
+                tp_price = entry_price * (1 + tp_pct) if is_long else entry_price * (1 - tp_pct)
+
+                enriched_signal["tp_price"] = round(tp_price, 2)
+                enriched_signal["sl_price"] = round(sl_price, 2)
+
+                # Publish order event for notifications
                 await self.publish(Topic.ORDERS, {
-                    **order_result.to_dict(),
-                    "signal": signal,
+                    "event": "order_submitted",
+                    "signal": enriched_signal,
+                    "order": order_result.to_dict(),
                 })
                 
                 # If filled, set TP/SL
@@ -1148,28 +1162,6 @@ class ExecutionEngineService(BaseService):
                 if self.active_positions[symbol].status == PositionStatus.OPEN:
                     await self._handle_position_closed(symbol)
 
-            # Persist positions to database for dashboard visibility
-            if self.db:
-                positions_for_db = [
-                    {
-                        "symbol": pos.symbol,
-                        "side": pos.side.upper(),  # DB expects LONG/SHORT uppercase
-                        "size": pos.size,
-                        "entry_price": pos.entry_price,
-                        "mark_price": pos.current_price,
-                        "unrealized_pnl": pos.unrealized_pnl,
-                        "leverage": pos.leverage,
-                        "liquidation_price": None,
-                        "margin_used": 0.0,
-                        "stop_loss_price": pos.sl_price,
-                        "take_profit_price": pos.tp_price,
-                        "strategy_id": pos.strategy,
-                    }
-                    for pos in self.active_positions.values()
-                    if pos.status == PositionStatus.OPEN
-                ]
-                await self.db.upsert_positions(positions_for_db)
-
         except Exception as e:
             self._logger.error("Failed to sync positions: %s", e)
     
@@ -1374,12 +1366,25 @@ class ExecutionEngineService(BaseService):
             position.unrealized_pnl
         )
 
-        # Publish fill/close event
+        # Calculate PnL percentage for notification
+        pnl_pct = 0.0
+        if position.entry_price > 0:
+            if position.side == "long":
+                pnl_pct = ((position.current_price - position.entry_price) / position.entry_price) * 100
+            else:
+                pnl_pct = ((position.entry_price - position.current_price) / position.entry_price) * 100
+
+        # Publish fill/close event with flat fields for notifications
         await self.publish(Topic.FILLS, {
             "event": "position_closed",
             "symbol": symbol,
+            "side": position.side,
+            "entry_price": position.entry_price,
+            "exit_price": position.current_price,
+            "realized_pnl": position.unrealized_pnl,
+            "pnl_pct": pnl_pct,
+            "exit_reason": position.exit_reason,
             "position": position.to_dict(),
-            "pnl": position.unrealized_pnl,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
         
@@ -1388,63 +1393,6 @@ class ExecutionEngineService(BaseService):
         await asyncio.sleep(1)
         if symbol in self.active_positions:
             del self.active_positions[symbol]
-    
-    async def _sync_fills(self) -> None:
-        """Background task to sync recent fills."""
-        self._logger.info("Fill sync started")
-        
-        processed_fill_ids: Set[str] = set()
-        
-        while True:
-            try:
-                fills = await self.client.get_fills(limit=20)
-                
-                for fill in fills:
-                    fill_id = fill.get("fillId")
-                    if fill_id and fill_id not in processed_fill_ids:
-                        processed_fill_ids.add(fill_id)
-                        await self._process_fill(fill)
-                
-                # Prevent memory growth
-                if len(processed_fill_ids) > 1000:
-                    processed_fill_ids = set(list(processed_fill_ids)[-500:])
-                
-                await asyncio.sleep(10)  # Check every 10 seconds
-                
-            except asyncio.CancelledError:
-                self._logger.debug("Fill sync cancelled")
-                break
-            except Exception as e:
-                self._logger.error("Fill sync error: %s", e)
-                await asyncio.sleep(30)
-    
-    async def _process_fill(self, fill: Dict[str, Any]) -> None:
-        """
-        Process a fill from the exchange.
-        
-        Args:
-            fill: Fill data from exchange
-        """
-        symbol = fill.get("symbol")
-        side = fill.get("side")
-        size = fill.get("size", 0)
-        price = fill.get("price", 0)
-        fee = fill.get("fee", 0)
-        
-        self.metrics.total_fees += fee
-        
-        # Publish fill event
-        await self.publish(Topic.FILLS, {
-            "fill_id": fill.get("fillId"),
-            "order_id": fill.get("orderId"),
-            "symbol": symbol,
-            "side": side,
-            "size": size,
-            "price": price,
-            "fee": fee,
-            "closed_pnl": fill.get("closedPnl", 0),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
     
     # =========================================================================
     # Error Handling

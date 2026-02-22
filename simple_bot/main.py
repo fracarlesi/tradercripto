@@ -868,8 +868,7 @@ class ConservativeBot:
                 logger.error("Health check error: %s", e)
 
     async def _check_health(self) -> None:
-        """Check health of all services and sync account data to dashboard."""
-        # Check service health
+        """Check health of all services."""
         for name, service in self._services.items():
             try:
                 health = await service.health_check()
@@ -877,33 +876,8 @@ class ConservativeBot:
                 if not health.healthy:
                     logger.warning("Service unhealthy: %s - %s", name, health.message)
 
-                # Update service health in database for dashboard
-                if self._db:
-                    try:
-                        await self._db.update_service_health(
-                            service_name=name,
-                            status="healthy" if health.healthy else "unhealthy",
-                            metadata={"message": health.message or "OK"},
-                        )
-                    except Exception as e:
-                        logger.debug("Could not update service health in DB: %s", e)
-
             except Exception as e:
                 logger.error("Health check failed for %s: %s", name, e)
-
-        # Sync account data to database for dashboard
-        if self._exchange and self._db:
-            try:
-                account = await self._exchange.get_account_state()
-                await self._db.update_account(
-                    equity=Decimal(str(account.get("equity", 0))),
-                    available_balance=Decimal(str(account.get("availableBalance", 0))),
-                    margin_used=Decimal(str(account.get("marginUsed", 0))),
-                    unrealized_pnl=Decimal(str(account.get("unrealizedPnl", 0))),
-                )
-                logger.debug("Account synced to DB: equity=$%.2f", account.get("equity", 0))
-            except Exception as e:
-                logger.debug("Could not sync account to DB: %s", e)
 
     # =========================================================================
     # Lifecycle

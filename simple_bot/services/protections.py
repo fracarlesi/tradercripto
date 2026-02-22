@@ -195,82 +195,12 @@ class StoplossGuard(Protection):
     """
     
     async def check(self, db: Any, telegram: Any) -> ProtectionResult:
-        """Check for excessive stoplosses in lookback period."""
-        lookback_min = self.config.get("lookback_period_min", 60)
-        sl_limit = self.config.get("stoploss_limit", 3)
-        stop_duration_min = self.config.get("stop_duration_min", 360)
-        
-        # Check existing protection
+        """Check for excessive stoplosses. Stubbed - no trades table."""
+        # Check existing protection from protections table
         existing = await self._get_active_protection(db)
         if existing:
             return existing
-        
-        # Count recent stoplosses
-        lookback_time = datetime.now(timezone.utc) - timedelta(minutes=lookback_min)
-        
-        try:
-            # Query trades table for stoploss exits
-            # Match various stoploss indicators in exit_reason or notes
-            rows = await db.fetch(
-                """
-                SELECT COUNT(*) as sl_count
-                FROM trades
-                WHERE (
-                    LOWER(exit_reason) LIKE '%stop%'
-                    OR LOWER(exit_reason) LIKE '%sl%'
-                    OR LOWER(notes) LIKE '%stop_loss%'
-                    OR LOWER(notes) LIKE '%sl %'
-                    OR LOWER(notes) LIKE '%stoploss%'
-                )
-                AND exit_time >= $1
-                AND exit_time IS NOT NULL
-                """,
-                lookback_time
-            )
-            
-            sl_count = rows[0]["sl_count"] if rows else 0
-            
-        except Exception as e:
-            self._logger.warning("Error counting stoplosses: %s", e)
-            return ProtectionResult(is_protected=False, protection_name=self.name)
-        
-        if sl_count >= sl_limit:
-            # Trigger protection
-            protected_until = datetime.now(timezone.utc) + timedelta(minutes=stop_duration_min)
-            
-            trigger_details = {
-                "stoploss_count": sl_count,
-                "lookback_period_min": lookback_min,
-                "threshold": sl_limit,
-            }
-            
-            await self._save_protection(db, protected_until, trigger_details)
-            
-            # Send Telegram alert
-            if telegram:
-                try:
-                    await telegram.send_custom_alert(
-                        f"*STOPLOSS GUARD TRIGGERED*\n"
-                        f"Detected {sl_count} stoplosses in last {lookback_min} minutes\n"
-                        f"Trading blocked until {protected_until.strftime('%Y-%m-%d %H:%M UTC')}",
-                        emoji="kill_switch"
-                    )
-                except Exception as e:
-                    self._logger.warning("Failed to send Telegram alert: %s", e)
-            
-            self._logger.warning(
-                "StoplossGuard triggered: %d stoplosses in %d min, blocked for %d min",
-                sl_count, lookback_min, stop_duration_min
-            )
-            
-            return ProtectionResult(
-                is_protected=True,
-                protection_name=self.name,
-                reason=f"{sl_count} stoplosses in {lookback_min} minutes",
-                protected_until=protected_until,
-                trigger_details=trigger_details,
-            )
-        
+
         return ProtectionResult(is_protected=False, protection_name=self.name)
 
 
@@ -292,103 +222,12 @@ class MaxDrawdownProtection(Protection):
     """
     
     async def check(self, db: Any, telegram: Any) -> ProtectionResult:
-        """Check for excessive drawdown in lookback period."""
-        lookback_min = self.config.get("lookback_period_min", 1440)
-        max_dd_pct = Decimal(str(self.config.get("max_drawdown_pct", 5.0)))
-        stop_duration_min = self.config.get("stop_duration_min", 720)
-        
-        # Check existing protection
+        """Check for excessive drawdown. Stubbed - no equity_snapshots table."""
+        # Check existing protection from protections table
         existing = await self._get_active_protection(db)
         if existing:
             return existing
-        
-        # Calculate drawdown in lookback period from equity snapshots
-        lookback_time = datetime.now(timezone.utc) - timedelta(minutes=lookback_min)
-        
-        try:
-            # Try to get equity history from equity_snapshots table
-            rows = await db.fetch(
-                """
-                SELECT equity, timestamp
-                FROM equity_snapshots
-                WHERE timestamp >= $1
-                ORDER BY timestamp ASC
-                """,
-                lookback_time
-            )
-            
-            if not rows or len(rows) < 2:
-                # Fallback: get current equity from live_account
-                account = await db.fetchrow(
-                    "SELECT equity FROM live_account WHERE id = 1"
-                )
-                if not account:
-                    return ProtectionResult(is_protected=False, protection_name=self.name)
-                
-                # Without equity history, we can't calculate drawdown
-                return ProtectionResult(is_protected=False, protection_name=self.name)
-            
-            equities = [Decimal(str(row["equity"])) for row in rows]
-            
-        except Exception as e:
-            self._logger.warning("Error fetching equity data: %s", e)
-            return ProtectionResult(is_protected=False, protection_name=self.name)
-        
-        # Calculate max drawdown
-        peak = equities[0]
-        max_dd = Decimal("0")
-        
-        for equity in equities:
-            if equity > peak:
-                peak = equity
-            
-            if peak > 0:
-                dd = ((peak - equity) / peak) * 100
-                if dd > max_dd:
-                    max_dd = dd
-        
-        current = equities[-1]
-        current_dd = ((peak - current) / peak * 100) if peak > 0 else Decimal("0")
-        
-        if current_dd > max_dd_pct:
-            # Trigger protection
-            protected_until = datetime.now(timezone.utc) + timedelta(minutes=stop_duration_min)
-            
-            trigger_details = {
-                "drawdown_pct": float(current_dd),
-                "max_drawdown_pct_threshold": float(max_dd_pct),
-                "peak_equity": float(peak),
-                "current_equity": float(current),
-            }
-            
-            await self._save_protection(db, protected_until, trigger_details)
-            
-            # Send Telegram alert
-            if telegram:
-                try:
-                    await telegram.send_custom_alert(
-                        f"*MAX DRAWDOWN PROTECTION TRIGGERED*\n"
-                        f"Drawdown: {current_dd:.2f}% (threshold: {max_dd_pct}%)\n"
-                        f"Peak: ${peak:.2f} -> Current: ${current:.2f}\n"
-                        f"Trading blocked until {protected_until.strftime('%Y-%m-%d %H:%M UTC')}",
-                        emoji="kill_switch"
-                    )
-                except Exception as e:
-                    self._logger.warning("Failed to send Telegram alert: %s", e)
-            
-            self._logger.warning(
-                "MaxDrawdownProtection triggered: %.2f%% DD (threshold: %.2f%%)",
-                current_dd, max_dd_pct
-            )
-            
-            return ProtectionResult(
-                is_protected=True,
-                protection_name=self.name,
-                reason=f"Drawdown {current_dd:.2f}% exceeds {max_dd_pct}%",
-                protected_until=protected_until,
-                trigger_details=trigger_details,
-            )
-        
+
         return ProtectionResult(is_protected=False, protection_name=self.name)
 
 
@@ -412,52 +251,7 @@ class CooldownPeriodProtection(Protection):
     """
     
     async def check(self, db: Any, telegram: Any) -> ProtectionResult:
-        """Check if minimum time has passed since last trade."""
-        cooldown_min = self.config.get("cooldown_minutes", 5)
-        
-        try:
-            # Get last trade entry time
-            row = await db.fetchrow(
-                """
-                SELECT entry_time
-                FROM trades
-                WHERE status IN ('open', 'closed')
-                AND entry_time IS NOT NULL
-                ORDER BY entry_time DESC
-                LIMIT 1
-                """
-            )
-            
-            if not row or not row["entry_time"]:
-                return ProtectionResult(is_protected=False, protection_name=self.name)
-            
-            last_trade_time = row["entry_time"]
-            
-            # Ensure timezone awareness
-            if last_trade_time.tzinfo is None:
-                last_trade_time = last_trade_time.replace(tzinfo=timezone.utc)
-            
-            time_since_last = (datetime.now(timezone.utc) - last_trade_time).total_seconds() / 60
-            
-        except Exception as e:
-            self._logger.warning("Error checking last trade time: %s", e)
-            return ProtectionResult(is_protected=False, protection_name=self.name)
-        
-        if time_since_last < cooldown_min:
-            protected_until = last_trade_time + timedelta(minutes=cooldown_min)
-            
-            return ProtectionResult(
-                is_protected=True,
-                protection_name=self.name,
-                reason=f"Cooldown: {time_since_last:.1f}/{cooldown_min} minutes elapsed",
-                protected_until=protected_until,
-                trigger_details={
-                    "time_since_last_min": round(time_since_last, 2),
-                    "cooldown_minutes": cooldown_min,
-                    "last_trade_time": last_trade_time.isoformat(),
-                },
-            )
-        
+        """Check if minimum time has passed since last trade. Stubbed - no trades table."""
         return ProtectionResult(is_protected=False, protection_name=self.name)
 
 
@@ -479,82 +273,12 @@ class LowPerformanceProtection(Protection):
     """
     
     async def check(self, db: Any, telegram: Any) -> ProtectionResult:
-        """Check if recent performance is acceptable."""
-        min_trades = self.config.get("min_trades", 20)
-        min_win_rate = Decimal(str(self.config.get("min_win_rate", 0.30)))
-        stop_duration_min = self.config.get("stop_duration_min", 1440)
-        
-        # Check existing protection
+        """Check if recent performance is acceptable. Stubbed - no trades table."""
+        # Check existing protection from protections table
         existing = await self._get_active_protection(db)
         if existing:
             return existing
-        
-        try:
-            # Get recent closed trades
-            rows = await db.fetch(
-                """
-                SELECT net_pnl
-                FROM trades
-                WHERE status = 'closed'
-                AND net_pnl IS NOT NULL
-                ORDER BY exit_time DESC
-                LIMIT $1
-                """,
-                min_trades
-            )
-            
-            if len(rows) < min_trades:
-                # Not enough trades to evaluate
-                return ProtectionResult(is_protected=False, protection_name=self.name)
-            
-        except Exception as e:
-            self._logger.warning("Error fetching recent trades: %s", e)
-            return ProtectionResult(is_protected=False, protection_name=self.name)
-        
-        # Calculate win rate
-        winning_trades = len([r for r in rows if Decimal(str(r["net_pnl"])) > 0])
-        total_trades = len(rows)
-        win_rate = Decimal(winning_trades) / Decimal(total_trades)
-        
-        if win_rate < min_win_rate:
-            # Trigger protection
-            protected_until = datetime.now(timezone.utc) + timedelta(minutes=stop_duration_min)
-            
-            trigger_details = {
-                "win_rate": float(win_rate),
-                "min_win_rate_threshold": float(min_win_rate),
-                "winning_trades": winning_trades,
-                "total_trades": total_trades,
-            }
-            
-            await self._save_protection(db, protected_until, trigger_details)
-            
-            # Send Telegram alert
-            if telegram:
-                try:
-                    await telegram.send_custom_alert(
-                        f"*LOW PERFORMANCE PROTECTION TRIGGERED*\n"
-                        f"Win rate: {win_rate:.1%} (threshold: {min_win_rate:.1%})\n"
-                        f"Wins: {winning_trades}/{total_trades} trades\n"
-                        f"Trading blocked until {protected_until.strftime('%Y-%m-%d %H:%M UTC')}",
-                        emoji="kill_switch"
-                    )
-                except Exception as e:
-                    self._logger.warning("Failed to send Telegram alert: %s", e)
-            
-            self._logger.warning(
-                "LowPerformanceProtection triggered: %.1f%% win rate (threshold: %.1f%%)",
-                win_rate * 100, min_win_rate * 100
-            )
-            
-            return ProtectionResult(
-                is_protected=True,
-                protection_name=self.name,
-                reason=f"Win rate {win_rate:.1%} below {min_win_rate:.1%}",
-                protected_until=protected_until,
-                trigger_details=trigger_details,
-            )
-        
+
         return ProtectionResult(is_protected=False, protection_name=self.name)
 
 

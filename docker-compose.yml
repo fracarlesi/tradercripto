@@ -38,25 +38,5 @@ services:
       - ./logs:/app/logs
     restart: unless-stopped
 
-  dashboard:
-    build: .
-    container_name: hlquantbot_dashboard
-    command: ["python", "-m", "simple_bot.dashboard.app"]
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      - DATABASE_URL=postgresql://trader:trader_password@postgres:5432/trading_db
-      - DB_HOST=postgres
-      - DB_PORT=5432
-      - DB_NAME=trading_db
-      - DB_USER=trader
-      - DB_PASSWORD=trader_password
-    env_file:
-      - .env
-    ports:
-      - "5000:5611"
-    restart: unless-stopped
-
 volumes:
   postgres_data:

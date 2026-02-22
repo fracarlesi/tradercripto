@@ -107,7 +107,7 @@ class TestProtectionResult:
 # =============================================================================
 
 class TestStoplossGuard:
-    """Tests for StoplossGuard protection."""
+    """Tests for StoplossGuard protection (stubbed - no trades table)."""
 
     @pytest.fixture
     def stoploss_guard(self):
@@ -121,60 +121,27 @@ class TestStoplossGuard:
         return StoplossGuard(config)
 
     @pytest.mark.asyncio
-    async def test_no_protection_on_zero_stoplosses(self, stoploss_guard, mock_db, mock_telegram):
-        """No protection when no recent stoplosses."""
-        mock_db.fetch.return_value = [{"sl_count": 0}]
-        
-        result = await stoploss_guard.check(mock_db, mock_telegram)
-        
-        assert result.is_protected is False
-        mock_telegram.send_custom_alert.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_no_protection_on_two_stoplosses(self, stoploss_guard, mock_db, mock_telegram):
-        """No protection with only 2 stoplosses (threshold is 3)."""
-        mock_db.fetch.return_value = [{"sl_count": 2}]
-        
-        result = await stoploss_guard.check(mock_db, mock_telegram)
-        
-        assert result.is_protected is False
-
-    @pytest.mark.asyncio
-    async def test_protection_triggers_on_three_stoplosses(self, stoploss_guard, mock_db, mock_telegram):
-        """Protection triggers on 3+ stoplosses."""
-        # No existing protection
+    async def test_no_protection_stubbed(self, stoploss_guard, mock_db, mock_telegram):
+        """No protection since check() is stubbed (no trades table)."""
         mock_db.fetchrow.return_value = None
-        # 3 stoplosses found
-        mock_db.fetch.return_value = [{"sl_count": 3}]
-        
+
         result = await stoploss_guard.check(mock_db, mock_telegram)
-        
-        assert result.is_protected is True
-        assert result.protection_name == "StoplossGuard"
-        assert "3" in result.reason
-        assert result.trigger_details["stoploss_count"] == 3
-        
-        # Should save protection to DB
-        mock_db.execute.assert_called_once()
-        
-        # Should send Telegram alert
-        mock_telegram.send_custom_alert.assert_called_once()
+
+        assert result.is_protected is False
 
     @pytest.mark.asyncio
     async def test_existing_protection_returned(self, stoploss_guard, mock_db, mock_telegram):
-        """Returns existing active protection."""
+        """Returns existing active protection from protections table."""
         until = datetime.now(timezone.utc) + timedelta(hours=4)
         mock_db.fetchrow.return_value = {
             "protected_until": until,
             "trigger_details": json.dumps({"stoploss_count": 3}),
         }
-        
+
         result = await stoploss_guard.check(mock_db, mock_telegram)
-        
+
         assert result.is_protected is True
         assert result.reason == "Active from previous trigger"
-        # Should not query for new stoplosses or send new alert
-        mock_telegram.send_custom_alert.assert_not_called()
 
 
 # =============================================================================
@@ -182,7 +149,7 @@ class TestStoplossGuard:
 # =============================================================================
 
 class TestMaxDrawdownProtection:
-    """Tests for MaxDrawdownProtection."""
+    """Tests for MaxDrawdownProtection (stubbed - no equity_snapshots table)."""
 
     @pytest.fixture
     def drawdown_protection(self):
@@ -196,52 +163,27 @@ class TestMaxDrawdownProtection:
         return MaxDrawdownProtection(config)
 
     @pytest.mark.asyncio
-    async def test_no_protection_under_threshold(self, drawdown_protection, mock_db, mock_telegram):
-        """No protection when drawdown < 5%."""
-        # No existing protection
+    async def test_no_protection_stubbed(self, drawdown_protection, mock_db, mock_telegram):
+        """No protection since check() is stubbed (no equity_snapshots table)."""
         mock_db.fetchrow.return_value = None
-        # Equity history with 3% drawdown (peak 100, current 97)
-        mock_db.fetch.return_value = [
-            {"equity": Decimal("100"), "timestamp": datetime.now(timezone.utc) - timedelta(hours=12)},
-            {"equity": Decimal("98"), "timestamp": datetime.now(timezone.utc) - timedelta(hours=6)},
-            {"equity": Decimal("97"), "timestamp": datetime.now(timezone.utc)},
-        ]
-        
+
         result = await drawdown_protection.check(mock_db, mock_telegram)
-        
+
         assert result.is_protected is False
 
     @pytest.mark.asyncio
-    async def test_protection_triggers_over_threshold(self, drawdown_protection, mock_db, mock_telegram):
-        """Protection triggers when drawdown > 5%."""
-        # No existing protection
-        mock_db.fetchrow.return_value = None
-        # Equity history with 7% drawdown (peak 100, current 93)
-        mock_db.fetch.return_value = [
-            {"equity": Decimal("100"), "timestamp": datetime.now(timezone.utc) - timedelta(hours=12)},
-            {"equity": Decimal("95"), "timestamp": datetime.now(timezone.utc) - timedelta(hours=6)},
-            {"equity": Decimal("93"), "timestamp": datetime.now(timezone.utc)},
-        ]
-        
+    async def test_existing_protection_returned(self, drawdown_protection, mock_db, mock_telegram):
+        """Returns existing active protection from protections table."""
+        until = datetime.now(timezone.utc) + timedelta(hours=12)
+        mock_db.fetchrow.return_value = {
+            "protected_until": until,
+            "trigger_details": json.dumps({"drawdown_pct": 7.0}),
+        }
+
         result = await drawdown_protection.check(mock_db, mock_telegram)
-        
+
         assert result.is_protected is True
-        assert result.protection_name == "MaxDrawdownProtection"
-        assert "7.00%" in result.reason or "7.0%" in result.reason
-        assert result.trigger_details["drawdown_pct"] == 7.0
-        
-        # Should send alert
-        mock_telegram.send_custom_alert.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_no_protection_insufficient_data(self, drawdown_protection, mock_db, mock_telegram):
-        """No protection when insufficient equity data."""
-        mock_db.fetchrow.return_value = None
-        mock_db.fetch.return_value = []  # No equity history
-        
-        result = await drawdown_protection.check(mock_db, mock_telegram)
-        
-        assert result.is_protected is False
+        assert result.reason == "Active from previous trigger"
 
 
 # =============================================================================
@@ -249,7 +191,7 @@ class TestMaxDrawdownProtection:
 # =============================================================================
 
 class TestCooldownPeriodProtection:
-    """Tests for CooldownPeriodProtection."""
+    """Tests for CooldownPeriodProtection (stubbed - no trades table)."""
 
     @pytest.fixture
     def cooldown_protection(self):
@@ -261,36 +203,10 @@ class TestCooldownPeriodProtection:
         return CooldownPeriodProtection(config)
 
     @pytest.mark.asyncio
-    async def test_no_protection_no_trades(self, cooldown_protection, mock_db, mock_telegram):
-        """No protection when no previous trades."""
-        mock_db.fetchrow.return_value = None
-        
+    async def test_no_protection_stubbed(self, cooldown_protection, mock_db, mock_telegram):
+        """No protection since check() is stubbed (no trades table)."""
         result = await cooldown_protection.check(mock_db, mock_telegram)
-        
-        assert result.is_protected is False
 
-    @pytest.mark.asyncio
-    async def test_protection_within_cooldown(self, cooldown_protection, mock_db, mock_telegram):
-        """Protection active when last trade was within cooldown period."""
-        # Last trade 3 minutes ago (cooldown is 5 min)
-        last_trade_time = datetime.now(timezone.utc) - timedelta(minutes=3)
-        mock_db.fetchrow.return_value = {"entry_time": last_trade_time}
-        
-        result = await cooldown_protection.check(mock_db, mock_telegram)
-        
-        assert result.is_protected is True
-        assert "3.0/5" in result.reason or "Cooldown" in result.reason
-        assert result.trigger_details["cooldown_minutes"] == 5
-
-    @pytest.mark.asyncio
-    async def test_no_protection_after_cooldown(self, cooldown_protection, mock_db, mock_telegram):
-        """No protection when cooldown has elapsed."""
-        # Last trade 10 minutes ago (cooldown is 5 min)
-        last_trade_time = datetime.now(timezone.utc) - timedelta(minutes=10)
-        mock_db.fetchrow.return_value = {"entry_time": last_trade_time}
-        
-        result = await cooldown_protection.check(mock_db, mock_telegram)
-        
         assert result.is_protected is False
 
 
@@ -299,7 +215,7 @@ class TestCooldownPeriodProtection:
 # =============================================================================
 
 class TestLowPerformanceProtection:
-    """Tests for LowPerformanceProtection."""
+    """Tests for LowPerformanceProtection (stubbed - no trades table)."""
 
     @pytest.fixture
     def low_performance_protection(self):
@@ -313,62 +229,27 @@ class TestLowPerformanceProtection:
         return LowPerformanceProtection(config)
 
     @pytest.mark.asyncio
-    async def test_no_protection_insufficient_trades(self, low_performance_protection, mock_db, mock_telegram):
-        """No protection when less than min_trades."""
+    async def test_no_protection_stubbed(self, low_performance_protection, mock_db, mock_telegram):
+        """No protection since check() is stubbed (no trades table)."""
         mock_db.fetchrow.return_value = None
-        # Only 10 trades (need 20)
-        mock_db.fetch.return_value = [{"net_pnl": Decimal("-1")} for _ in range(10)]
-        
+
         result = await low_performance_protection.check(mock_db, mock_telegram)
-        
+
         assert result.is_protected is False
 
     @pytest.mark.asyncio
-    async def test_no_protection_good_win_rate(self, low_performance_protection, mock_db, mock_telegram):
-        """No protection when win rate >= 30%."""
-        mock_db.fetchrow.return_value = None
-        # 8 wins, 12 losses = 40% win rate (above 30%)
-        trades = [{"net_pnl": Decimal("10")} for _ in range(8)]
-        trades.extend([{"net_pnl": Decimal("-5")} for _ in range(12)])
-        mock_db.fetch.return_value = trades
-        
-        result = await low_performance_protection.check(mock_db, mock_telegram)
-        
-        assert result.is_protected is False
+    async def test_existing_protection_returned(self, low_performance_protection, mock_db, mock_telegram):
+        """Returns existing active protection from protections table."""
+        until = datetime.now(timezone.utc) + timedelta(hours=24)
+        mock_db.fetchrow.return_value = {
+            "protected_until": until,
+            "trigger_details": json.dumps({"win_rate": 0.15}),
+        }
 
-    @pytest.mark.asyncio
-    async def test_protection_triggers_low_win_rate(self, low_performance_protection, mock_db, mock_telegram):
-        """Protection triggers when win rate < 30%."""
-        mock_db.fetchrow.return_value = None
-        # 4 wins, 16 losses = 20% win rate (below 30%)
-        trades = [{"net_pnl": Decimal("10")} for _ in range(4)]
-        trades.extend([{"net_pnl": Decimal("-5")} for _ in range(16)])
-        mock_db.fetch.return_value = trades
-        
         result = await low_performance_protection.check(mock_db, mock_telegram)
-        
+
         assert result.is_protected is True
-        assert result.protection_name == "LowPerformanceProtection"
-        assert result.trigger_details["win_rate"] == 0.2
-        assert result.trigger_details["winning_trades"] == 4
-        assert result.trigger_details["total_trades"] == 20
-        
-        # Should send alert
-        mock_telegram.send_custom_alert.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_edge_case_exactly_threshold(self, low_performance_protection, mock_db, mock_telegram):
-        """No protection at exactly 30% (threshold is <30%)."""
-        mock_db.fetchrow.return_value = None
-        # 6 wins, 14 losses = 30% win rate (exactly at threshold)
-        trades = [{"net_pnl": Decimal("10")} for _ in range(6)]
-        trades.extend([{"net_pnl": Decimal("-5")} for _ in range(14)])
-        mock_db.fetch.return_value = trades
-        
-        result = await low_performance_protection.check(mock_db, mock_telegram)
-        
-        # 30% is NOT below 30%, so no protection
-        assert result.is_protected is False
+        assert result.reason == "Active from previous trigger"
 
 
 # =============================================================================
@@ -438,26 +319,20 @@ class TestProtectionManager:
 
     @pytest.mark.asyncio
     async def test_check_all_no_protections_active(self, manager_config, mock_db, mock_telegram):
-        """Test check_all when no protections are triggered."""
+        """Test check_all when no protections are triggered (stubbed checks)."""
         manager = ProtectionManager(manager_config, mock_db, mock_telegram)
-        
-        # Mock all protections returning not protected
+
+        # No existing active protections in protections table
         mock_db.fetchrow.return_value = None
-        mock_db.fetch.side_effect = [
-            [{"sl_count": 0}],  # StoplossGuard - no stoplosses
-            [],  # MaxDrawdown - no equity data
-            [],  # LowPerformance - no trades
-        ]
-        
+
         can_trade, result = await manager.check_all_protections()
-        
+
         assert can_trade is True
         assert result is None
 
     @pytest.mark.asyncio
     async def test_check_all_one_protection_active(self, mock_db, mock_telegram):
-        """Test check_all stops at first active protection."""
-        # Only StoplossGuard configured
+        """Test check_all stops at first active protection (from DB)."""
         config = {
             "protections": [
                 {
@@ -469,13 +344,16 @@ class TestProtectionManager:
             ]
         }
         manager = ProtectionManager(config, mock_db, mock_telegram)
-        
-        # StoplossGuard triggers
-        mock_db.fetchrow.return_value = None
-        mock_db.fetch.return_value = [{"sl_count": 5}]
-        
+
+        # Existing active protection in protections table
+        until = datetime.now(timezone.utc) + timedelta(hours=4)
+        mock_db.fetchrow.return_value = {
+            "protected_until": until,
+            "trigger_details": json.dumps({"stoploss_count": 5}),
+        }
+
         can_trade, result = await manager.check_all_protections()
-        
+
         assert can_trade is False
         assert result is not None
         assert result.protection_name == "StoplossGuard"
@@ -498,13 +376,16 @@ class TestProtectionManager:
             ]
         }
         manager = ProtectionManager(config, mock_db, mock_telegram)
-        
-        # StoplossGuard triggers
-        mock_db.fetchrow.return_value = None
-        mock_db.fetch.return_value = [{"sl_count": 5}]
-        
+
+        # Existing active protection for StoplossGuard
+        until = datetime.now(timezone.utc) + timedelta(hours=4)
+        mock_db.fetchrow.return_value = {
+            "protected_until": until,
+            "trigger_details": json.dumps({"stoploss_count": 5}),
+        }
+
         active = await manager.get_active_protections()
-        
+
         assert len(active) >= 1
         names = [p.protection_name for p in active]
         assert "StoplossGuard" in names
@@ -573,32 +454,37 @@ class TestProtectionIntegration:
 
     @pytest.mark.asyncio
     async def test_multiple_protections_first_wins(self, mock_db, mock_telegram):
-        """First triggered protection blocks further checks."""
+        """First triggered protection blocks further checks (via existing DB record)."""
         config = {
             "protections": [
-                {
-                    "name": "CooldownPeriod",
-                    "cooldown_minutes": 5,
-                },
                 {
                     "name": "StoplossGuard",
                     "lookback_period_min": 60,
                     "stoploss_limit": 3,
                     "stop_duration_min": 360,
                 },
+                {
+                    "name": "MaxDrawdown",
+                    "lookback_period_min": 1440,
+                    "max_drawdown_pct": 5.0,
+                    "stop_duration_min": 720,
+                },
             ]
         }
         manager = ProtectionManager(config, mock_db, mock_telegram)
-        
-        # CooldownPeriod triggers (last trade 2 min ago)
-        last_trade_time = datetime.now(timezone.utc) - timedelta(minutes=2)
-        mock_db.fetchrow.return_value = {"entry_time": last_trade_time}
-        
+
+        # Existing active protection in DB for StoplossGuard
+        until = datetime.now(timezone.utc) + timedelta(hours=4)
+        mock_db.fetchrow.return_value = {
+            "protected_until": until,
+            "trigger_details": json.dumps({"stoploss_count": 5}),
+        }
+
         can_trade, result = await manager.check_all_protections()
-        
+
         assert can_trade is False
-        assert result.protection_name == "CooldownPeriodProtection"
-        # StoplossGuard should not be checked since CooldownPeriod triggered first
+        assert result.protection_name == "StoplossGuard"
+        # MaxDrawdown should not be checked since StoplossGuard triggered first
 
     @pytest.mark.asyncio
     async def test_db_error_does_not_block_trading(self, mock_db, mock_telegram):

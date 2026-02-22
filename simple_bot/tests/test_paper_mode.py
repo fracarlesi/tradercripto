@@ -274,15 +274,7 @@ class TestPaperModeStrategy:
 
 
 class TestDailyTradeLimitIntegration:
-    """Test that daily trade limit is respected."""
-
-    @pytest.fixture
-    def mock_db(self):
-        """Create mock database with trade count support."""
-        db = MagicMock()
-        # Mock the fetchrow method to return a row with 'count'
-        db.fetchrow = AsyncMock(return_value={"count": 0})
-        return db
+    """Test that daily trade limit is respected (in-memory counter)."""
 
     @pytest.fixture
     def mock_bus(self):
@@ -303,18 +295,18 @@ class TestDailyTradeLimitIntegration:
         )
 
     @pytest.mark.asyncio
-    async def test_daily_limit_blocks_after_max_trades(self, mock_db, mock_bus, risk_config):
+    async def test_daily_limit_blocks_after_max_trades(self, mock_bus, risk_config):
         """Test that new trades are blocked after daily limit reached."""
-        # Simulate 3 trades already executed today
-        mock_db.fetchrow = AsyncMock(return_value={"count": 3})
-
         risk_manager = RiskManagerService(
             bus=mock_bus,
-            db=mock_db,
+            db=None,
             config=risk_config,
         )
 
-        # Check today's trade count
+        # Simulate 3 trades via in-memory counter
+        for _ in range(3):
+            risk_manager.increment_trade_count()
+
         count = await risk_manager._get_today_trade_count()
         assert count == 3
 
@@ -322,16 +314,17 @@ class TestDailyTradeLimitIntegration:
         assert count >= risk_config.max_daily_trades
 
     @pytest.mark.asyncio
-    async def test_daily_limit_allows_before_max(self, mock_db, mock_bus, risk_config):
+    async def test_daily_limit_allows_before_max(self, mock_bus, risk_config):
         """Test that trades are allowed when under daily limit."""
-        # Simulate 2 trades executed today
-        mock_db.fetchrow = AsyncMock(return_value={"count": 2})
-
         risk_manager = RiskManagerService(
             bus=mock_bus,
-            db=mock_db,
+            db=None,
             config=risk_config,
         )
+
+        # Simulate 2 trades via in-memory counter
+        for _ in range(2):
+            risk_manager.increment_trade_count()
 
         count = await risk_manager._get_today_trade_count()
         assert count == 2
