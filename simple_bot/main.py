@@ -35,6 +35,7 @@ import logging
 import os
 import signal
 import sys
+import time as _time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -863,7 +864,6 @@ class ConservativeBot:
             # Pass through LLM veto
             llm_service = self._services.get("llm_veto")
             if llm_service:
-                import time as _time
                 _t0 = _time.monotonic()
                 approved, decision = await llm_service.evaluate_setup(setup)
                 _latency_ms = int((_time.monotonic() - _t0) * 1000)

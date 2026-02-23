@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS llm_decisions (
 
     -- LLM decision
     decision            VARCHAR(5) NOT NULL,
-    confidence          NUMERIC(4,2),
+    confidence          NUMERIC(5,4),
     reason              TEXT,
     latency_ms          INTEGER,
 

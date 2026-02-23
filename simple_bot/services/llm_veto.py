@@ -348,7 +348,7 @@ DIRECTION CHECK:
 - DENY only if price action shows a CLEAR REVERSAL (multiple candles, strong momentum shift), not just a single candle
 
 DENY when you see 2+ of these red flags:
-- RSI > 70 for LONG or RSI < 30 for SHORT (entering at extremes)
+- RSI > 62 for LONG or RSI < 42 for SHORT (near extremes for this setup)
 - ADX < 22 (weak trend, likely to chop)
 - EMA spread is tiny (<0.05%) suggesting the crossover is marginal
 - Recent losses on same symbol (3+ consecutive losses)
