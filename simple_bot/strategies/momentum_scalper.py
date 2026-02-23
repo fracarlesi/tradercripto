@@ -7,7 +7,7 @@ for BTC scalping on 15m timeframe.
 
 Entry conditions:
 - LONG: EMA9 > EMA21 + RSI(14) between 30-65
-- SHORT: EMA9 < EMA21 + RSI(14) between 35-70
+- SHORT: EMA9 < EMA21 + RSI(14) between 40-70
 - Volatility filter: ATR% > min_atr_pct
 
 Exit:
@@ -41,13 +41,13 @@ class MomentumScalperStrategy(BaseStrategy):
 
         self.allow_short = self.config.get("allow_short", True)
         self.min_atr_pct = self.config.get("min_atr_pct", 0.1)
-        self.stop_loss_pct = self.config.get("stop_loss_pct", 0.4)
-        self.take_profit_pct = self.config.get("take_profit_pct", 0.8)
+        self.stop_loss_pct = self.config.get("stop_loss_pct", 0.8)
+        self.take_profit_pct = self.config.get("take_profit_pct", 1.6)
 
         # RSI thresholds
         self.rsi_long_min = self.config.get("rsi_long_min", 30)
         self.rsi_long_max = self.config.get("rsi_long_max", 65)
-        self.rsi_short_min = self.config.get("rsi_short_min", 35)
+        self.rsi_short_min = self.config.get("rsi_short_min", 40)
         self.rsi_short_max = self.config.get("rsi_short_max", 70)
 
         self._logger.info(
@@ -75,7 +75,7 @@ class MomentumScalperStrategy(BaseStrategy):
         Evaluate market state for EMA crossover setup.
 
         LONG: EMA9 > EMA21 + RSI in [30, 65]
-        SHORT: EMA9 < EMA21 + RSI in [35, 70]
+        SHORT: EMA9 < EMA21 + RSI in [40, 70]
         """
         # Check EMA9/EMA21 are available
         if state.ema9 is None or state.ema21 is None:
@@ -252,7 +252,7 @@ class MomentumScalperStrategy(BaseStrategy):
             # Best RSI for shorts: 45-60
             if 45 <= rsi <= 60:
                 score += Decimal("0.15")
-            elif 35 <= rsi < 45 or 60 < rsi <= 70:
+            elif 40 <= rsi < 45 or 60 < rsi <= 70:
                 score += Decimal("0.08")
 
         # ATR bonus (max +0.15)

@@ -516,14 +516,11 @@ class ExecutionEngineService(BaseService):
                 entry_price = order_result.avg_price or signal["entry_price"]
                 is_long = signal["direction"] == "long"
 
-                sl_price = signal.get("stop_price")
-                if sl_price is None:
-                    sl_pct = signal.get("sl_pct", self._bot_config.risk.stop_loss_pct / 100)
-                    sl_price = entry_price * (1 - sl_pct) if is_long else entry_price * (1 + sl_pct)
-                else:
-                    sl_price = float(sl_price)
+                # Always recalculate TP/SL from fill price using configured %
+                sl_pct = self._bot_config.risk.stop_loss_pct / 100
+                sl_price = entry_price * (1 - sl_pct) if is_long else entry_price * (1 + sl_pct)
 
-                tp_pct = signal.get("tp_pct", self._bot_config.risk.take_profit_pct / 100)
+                tp_pct = self._bot_config.risk.take_profit_pct / 100
                 tp_price = entry_price * (1 + tp_pct) if is_long else entry_price * (1 - tp_pct)
 
                 enriched_signal["tp_price"] = round(tp_price, 6)
@@ -674,17 +671,62 @@ class ExecutionEngineService(BaseService):
                 
                 if order.status == OrderStatus.FILLED:
                     order.filled_at = datetime.now(timezone.utc)
-                    
-                    # Check slippage
+
+                    # Check slippage - reject trade if excessive
                     if order.avg_price:
-                        self._record_slippage(entry_price, order.avg_price, is_buy)
-                
+                        slippage_pct = self._record_slippage(entry_price, order.avg_price, is_buy)
+
+                        if abs(slippage_pct) > self._exec_config.max_slippage_pct:
+                            self._logger.error(
+                                "REJECTING %s %s: slippage %.4f%% exceeds max %.2f%% — closing position",
+                                side.upper(),
+                                symbol,
+                                slippage_pct,
+                                self._exec_config.max_slippage_pct,
+                            )
+
+                            # Close the position immediately
+                            try:
+                                await self.client.place_order(
+                                    symbol=symbol,
+                                    is_buy=not is_buy,
+                                    size=order.filled_size or size,
+                                    price=None,
+                                    order_type="market",
+                                    reduce_only=True,
+                                )
+                                self._logger.info("Slippage-rejected position closed for %s", symbol)
+                            except Exception as close_err:
+                                self._logger.error(
+                                    "Failed to close slippage-rejected position %s: %s",
+                                    symbol,
+                                    close_err,
+                                )
+
+                            # Publish rejection event
+                            await self.publish(Topic.ORDERS, {
+                                "event": "slippage_rejected",
+                                "symbol": symbol,
+                                "direction": direction,
+                                "expected_price": entry_price,
+                                "fill_price": order.avg_price,
+                                "slippage_pct": round(slippage_pct, 4),
+                                "max_slippage_pct": self._exec_config.max_slippage_pct,
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                            })
+
+                            order.status = OrderStatus.REJECTED
+                            self.metrics.orders_rejected += 1
+                            self.metrics.orders_submitted += 1
+                            self.metrics.last_execution_time = datetime.now(timezone.utc)
+                            return None
+
                 self.metrics.orders_submitted += 1
                 if order.status == OrderStatus.FILLED:
                     self.metrics.orders_filled += 1
-                
+
                 self.metrics.last_execution_time = datetime.now(timezone.utc)
-                
+
                 return order
                 
             except Exception as e:
@@ -837,44 +879,43 @@ class ExecutionEngineService(BaseService):
         return status_map.get(status.lower(), OrderStatus.SUBMITTED)
     
     def _record_slippage(
-        self, 
-        expected_price: float, 
+        self,
+        expected_price: float,
         actual_price: float,
         is_buy: bool
-    ) -> None:
-        """Record slippage for metrics."""
+    ) -> float:
+        """
+        Record slippage for metrics and return the slippage percentage.
+
+        Args:
+            expected_price: Expected execution price
+            actual_price: Actual fill price
+            is_buy: Whether this was a buy order
+
+        Returns:
+            Signed slippage percentage (positive = adverse slippage)
+        """
         if is_buy:
             slippage_pct = ((actual_price - expected_price) / expected_price) * 100
         else:
             slippage_pct = ((expected_price - actual_price) / expected_price) * 100
-        
+
         self.metrics.total_slippage_pct += abs(slippage_pct)
-        
+
         if abs(slippage_pct) > self._exec_config.max_slippage_pct:
-            self._logger.warning(
-                "High slippage detected: %.2f%% (max: %.2f%%)",
+            self._logger.error(
+                "Excessive slippage detected: %.4f%% (max: %.2f%%) - trade will be rejected",
                 slippage_pct,
                 self._exec_config.max_slippage_pct
             )
-    
-    def _check_slippage(
-        self, 
-        expected_price: float, 
-        actual_price: float
-    ) -> bool:
-        """
-        Check if slippage is within acceptable limits.
-        
-        Args:
-            expected_price: Expected execution price
-            actual_price: Actual execution price
-            
-        Returns:
-            True if slippage is acceptable
-        """
-        max_slippage = self._exec_config.max_slippage_pct / 100
-        slippage = abs(actual_price - expected_price) / expected_price
-        return slippage <= max_slippage
+        else:
+            self._logger.debug(
+                "Slippage within limits: %.4f%% (max: %.2f%%)",
+                slippage_pct,
+                self._exec_config.max_slippage_pct
+            )
+
+        return slippage_pct
     
     # =========================================================================
     # TP/SL Management
@@ -1178,8 +1219,13 @@ class ExecutionEngineService(BaseService):
         """
         Set take profit and stop loss orders using proper trigger orders.
 
+        Both TP and SL are always calculated from the actual fill price using
+        the configured percentages. The signal's pre-computed stop_price is
+        ignored because it was calculated from the signal entry price, which
+        may differ from the actual fill price due to slippage.
+
         Args:
-            signal: Original signal with TP/SL levels (stop_price from RiskManager)
+            signal: Original signal with TP/SL levels
             order: Filled entry order
             position: ExecutionPosition to protect
         """
@@ -1188,35 +1234,32 @@ class ExecutionEngineService(BaseService):
         entry_price = order.avg_price or signal["entry_price"]
         size = position.size
 
-        # Get stop price from signal (calculated by RiskManager based on ATR)
-        # Fall back to percentage-based calculation if not provided
-        sl_price = signal.get("stop_price")
-        if sl_price is None:
-            sl_pct = signal.get("sl_pct", self._bot_config.risk.stop_loss_pct / 100)
-            if is_long:
-                sl_price = entry_price * (1 - sl_pct)
-            else:
-                sl_price = entry_price * (1 + sl_pct)
+        # Always recalculate SL from fill price using configured percentage.
+        # The signal's stop_price was computed from the signal entry price
+        # (state.close at evaluation time), NOT from the actual fill price.
+        # Using it directly would give wrong SL distance when fill != signal price.
+        sl_pct = self._bot_config.risk.stop_loss_pct / 100
+        if is_long:
+            sl_price = entry_price * (1 - sl_pct)
         else:
-            sl_price = float(sl_price)
+            sl_price = entry_price * (1 + sl_pct)
 
-        # Calculate TP price (use percentage from config)
-        tp_pct = signal.get("tp_pct", self._bot_config.risk.take_profit_pct / 100)
+        # Calculate TP price from fill price using configured percentage
+        tp_pct = self._bot_config.risk.take_profit_pct / 100
         if is_long:
             tp_price = entry_price * (1 + tp_pct)
         else:
             tp_price = entry_price * (1 - tp_pct)
 
-        # Calculate stop distance for logging
-        sl_distance_pct = abs(entry_price - sl_price) / entry_price * 100
-
         self._logger.info(
-            "Setting TP/SL for %s: TP=%.4f (+%.1f%%), SL=%.4f (-%.1f%%)",
+            "Setting TP/SL for %s %s: entry=%.4f, TP=%.4f (%.1f%%), SL=%.4f (%.1f%%)",
+            "LONG" if is_long else "SHORT",
             symbol,
+            entry_price,
             tp_price,
             tp_pct * 100,
             sl_price,
-            sl_distance_pct
+            sl_pct * 100,
         )
 
         # Validate stop distance after rounding (prevents 0% SL on low-price assets)

@@ -158,7 +158,7 @@ strategies:
     min_atr_pct: 0.1
     rsi_long_min: 30
     rsi_long_max: 65
-    rsi_short_min: 35
+    rsi_short_min: 40
     rsi_short_max: 70
 
 # -----------------------------------------------------------------------------

@@ -46,7 +46,7 @@ class BacktestConfig:
     # From strategies.trend_momentum.*
     rsi_long_min: float = 30.0
     rsi_long_max: float = 65.0
-    rsi_short_min: float = 35.0
+    rsi_short_min: float = 40.0
     rsi_short_max: float = 70.0
     min_atr_pct: float = 0.1
 
@@ -83,7 +83,7 @@ def load_config(**overrides: object) -> BacktestConfig:
         confirmation_bars=regime.get("confirmation_bars", 2),
         rsi_long_min=strat.get("rsi_long_min", 30),
         rsi_long_max=strat.get("rsi_long_max", 65),
-        rsi_short_min=strat.get("rsi_short_min", 35),
+        rsi_short_min=strat.get("rsi_short_min", 40),
         rsi_short_max=strat.get("rsi_short_max", 70),
         min_atr_pct=strat.get("min_atr_pct", 0.1),
         exclude_symbols=set(universe.get("exclude_symbols", [])),

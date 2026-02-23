@@ -60,8 +60,8 @@ def strategy():
     return MomentumScalperStrategy(config={
         "allow_short": True,
         "min_atr_pct": 0.1,
-        "stop_loss_pct": 0.4,
-        "take_profit_pct": 0.8,
+        "stop_loss_pct": 0.8,
+        "take_profit_pct": 1.6,
     })
 
 
@@ -71,8 +71,8 @@ def long_only_strategy():
     return MomentumScalperStrategy(config={
         "allow_short": False,
         "min_atr_pct": 0.1,
-        "stop_loss_pct": 0.4,
-        "take_profit_pct": 0.8,
+        "stop_loss_pct": 0.8,
+        "take_profit_pct": 1.6,
     })
 
 
@@ -111,14 +111,14 @@ class TestLongSignal:
         assert result.has_setup is True
 
     def test_long_stop_price(self, strategy):
-        """LONG stop = entry * (1 - 0.4%)."""
+        """LONG stop = entry * (1 - 0.8%)."""
         state = _make_state(close=Decimal("100000"))
         result = strategy.evaluate(state)
 
         assert result.setup is not None
-        expected_stop = Decimal("100000") * (Decimal("1") - Decimal("0.004"))
+        expected_stop = Decimal("100000") * (Decimal("1") - Decimal("0.008"))
         assert result.setup.stop_price == expected_stop
-        assert result.setup.stop_distance_pct == Decimal("0.4")
+        assert result.setup.stop_distance_pct == Decimal("0.8")
 
 
 # =============================================================================
@@ -133,7 +133,7 @@ class TestShortSignal:
         state = _make_state(
             ema9=Decimal("96800"),   # EMA9 < EMA21
             ema21=Decimal("97200"),
-            rsi=Decimal("55"),       # In range [35, 70]
+            rsi=Decimal("55"),       # In range [40, 70]
         )
         result = strategy.evaluate(state)
 
@@ -142,7 +142,7 @@ class TestShortSignal:
         assert result.setup.direction == Direction.SHORT
 
     def test_short_stop_price(self, strategy):
-        """SHORT stop = entry * (1 + 0.4%)."""
+        """SHORT stop = entry * (1 + 0.8%)."""
         state = _make_state(
             close=Decimal("100000"),
             ema9=Decimal("99800"),
@@ -152,7 +152,7 @@ class TestShortSignal:
         result = strategy.evaluate(state)
 
         assert result.setup is not None
-        expected_stop = Decimal("100000") * (Decimal("1") + Decimal("0.004"))
+        expected_stop = Decimal("100000") * (Decimal("1") + Decimal("0.008"))
         assert result.setup.stop_price == expected_stop
 
     def test_short_disabled(self, long_only_strategy):
@@ -192,7 +192,7 @@ class TestRsiFilter:
         assert "RSI" in result.reason
 
     def test_short_rejected_oversold(self, strategy):
-        """SHORT rejected when RSI < 35."""
+        """SHORT rejected when RSI < 40."""
         state = _make_state(
             ema9=Decimal("96800"),
             ema21=Decimal("97200"),

@@ -272,8 +272,8 @@ class ConservativeConfig:
             max_slippage_pct=execution.get("max_slippage_pct", 0.1),
             trend_follow_enabled=strategies.get("trend_follow", {}).get("enabled", True),
             trend_momentum_enabled=strategies.get("trend_momentum", {}).get("enabled", False),
-            stop_loss_pct=stops.get("stop_loss_pct", 0.4),
-            take_profit_pct=stops.get("take_profit_pct", 0.8),
+            stop_loss_pct=stops.get("stop_loss_pct", 0.8),
+            take_profit_pct=stops.get("take_profit_pct", 1.6),
             testnet=env.lower() == "testnet",
             dry_run=data.get("dry_run", False),
         )
@@ -680,7 +680,7 @@ class ConservativeBot:
                 "take_profit_pct": cfg.take_profit_pct,
                 "rsi_long_min": ms_yaml.get("rsi_long_min", 30),
                 "rsi_long_max": ms_yaml.get("rsi_long_max", 65),
-                "rsi_short_min": ms_yaml.get("rsi_short_min", 35),
+                "rsi_short_min": ms_yaml.get("rsi_short_min", 40),
                 "rsi_short_max": ms_yaml.get("rsi_short_max", 70),
             }
             self._strategies.append(MomentumScalperStrategy(config=ms_config))
