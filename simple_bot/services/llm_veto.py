@@ -360,10 +360,11 @@ ALLOW when:
 - RSI not at extremes
 - No obvious red flags from the list above
 
-Volume context:
+Volume context (IMPORTANT — check the volume_ratio value carefully):
 - High volume (>1.2x avg) increases confidence
-- Low volume (<0.7x avg) is a yellow flag but not automatic DENY
-- Very low volume (<0.5x avg) lean DENY
+- Normal volume (0.7-1.2x avg) is fine
+- Low volume (0.5-0.7x avg) is a yellow flag — count it as a red flag
+- Very low volume (<0.5x avg) DENY — this is likely a fakeout on thin volume
 
 Default stance: If the crossover is confirmed and ADX > 25, ALLOW unless there are clear reasons not to.
 

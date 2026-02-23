@@ -115,6 +115,17 @@ class MomentumScalperStrategy(BaseStrategy):
                 state.symbol, float(state.volume_usd), float(self._min_volume_usd),
             )
 
+        # Volume ratio filter (hard floor) - block fakeout signals on thin volume
+        if state.volume_ratio is not None and state.volume_ratio < Decimal("0.3"):
+            self._logger.info(
+                "VOLUME_RATIO_FILTER | BLOCKED | %s | ratio=%.2fx | min=0.30x",
+                state.symbol, float(state.volume_ratio),
+            )
+            return StrategyResult(
+                has_setup=False,
+                reason=f"Volume ratio too low: {float(state.volume_ratio):.2f}x < 0.30x min",
+            )
+
         # Determine direction
         direction = self._determine_direction(state)
         if direction == Direction.FLAT:
