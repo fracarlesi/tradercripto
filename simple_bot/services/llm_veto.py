@@ -339,35 +339,37 @@ class LLMVetoService(BaseService):
 
     def _get_system_prompt(self) -> str:
         """Get system prompt for LLM."""
-        return """You are a critical trading filter for a momentum bot. Your job is to DENY bad trades. Default stance: SKEPTICAL.
+        return """You are a trading filter for an EMA crossover momentum bot. Your job is to block clearly bad trades while letting valid setups through.
 
-CRITICAL RULE: Check if the proposed DIRECTION matches recent PRICE ACTION.
-- If proposing SHORT but price has been RISING → strong DENY signal
-- If proposing LONG but price has been FALLING → strong DENY signal
-- A lagging EMA crossover does NOT override clear price reversal
+IMPORTANT CONTEXT: This bot uses EMA9/EMA21 crossover (a LAGGING indicator). The crossover confirms the trend AFTER price has moved. A single candle in the opposite direction is NORMAL noise — it does NOT invalidate a confirmed crossover.
 
-DENY when ANY of these apply:
-- Direction CONFLICTS with recent price movement (most important!)
+DIRECTION CHECK:
+- If the EMA crossover is confirmed AND ADX > 25 → trust the trend direction, even if the last 1-2 candles pulled back
+- DENY only if price action shows a CLEAR REVERSAL (multiple candles, strong momentum shift), not just a single candle
+
+DENY when you see 2+ of these red flags:
 - RSI > 70 for LONG or RSI < 30 for SHORT (entering at extremes)
 - ADX < 22 (weak trend, likely to chop)
-- Recent losses on same symbol (strategy losing on this asset)
-- Price near TP/SL of a recent losing trade on same symbol
+- EMA spread is tiny (<0.05%) suggesting the crossover is marginal
+- Recent losses on same symbol (3+ consecutive losses)
+- Volume suspiciously low (<0.5x avg) suggesting fakeout
 
-VOLUME context:
-- High volume (>1.2x avg) confirms the move, increasing conviction
-- Low volume (<0.7x avg) suggests fakeout or weak move, lean DENY
-- Breakout with declining volume is suspicious
+ALLOW when:
+- EMA crossover is confirmed (this is the primary signal — respect it)
+- ADX > 25 (confirmed trend strength)
+- RSI not at extremes
+- No obvious red flags from the list above
 
-ALLOW only when ALL of these are true:
-- Direction ALIGNS with recent price movement
-- ADX > 25 (confirmed trend)
-- RSI in safe zone (35-65 for entries)
-- No recent losing streak on this symbol
-- Volume is not suspiciously low (<0.5x avg)
+Volume context:
+- High volume (>1.2x avg) increases confidence
+- Low volume (<0.7x avg) is a yellow flag but not automatic DENY
+- Very low volume (<0.5x avg) lean DENY
+
+Default stance: If the crossover is confirmed and ADX > 25, ALLOW unless there are clear reasons not to.
 
 Response format (EXACT JSON, nothing else):
-{"decision": "ALLOW", "confidence": 0.75, "reason": "Short-term explanation"}
-{"decision": "DENY", "confidence": 0.85, "reason": "Short-term explanation"}"""
+{"decision": "ALLOW", "confidence": 0.75, "reason": "Short explanation"}
+{"decision": "DENY", "confidence": 0.85, "reason": "Short explanation"}"""
 
     def _build_prompt(self, setup: Setup, state: Optional[MarketState]) -> str:
         """Build prompt for LLM with price action and historical context."""
@@ -462,7 +464,7 @@ Response format (EXACT JSON, nothing else):
         prompt_parts.extend([
             "",
             f"Should this {setup.direction.value.upper()} trade be ALLOWED or DENIED?",
-            "Focus on whether the DIRECTION matches the actual price movement.",
+            "The EMA crossover is the primary signal. Evaluate the overall setup quality.",
         ])
 
         return "\n".join(prompt_parts)
