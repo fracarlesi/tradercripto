@@ -385,8 +385,8 @@ class TestServiceConfigs:
 
         config = LLMVetoConfig()
         assert config.enabled == True
-        assert config.max_calls_per_day == 6
-        assert config.fallback_on_error == "allow"
+        assert config.max_calls_per_day == 500
+        assert config.fallback_on_error == "deny"
 
 
 # =============================================================================
@@ -491,7 +491,7 @@ class TestLLMVeto:
         service = LLMVetoService()
 
         decision = service._create_fallback_decision(valid_setup, "Test reason")
-        assert decision.decision == "ALLOW"  # Default fallback is allow
+        assert decision.decision == "DENY"  # Default fallback is deny (fail-safe)
         assert "Fallback" in decision.reason
 
     def test_chaos_regime_denied(self, valid_setup):

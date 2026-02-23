@@ -51,11 +51,11 @@ class LLMVetoConfig:
     api_key_env: str = "DEEPSEEK_API_KEY"
 
     # Rate limiting
-    max_calls_per_day: int = 6  # 1 per 4h window
+    max_calls_per_day: int = 500
     timeout_seconds: int = 30
 
     # Fallback behavior
-    fallback_on_error: str = "allow"  # "allow" or "deny"
+    fallback_on_error: str = "deny"   # Fail-safe: deny if LLM unavailable
     fallback_on_chaos: str = "deny"   # Always deny in CHAOS
 
     # Decision thresholds
@@ -305,32 +305,32 @@ class LLMVetoService(BaseService):
 
     def _get_system_prompt(self) -> str:
         """Get system prompt for LLM."""
-        return """You are a trading filter. Your job is to ALLOW or DENY trade setups.
+        return """You are a critical trading filter for a momentum bot. Your job is to DENY bad trades. Default stance: SKEPTICAL.
 
-RULES:
-1. Only respond with valid JSON in the exact format specified
-2. ALLOW trades when technical setup is valid (ADX > 25 in trend, proper regime)
-3. Only DENY when there's a CLEAR red flag: RSI > 75, RSI < 25, or wrong regime
-4. "No track record" is NOT a reason to deny - we need to build history
-5. If the strategy found a valid setup, default to ALLOW unless something is clearly wrong
+CRITICAL RULE: Check if the proposed DIRECTION matches recent PRICE ACTION.
+- If proposing SHORT but price has been RISING → strong DENY signal
+- If proposing LONG but price has been FALLING → strong DENY signal
+- A lagging EMA crossover does NOT override clear price reversal
 
-ALLOW when:
-- ADX > 25 (strong trend)
-- RSI between 30-70 (not extreme)
-- Regime matches strategy (trend for breakouts)
+DENY when ANY of these apply:
+- Direction CONFLICTS with recent price movement (most important!)
+- RSI > 70 for LONG or RSI < 30 for SHORT (entering at extremes)
+- ADX < 22 (weak trend, likely to chop)
+- Recent losses on same symbol (strategy losing on this asset)
+- Price near TP/SL of a recent losing trade on same symbol
 
-DENY only when:
-- RSI > 75 (extremely overbought) or RSI < 25 (extremely oversold)
-- ADX < 20 (no trend at all)
-- Clear technical divergence
+ALLOW only when ALL of these are true:
+- Direction ALIGNS with recent price movement
+- ADX > 25 (confirmed trend)
+- RSI in safe zone (35-65 for entries)
+- No recent losing streak on this symbol
 
-Response format (EXACT):
-{"decision": "ALLOW", "confidence": 0.75, "reason": "Valid trend setup with ADX confirmation"}
-or
-{"decision": "DENY", "confidence": 0.85, "reason": "RSI at 78 - extremely overbought"}"""
+Response format (EXACT JSON, nothing else):
+{"decision": "ALLOW", "confidence": 0.75, "reason": "Short-term explanation"}
+{"decision": "DENY", "confidence": 0.85, "reason": "Short-term explanation"}"""
 
     def _build_prompt(self, setup: Setup, state: Optional[MarketState]) -> str:
-        """Build prompt for LLM with historical context."""
+        """Build prompt for LLM with price action and historical context."""
         # Get historical context from trade memory
         history_context = self._trade_memory.get_llm_context(
             symbol=setup.symbol,
@@ -342,34 +342,73 @@ or
             "=== CURRENT SETUP ===",
             "",
             f"Asset: {setup.symbol}",
-            f"Setup Type: {setup.setup_type.value}",
-            f"Direction: {setup.direction.value}",
+            f"Direction: {setup.direction.value.upper()}",
             f"Regime: {setup.regime.value}",
             f"Entry Price: {setup.entry_price}",
             f"Stop Price: {setup.stop_price} ({setup.stop_distance_pct:.2f}%)",
-            "",
-            "Indicators:",
-            f"- ADX: {setup.adx}",
-            f"- RSI: {setup.rsi}",
-            f"- ATR: {setup.atr}",
         ]
 
+        # Price action context (critical for direction validation)
         if state:
-            prompt_parts.extend([
-                f"- EMA50: {state.ema50}",
-                f"- EMA200: {state.ema200}",
-                f"- EMA200 Slope: {state.ema200_slope}",
-            ])
+            prompt_parts.append("")
+            prompt_parts.append("=== PRICE ACTION (critical) ===")
+
+            # Current vs previous candle
+            if state.prev_close and state.close:
+                candle_chg = (float(state.close) - float(state.prev_close)) / float(state.prev_close) * 100
+                direction_word = "UP" if candle_chg > 0 else "DOWN"
+                prompt_parts.append(
+                    f"Last candle: {direction_word} {abs(candle_chg):.3f}% "
+                    f"(prev close: {state.prev_close} → current: {state.close})"
+                )
+
+            # EMA9/EMA21 (the actual signal EMAs)
+            if state.ema9 and state.ema21:
+                ema_spread = (float(state.ema9) - float(state.ema21)) / float(state.ema21) * 100
+                ema_signal = "BULLISH (EMA9 > EMA21)" if ema_spread > 0 else "BEARISH (EMA9 < EMA21)"
+                prompt_parts.append(f"EMA Signal: {ema_signal}, spread: {ema_spread:.3f}%")
+
+            # Price vs EMAs
+            if state.ema9:
+                price_vs_ema9 = (float(state.close) - float(state.ema9)) / float(state.ema9) * 100
+                prompt_parts.append(f"Price vs EMA9: {price_vs_ema9:+.3f}%")
+
+        # Indicators
+        prompt_parts.extend([
+            "",
+            "=== INDICATORS ===",
+            f"ADX: {setup.adx}",
+            f"RSI: {setup.rsi}",
+            f"ATR: {setup.atr}",
+        ])
+
+        if state:
             if state.choppiness:
-                prompt_parts.append(f"- Choppiness: {state.choppiness}")
+                prompt_parts.append(f"Choppiness: {state.choppiness}")
+            prompt_parts.append(f"EMA200 Slope: {state.ema200_slope}")
+
+        # Recent losses on same symbol (critical context)
+        recent_symbol_trades = [
+            t for t in self._trade_memory._closed_trades[-20:]
+            if t.symbol == setup.symbol and t.is_winner is not None
+        ]
+        if recent_symbol_trades:
+            recent_results = [
+                f"{'WIN' if t.is_winner else 'LOSS'} (${t.pnl:+.2f})"
+                for t in recent_symbol_trades[-5:]
+            ]
+            losses = sum(1 for t in recent_symbol_trades[-5:] if not t.is_winner)
+            prompt_parts.extend([
+                "",
+                f"=== RECENT {setup.symbol} TRADES (last {len(recent_results)}) ===",
+                f"Results: {', '.join(recent_results)}",
+                f"Recent losses: {losses}/{len(recent_results)}",
+            ])
 
         prompt_parts.extend([
             "",
-            f"Strategy Confidence: {setup.confidence}",
-            f"Setup Quality: {setup.setup_quality}",
-            "",
-            "Based on past performance and current setup, should this trade be ALLOWED or DENIED?",
-            "Consider your historical accuracy and the regime-specific win rates.",
+            f"Should this {setup.direction.value.upper()} trade be ALLOWED or DENIED?",
+            "Focus on whether the DIRECTION matches the actual price movement.",
         ])
 
         return "\n".join(prompt_parts)

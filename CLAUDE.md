@@ -27,7 +27,7 @@ mcp__plugin_serena_serena__activate_project(project="trader_bitcoin")
 | **Strategy** | `trend_momentum` - EMA9/EMA21 crossover + RSI filter |
 | **Entry LONG** | EMA9 > EMA21, RSI 30-65, regime TREND (ADX>25) |
 | **Entry SHORT** | EMA9 < EMA21, RSI 35-70 (enabled) |
-| **TP / SL** | 0.8% / 0.4% (1:2 R:R) |
+| **TP / SL** | 1.6% / 0.8% (1:2 R:R) |
 | **Leverage** | 10x |
 | **Max Positions** | 3 concurrent |
 | **LLM Veto** | Enabled (DeepSeek, max 20 calls/day) |

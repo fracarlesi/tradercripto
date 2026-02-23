@@ -3,7 +3,7 @@
 # =============================================================================
 # Strategy: EMA9/EMA21 crossover on 15m with RSI filter
 # Target: Aggressive growth on small account ($86 USDC)
-# Risk: Fixed TP/SL (0.8%/0.4%), 10x leverage, LONG+SHORT
+# Risk: Fixed TP/SL (1.6%/0.8%), 10x leverage, LONG+SHORT
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -123,8 +123,8 @@ kill_switch:
 # Stops - Fixed TP/SL
 # -----------------------------------------------------------------------------
 stops:
-  stop_loss_pct: 0.4
-  take_profit_pct: 0.8
+  stop_loss_pct: 0.8
+  take_profit_pct: 1.6
   use_server_side: true
 
   # ATR-based trailing (for reference, not primary)
@@ -172,10 +172,10 @@ llm:
   model: "deepseek-chat"
   api_key_env: "DEEPSEEK_API_KEY"
 
-  max_calls_per_day: 20
+  max_calls_per_day: 500
   timeout_seconds: 30
 
-  fallback_on_error: "allow"
+  fallback_on_error: "deny"
   fallback_on_chaos: "deny"
 
   min_confidence: 0.6
