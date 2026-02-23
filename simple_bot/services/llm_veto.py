@@ -113,6 +113,10 @@ class LLMVetoService(BaseService):
         # Trade memory for learning
         self._trade_memory: TradeMemory = get_trade_memory()
 
+        # Alert throttling: only send one ntfy alert per failure type per hour
+        self._last_alert_time: Dict[str, datetime] = {}
+        self._alert_cooldown_minutes: int = 60
+
         self._logger.info(
             "LLMVetoService initialized: enabled=%s, provider=%s, max_calls=%d/day",
             self._config.enabled,
@@ -203,6 +207,32 @@ class LLMVetoService(BaseService):
             self._logger.error("Error parsing market state: %s", e)
 
     # =========================================================================
+    # Alert Notifications
+    # =========================================================================
+
+    async def _send_llm_alert(self, alert_type: str, message: str) -> None:
+        """Send ntfy alert when LLM is non-functional. Throttled: 1 per type per hour."""
+        now = datetime.now(timezone.utc)
+
+        # Throttle: skip if same alert type sent recently
+        last_sent = self._last_alert_time.get(alert_type)
+        if last_sent and (now - last_sent).total_seconds() < self._alert_cooldown_minutes * 60:
+            return
+
+        self._last_alert_time[alert_type] = now
+
+        if self.bus:
+            await self.bus.publish(Topic.RISK_ALERTS, {
+                "alert_type": "llm_failure",
+                "failure_reason": alert_type,
+                "message": message,
+                "calls_today": self._calls_today,
+                "max_calls": self._config.max_calls_per_day,
+            })
+
+        self._logger.warning("LLM ALERT sent: %s - %s", alert_type, message)
+
+    # =========================================================================
     # Veto Logic
     # =========================================================================
 
@@ -239,11 +269,13 @@ class LLMVetoService(BaseService):
         # Check rate limit
         if self._calls_today >= self._config.max_calls_per_day:
             decision = self._create_fallback_decision(setup, "Rate limit exceeded")
+            await self._send_llm_alert("rate_limit", f"LLM rate limit reached ({self._config.max_calls_per_day}/day). All trades DENIED until reset.")
             return self._config.fallback_on_error == "allow", decision
 
         # Check client
         if not self._client:
             decision = self._create_fallback_decision(setup, "LLM client unavailable")
+            await self._send_llm_alert("client_unavailable", "LLM client not initialized. Check API key. All trades DENIED.")
             return self._config.fallback_on_error == "allow", decision
 
         # Call LLM
@@ -271,11 +303,13 @@ class LLMVetoService(BaseService):
         except asyncio.TimeoutError:
             self._logger.warning("LLM call timeout")
             decision = self._create_fallback_decision(setup, "LLM timeout")
+            await self._send_llm_alert("timeout", "DeepSeek API timeout. Trades DENIED until LLM responds.")
             return self._config.fallback_on_error == "allow", decision
 
         except Exception as e:
             self._logger.error("LLM call error: %s", e)
             decision = self._create_fallback_decision(setup, f"LLM error: {e}")
+            await self._send_llm_alert("api_error", f"DeepSeek API error: {e}. Trades DENIED.")
             return self._config.fallback_on_error == "allow", decision
 
     async def _call_llm(self, setup: Setup) -> LLMDecision:

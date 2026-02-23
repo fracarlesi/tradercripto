@@ -313,6 +313,28 @@ class WhatsAppService(BaseService):
                 tags="warning,skull",
             )
 
+        # LLM failure alert
+        alert_type = payload.get("alert_type", "")
+        if alert_type == "llm_failure":
+            reason = payload.get("failure_reason", "unknown")
+            msg = payload.get("message", "LLM non-functional")
+            calls = payload.get("calls_today", 0)
+            max_calls = payload.get("max_calls", 0)
+
+            text = (
+                f"{self.EMOJI['warning']} LLM VETO NON-FUNCTIONAL\n\n"
+                f"Reason: {reason}\n"
+                f"Calls today: {calls}/{max_calls}\n\n"
+                f"{msg}\n\n"
+                f"Action: all new trades are being DENIED until LLM is restored."
+            )
+            await self._send_message(
+                text,
+                title="LLM Veto Down",
+                priority=True,
+                tags="warning,robot",
+            )
+
     # =========================================================================
     # ntfy.sh API
     # =========================================================================
