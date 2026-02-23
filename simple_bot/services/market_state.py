@@ -498,6 +498,7 @@ class MarketStateService(BaseService):
 
             # Volume metrics
             current_volume = Decimal(str(volume[-1]))
+            volume_usd = current_volume * Decimal(str(float(close[-1])))
             vol_sma20: Optional[Decimal] = None
             vol_ratio: Optional[Decimal] = None
             if len(volume) >= 20:
@@ -516,6 +517,7 @@ class MarketStateService(BaseService):
                 low=Decimal(str(low[-1])),
                 close=current_price,
                 volume=current_volume,
+                volume_usd=volume_usd,
                 volume_sma20=vol_sma20,
                 volume_ratio=vol_ratio,
                 atr=atr,

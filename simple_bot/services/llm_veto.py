@@ -51,7 +51,7 @@ class LLMVetoConfig:
     api_key_env: str = "DEEPSEEK_API_KEY"
 
     # Rate limiting
-    max_calls_per_day: int = 500
+    max_calls_per_day: int = 50000
     timeout_seconds: int = 30
 
     # Fallback behavior

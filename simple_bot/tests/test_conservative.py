@@ -385,7 +385,7 @@ class TestServiceConfigs:
 
         config = LLMVetoConfig()
         assert config.enabled == True
-        assert config.max_calls_per_day == 500
+        assert config.max_calls_per_day == 50000
         assert config.fallback_on_error == "deny"
 
 

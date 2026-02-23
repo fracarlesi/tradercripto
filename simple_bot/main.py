@@ -676,6 +676,7 @@ class ConservativeBot:
             ms_config = {
                 "allow_short": ms_yaml.get("allow_short", True),
                 "min_atr_pct": ms_yaml.get("min_atr_pct", 0.1),
+                "min_volume_usd": ms_yaml.get("min_volume_usd", 20000),
                 "stop_loss_pct": cfg.stop_loss_pct,
                 "take_profit_pct": cfg.take_profit_pct,
                 "rsi_long_min": ms_yaml.get("rsi_long_min", 30),

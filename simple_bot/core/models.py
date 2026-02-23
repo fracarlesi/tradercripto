@@ -97,6 +97,7 @@ class MarketState(BaseModel):
     bearish_engulfing: bool = Field(default=False, description="Bearish engulfing pattern detected")
 
     # Volume metrics
+    volume_usd: Optional[Decimal] = Field(None, ge=0, description="Volume in USD (close * volume)")
     volume_sma20: Optional[Decimal] = Field(None, ge=0, description="20-period SMA of volume")
     volume_ratio: Optional[Decimal] = Field(None, ge=0, description="Current volume / SMA20 volume")
 

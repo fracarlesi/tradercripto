@@ -43,6 +43,7 @@ class MomentumScalperStrategy(BaseStrategy):
         self.min_atr_pct = self.config.get("min_atr_pct", 0.1)
         self.stop_loss_pct = self.config.get("stop_loss_pct", 0.8)
         self.take_profit_pct = self.config.get("take_profit_pct", 1.6)
+        self._min_volume_usd = Decimal(str(self.config.get("min_volume_usd", 20000)))
 
         # RSI thresholds
         self.rsi_long_min = self.config.get("rsi_long_min", 30)
@@ -85,6 +86,23 @@ class MomentumScalperStrategy(BaseStrategy):
         if float(state.atr_pct) < self.min_atr_pct:
             return self.reject(
                 f"ATR too low: {state.atr_pct:.3f}% < {self.min_atr_pct}%"
+            )
+
+        # Volume filter (hard floor)
+        if state.volume_usd is not None and state.volume_usd < self._min_volume_usd:
+            self._logger.info(
+                "VOLUME_FILTER | BLOCKED | %s | vol_usd=$%.0f | min=$%.0f",
+                state.symbol, float(state.volume_usd), float(self._min_volume_usd),
+            )
+            return StrategyResult(
+                has_setup=False,
+                reason=f"Volume too low: ${float(state.volume_usd):,.0f} < ${float(self._min_volume_usd):,.0f} min",
+            )
+
+        if state.volume_usd is not None:
+            self._logger.debug(
+                "VOLUME_FILTER | PASSED | %s | vol_usd=$%.0f | min=$%.0f",
+                state.symbol, float(state.volume_usd), float(self._min_volume_usd),
             )
 
         # Determine direction
@@ -264,4 +282,11 @@ class MomentumScalperStrategy(BaseStrategy):
         elif atr_pct > 0.1:
             score += Decimal("0.05")
 
-        return min(Decimal("1.0"), max(Decimal("0.0"), score))
+        quality = float(min(Decimal("1.0"), max(Decimal("0.0"), score)))
+
+        # Volume ratio quality adjustment
+        if state.volume_ratio is not None and state.volume_ratio < Decimal("0.7"):
+            vol_penalty = float(state.volume_ratio) / 0.7  # e.g., ratio 0.5 -> penalty 0.71
+            quality *= vol_penalty
+
+        return Decimal(str(round(max(0.0, min(1.0, quality)), 4)))
