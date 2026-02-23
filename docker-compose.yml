@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:15
+    image: timescaledb/timescaledb:latest-pg15
     container_name: hlquantbot_postgres
     environment:
       POSTGRES_USER: trader

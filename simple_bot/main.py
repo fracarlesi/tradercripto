@@ -80,6 +80,7 @@ from .services.execution_engine import (
 from .services.telegram_service import TelegramService
 from .services.whatsapp_service import WhatsAppService
 from .services.protections import ProtectionManager
+from .services.outcome_tracker import OutcomeTrackerService
 
 # Strategies
 from .strategies.trend_follow import TrendFollowStrategy
@@ -334,6 +335,9 @@ class ConservativeBot:
 
         # Strategies
         self._strategies: List[Any] = []
+
+        # Outcome tracker
+        self._outcome_tracker: Optional[OutcomeTrackerService] = None
 
         # State
         self._running = False
@@ -639,6 +643,13 @@ class ConservativeBot:
             db=self._db,
         )
 
+        # Outcome Tracker - tracks LLM decision outcomes
+        self._outcome_tracker = OutcomeTrackerService(
+            db=self._db,
+            stop_loss_pct=cfg.stop_loss_pct,
+            take_profit_pct=cfg.take_profit_pct,
+        )
+
         # Protection Manager - modular protection system
         self._services["protection_manager"] = ProtectionManager(
             config=self._raw_config,
@@ -796,6 +807,16 @@ class ConservativeBot:
         for symbol, state in states.items():
             await self._evaluate_asset(state)
 
+        # Check pending LLM decisions (uses cached prices, zero extra API calls)
+        if self._outcome_tracker and states:
+            async def _cached_price_getter(sym: str) -> Optional[Decimal]:
+                s = states.get(sym)
+                return s.close if s else None
+
+            resolved = await self._outcome_tracker.check_pending(_cached_price_getter)
+            if resolved > 0:
+                logger.info("Resolved %d LLM decision outcomes", resolved)
+
     async def _evaluate_asset(self, state: MarketState) -> None:
         """
         Evaluate a single asset for trading opportunities.
@@ -842,7 +863,24 @@ class ConservativeBot:
             # Pass through LLM veto
             llm_service = self._services.get("llm_veto")
             if llm_service:
+                import time as _time
+                _t0 = _time.monotonic()
                 approved, decision = await llm_service.evaluate_setup(setup)
+                _latency_ms = int((_time.monotonic() - _t0) * 1000)
+
+                # Log decision to outcome tracker (both ALLOW and DENY)
+                market_state_for_log = self._services.get("market_state")
+                ms_snapshot = (
+                    market_state_for_log.get_state(setup.symbol)
+                    if market_state_for_log else None
+                )
+                if self._outcome_tracker:
+                    await self._outcome_tracker.log_decision(
+                        setup=setup,
+                        decision=decision,
+                        market_state=ms_snapshot,
+                        latency_ms=_latency_ms,
+                    )
 
                 if not approved:
                     logger.info(

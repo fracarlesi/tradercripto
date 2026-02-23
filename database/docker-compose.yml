@@ -6,7 +6,7 @@
 
 services:
   postgres:
-    image: postgres:16-alpine
+    image: timescaledb/timescaledb:latest-pg16
     container_name: hlquantbot_postgres
     restart: unless-stopped
     
