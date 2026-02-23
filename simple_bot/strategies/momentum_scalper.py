@@ -43,6 +43,7 @@ class MomentumScalperStrategy(BaseStrategy):
         self.min_atr_pct = self.config.get("min_atr_pct", 0.1)
         self.stop_loss_pct = self.config.get("stop_loss_pct", 0.8)
         self.take_profit_pct = self.config.get("take_profit_pct", 1.6)
+        self._volume_filter_multiplier = float(self.config.get("volume_filter_multiplier", 20))
         self._min_volume_usd = Decimal(str(self.config.get("min_volume_usd", 20000)))
 
         # RSI thresholds
@@ -66,6 +67,15 @@ class MomentumScalperStrategy(BaseStrategy):
     @property
     def required_regime(self) -> Regime:
         return Regime.TREND
+
+    def update_min_volume_usd(self, equity: float, per_trade_pct: float, leverage: float) -> None:
+        """Recalculate min_volume_usd from current equity. Called each scan cycle."""
+        notional = equity * (per_trade_pct / 100) * leverage
+        self._min_volume_usd = Decimal(str(notional * self._volume_filter_multiplier))
+        self._logger.debug(
+            "Volume filter updated: equity=$%.2f, notional=$%.0f, min_volume=$%.0f",
+            equity, notional, float(self._min_volume_usd),
+        )
 
     def can_trade(self, state: MarketState) -> bool:
         """Only trade in TREND regime - confirmed by backtest results."""

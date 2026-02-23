@@ -676,7 +676,7 @@ class ConservativeBot:
             ms_config = {
                 "allow_short": ms_yaml.get("allow_short", True),
                 "min_atr_pct": ms_yaml.get("min_atr_pct", 0.1),
-                "min_volume_usd": ms_yaml.get("min_volume_usd", 20000),
+                "volume_filter_multiplier": ms_yaml.get("volume_filter_multiplier", 20),
                 "stop_loss_pct": cfg.stop_loss_pct,
                 "take_profit_pct": cfg.take_profit_pct,
                 "rsi_long_min": ms_yaml.get("rsi_long_min", 30),
@@ -769,6 +769,18 @@ class ConservativeBot:
                     protection_result.reason,
                 )
                 return
+
+        # Update dynamic volume filter from current equity
+        if risk_manager and hasattr(risk_manager, '_current_equity'):
+            equity = float(risk_manager._current_equity)
+            if equity > 0:
+                for strategy in self._strategies:
+                    if hasattr(strategy, 'update_min_volume_usd'):
+                        strategy.update_min_volume_usd(
+                            equity=equity,
+                            per_trade_pct=self.config.per_trade_pct,
+                            leverage=self.config.leverage,
+                        )
 
         # Get market states
         market_state_svc = self._services.get("market_state")
