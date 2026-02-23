@@ -353,11 +353,17 @@ DENY when ANY of these apply:
 - Recent losses on same symbol (strategy losing on this asset)
 - Price near TP/SL of a recent losing trade on same symbol
 
+VOLUME context:
+- High volume (>1.2x avg) confirms the move, increasing conviction
+- Low volume (<0.7x avg) suggests fakeout or weak move, lean DENY
+- Breakout with declining volume is suspicious
+
 ALLOW only when ALL of these are true:
 - Direction ALIGNS with recent price movement
 - ADX > 25 (confirmed trend)
 - RSI in safe zone (35-65 for entries)
 - No recent losing streak on this symbol
+- Volume is not suspiciously low (<0.5x avg)
 
 Response format (EXACT JSON, nothing else):
 {"decision": "ALLOW", "confidence": 0.75, "reason": "Short-term explanation"}
@@ -406,6 +412,20 @@ Response format (EXACT JSON, nothing else):
             if state.ema9:
                 price_vs_ema9 = (float(state.close) - float(state.ema9)) / float(state.ema9) * 100
                 prompt_parts.append(f"Price vs EMA9: {price_vs_ema9:+.3f}%")
+
+            # Volume context
+            if state.volume_ratio is not None:
+                vol_ratio_f = float(state.volume_ratio)
+                vol_label = "above" if vol_ratio_f >= 1.0 else "below"
+                prompt_parts.append("")
+                prompt_parts.append("=== VOLUME ===")
+                prompt_parts.append(
+                    f"Volume ratio: {vol_ratio_f:.1f}x average ({vol_label} 20-period avg)"
+                )
+                if vol_ratio_f >= 1.5:
+                    prompt_parts.append("Volume: ELEVATED - strong participation")
+                elif vol_ratio_f <= 0.5:
+                    prompt_parts.append("Volume: LOW - weak participation, possible fakeout")
 
         # Indicators
         prompt_parts.extend([

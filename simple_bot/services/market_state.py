@@ -496,6 +496,16 @@ class MarketStateService(BaseService):
                     prev_close=float(prev_close),
                 )
 
+            # Volume metrics
+            current_volume = Decimal(str(volume[-1]))
+            vol_sma20: Optional[Decimal] = None
+            vol_ratio: Optional[Decimal] = None
+            if len(volume) >= 20:
+                vol_sma20_val = float(calculate_sma(volume, 20)[-1])
+                if vol_sma20_val > 0:
+                    vol_sma20 = Decimal(str(vol_sma20_val))
+                    vol_ratio = current_volume / vol_sma20
+
             # Build MarketState
             state = MarketState(
                 symbol=symbol,
@@ -505,7 +515,9 @@ class MarketStateService(BaseService):
                 high=Decimal(str(high[-1])),
                 low=Decimal(str(low[-1])),
                 close=current_price,
-                volume=Decimal(str(volume[-1])),
+                volume=current_volume,
+                volume_sma20=vol_sma20,
+                volume_ratio=vol_ratio,
                 atr=atr,
                 atr_pct=atr_pct,
                 adx=adx,

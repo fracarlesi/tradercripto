@@ -96,6 +96,10 @@ class MarketState(BaseModel):
     bullish_engulfing: bool = Field(default=False, description="Bullish engulfing pattern detected")
     bearish_engulfing: bool = Field(default=False, description="Bearish engulfing pattern detected")
 
+    # Volume metrics
+    volume_sma20: Optional[Decimal] = Field(None, ge=0, description="20-period SMA of volume")
+    volume_ratio: Optional[Decimal] = Field(None, ge=0, description="Current volume / SMA20 volume")
+
     # Optional indicators
     choppiness: Optional[Decimal] = Field(None, ge=0, le=100, description="Choppiness Index")
     bb_upper: Optional[Decimal] = Field(None, ge=0, description="Bollinger upper band")
