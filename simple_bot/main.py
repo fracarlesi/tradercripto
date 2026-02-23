@@ -196,6 +196,7 @@ class ConservativeConfig:
     # Execution
     prefer_limit: bool
     max_slippage_pct: float
+    max_spread_pct: float
 
     # Strategies
     trend_follow_enabled: bool
@@ -272,6 +273,7 @@ class ConservativeConfig:
             llm_fallback=llm.get("fallback_on_error", "allow"),
             prefer_limit=execution.get("prefer_limit", True),
             max_slippage_pct=execution.get("max_slippage_pct", 0.1),
+            max_spread_pct=execution.get("max_spread_pct", 0.10),
             trend_follow_enabled=strategies.get("trend_follow", {}).get("enabled", True),
             trend_momentum_enabled=strategies.get("trend_momentum", {}).get("enabled", False),
             stop_loss_pct=stops.get("stop_loss_pct", 0.8),
@@ -898,6 +900,16 @@ class ConservativeBot:
 
                 # Mark as approved
                 setup.llm_approved = True
+
+            # Check bid-ask spread before entering
+            if self._exchange:
+                spread_pct = await self._exchange.get_spread_pct(state.symbol)
+                if spread_pct > self.config.max_spread_pct:
+                    logger.info(
+                        "SKIP %s: bid-ask spread %.3f%% > max %.2f%% (illiquid)",
+                        state.symbol, spread_pct, self.config.max_spread_pct,
+                    )
+                    return
 
             # Publish setup for risk manager
             if self._bus:

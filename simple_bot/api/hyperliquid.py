@@ -522,6 +522,49 @@ class HyperliquidClient:
             "time": l2.get("time", int(time.time() * 1000)),
         }
 
+    async def get_spread_pct(self, symbol: str) -> float:
+        """
+        Get the bid-ask spread as a percentage of mid price.
+
+        Used as a pre-trade liquidity filter to avoid entering positions
+        on illiquid assets where slippage would eat into profits.
+
+        Args:
+            symbol: Trading symbol (e.g., "ETH")
+
+        Returns:
+            Spread as percentage of mid price (e.g., 0.05 for 0.05%).
+            Returns 0.0 on error (fail-open: don't block trades due to API errors).
+        """
+        try:
+            self._ensure_connected()
+
+            async with self._rate_limiter.info:
+                l2 = await self._run_sync(lambda: self._info.l2_snapshot(symbol))
+
+            levels = l2.get("levels", [[], []])
+            bids = levels[0] if len(levels) > 0 else []
+            asks = levels[1] if len(levels) > 1 else []
+
+            if not bids or not asks:
+                logger.warning("No bid/ask data for %s, returning 0.0 (fail-open)", symbol)
+                return 0.0
+
+            best_bid = Decimal(bids[0]["px"])
+            best_ask = Decimal(asks[0]["px"])
+
+            if best_bid <= 0 or best_ask <= 0:
+                return 0.0
+
+            mid_price = (best_bid + best_ask) / 2
+            spread_pct = float((best_ask - best_bid) / mid_price * 100)
+
+            return spread_pct
+
+        except Exception as e:
+            logger.warning("Failed to get spread for %s: %s (fail-open)", symbol, e)
+            return 0.0
+
     # =========================================================================
     # Account Methods
     # =========================================================================

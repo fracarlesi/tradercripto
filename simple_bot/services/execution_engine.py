@@ -321,6 +321,7 @@ class ExecutionEngineService(BaseService):
         self.processed_signals: Set[str] = set()
         self._tp_sl_confirmed: Set[str] = set()  # Positions with TP/SL confirmed (retry on each sync until success)
         self._closing_positions: Set[str] = set()  # Positions with close order already sent (prevent SL/TP spam)
+        self._settling_symbols: Set[str] = set()  # Symbols mid-open/close/rejection — sync loop must skip
         
         # Metrics
         self.metrics = ExecutionMetrics()
@@ -506,10 +507,13 @@ class ExecutionEngineService(BaseService):
         # Mark as processed
         self.processed_signals.add(signal_id)
         
-        # Execute order
+        # Execute order — mark symbol as settling so sync loop skips it
+        symbol = signal["symbol"]
+        self._settling_symbols.add(symbol)
+        self._logger.debug("Settling started for %s", symbol)
         try:
             order_result = await self._execute_order(signal, signal_id)
-            
+
             if order_result:
                 # Enrich signal with TP/SL prices for notifications
                 enriched_signal = dict(signal)
@@ -532,7 +536,7 @@ class ExecutionEngineService(BaseService):
                     "signal": enriched_signal,
                     "order": order_result.to_dict(),
                 })
-                
+
                 # If filled, set TP/SL
                 if order_result.status == OrderStatus.FILLED:
                     await self._handle_order_filled(signal, order_result)
@@ -540,7 +544,7 @@ class ExecutionEngineService(BaseService):
                     # Track pending order with original signal for deferred fill handling
                     order_result.original_signal = signal
                     self.pending_orders[order_result.order_id] = order_result
-                    
+
         except Exception as e:
             self._logger.error(
                 "Order execution failed for signal %s: %s",
@@ -549,6 +553,9 @@ class ExecutionEngineService(BaseService):
                 exc_info=True
             )
             await self._handle_order_error(signal, e)
+        finally:
+            self._settling_symbols.discard(symbol)
+            self._logger.debug("Settling ended for %s", symbol)
     
     def _validate_signal(self, signal: Dict[str, Any]) -> bool:
         """
@@ -701,6 +708,20 @@ class ExecutionEngineService(BaseService):
                                     "Failed to close slippage-rejected position %s: %s",
                                     symbol,
                                     close_err,
+                                )
+
+                            # Defensive cleanup: cancel any orphan TP/SL orders that
+                            # the sync loop may have placed during the race window.
+                            try:
+                                cancelled = await self.client.cancel_all_orders(symbol)
+                                self._logger.info(
+                                    "Orphan cleanup for slippage-rejected %s: %d orders cancelled",
+                                    symbol, cancelled,
+                                )
+                            except Exception as cancel_err:
+                                self._logger.warning(
+                                    "Failed to cancel orphan orders for %s: %s",
+                                    symbol, cancel_err,
                                 )
 
                             # Publish rejection event
@@ -1395,6 +1416,13 @@ class ExecutionEngineService(BaseService):
             if str(order_id) in open_order_ids:
                 continue  # Still open, nothing to do
 
+            # Skip symbols mid-open/close to avoid racing with _handle_signal
+            if order.symbol in self._settling_symbols:
+                self._logger.debug(
+                    "Skipping fill poll for settling symbol %s", order.symbol
+                )
+                continue
+
             # Order no longer open -> filled or cancelled externally
             try:
                 positions = await self.client.get_positions()
@@ -1507,6 +1535,13 @@ class ExecutionEngineService(BaseService):
                     if symbol in self._tp_sl_confirmed:
                         continue
 
+                    # Skip symbols mid-open/close/rejection to avoid orphan TP/SL
+                    if symbol in self._settling_symbols:
+                        self._logger.debug(
+                            "Skipping sync for settling symbol %s", symbol
+                        )
+                        continue
+
                     new_pos = ExecutionPosition(
                         symbol=symbol,
                         side=pos.get("side", "long"),
@@ -1532,9 +1567,14 @@ class ExecutionEngineService(BaseService):
                     if new_pos.tp_order_id and new_pos.sl_order_id:
                         self._tp_sl_confirmed.add(symbol)
 
-            # Check for closed positions
+            # Check for closed positions (skip settling symbols to avoid spurious notifications)
             closed_symbols = set(self.active_positions.keys()) - exchange_symbols
             for symbol in closed_symbols:
+                if symbol in self._settling_symbols:
+                    self._logger.debug(
+                        "Skipping close detection for settling symbol %s", symbol
+                    )
+                    continue
                 if self.active_positions[symbol].status == PositionStatus.OPEN:
                     await self._handle_position_closed(symbol)
 
@@ -1699,7 +1739,9 @@ class ExecutionEngineService(BaseService):
         for symbol, position in list(self.active_positions.items()):
             if position.status != PositionStatus.OPEN:
                 continue
-            
+            if symbol in self._settling_symbols:
+                continue
+
             try:
                 should_exit, current_roi, target_roi = await self.should_exit_on_roi(position)
                 
@@ -1797,6 +1839,7 @@ class ExecutionEngineService(BaseService):
         # Clean up tracking sets
         self._tp_sl_confirmed.discard(symbol)
         self._closing_positions.discard(symbol)
+        self._settling_symbols.discard(symbol)  # Defensive: should already be cleared by _handle_signal finally
 
         # Clean up - remove from active after a delay
         # to allow fill processing
