@@ -173,7 +173,7 @@ llm:
   model: "deepseek-chat"
   api_key_env: "DEEPSEEK_API_KEY"
 
-  max_calls_per_day: 500
+  max_calls_per_day: 50000
   timeout_seconds: 30
 
   fallback_on_error: "deny"
