@@ -156,6 +156,7 @@ strategies:
     enabled: true
     allow_short: true
     min_atr_pct: 0.1
+    min_adx: 30  # ADX entry minimum (above regime's 25 threshold, adds buffer)
     volume_filter_multiplier: 20  # min_volume_usd = equity * per_trade_pct * leverage * this
     rsi_long_min: 30
     rsi_long_max: 65

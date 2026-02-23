@@ -749,7 +749,12 @@ class ConservativeBot:
                 await asyncio.sleep(60)  # Wait before retry
 
     async def _evaluate_all_assets(self) -> None:
-        """Evaluate all assets for trading opportunities."""
+        """Evaluate all assets for trading opportunities.
+
+        Two-pass approach:
+          Pass 1: Collect all valid strategy candidates (cheap: regime + indicators only)
+          Pass 2: Sort by setup_quality, run expensive checks (LLM + spread) on top N
+        """
         # Check kill switch first
         kill_switch = self._services.get("kill_switch")
         if kill_switch and not kill_switch.is_trading_allowed():
@@ -807,8 +812,62 @@ class ConservativeBot:
             logger.warning("No market states available")
             return
 
+        # --- Pass 1: Collect candidates (cheap: strategy + regime only) ---
+        candidates: List[Setup] = []
+        symbols_with_positions: set = set()
+
+        if risk_manager:
+            symbols_with_positions = set(risk_manager._open_positions.keys())
+
         for symbol, state in states.items():
-            await self._evaluate_asset(state)
+            # Skip symbols that already have open positions
+            if symbol in symbols_with_positions:
+                continue
+
+            setup = self._evaluate_asset_candidate(state)
+            if setup is not None:
+                candidates.append(setup)
+
+        # --- Pass 2: Sort by quality, execute top N ---
+        if candidates:
+            candidates.sort(key=lambda s: s.setup_quality, reverse=True)
+
+            # Calculate available slots
+            if risk_manager:
+                pos_count = len(risk_manager._open_positions) + len(risk_manager._pending_intents)
+                available_slots = max(0, self.config.max_positions - pos_count)
+            else:
+                available_slots = self.config.max_positions
+
+            top_candidates = candidates[:available_slots]
+
+            ranking_str = ", ".join(
+                f"{s.symbol}({float(s.setup_quality):.2f})"
+                for s in candidates
+            )
+            if top_candidates:
+                logger.info(
+                    "Collected %d candidates, executing top %d by quality: [%s]",
+                    len(candidates),
+                    len(top_candidates),
+                    ranking_str,
+                )
+            else:
+                logger.info(
+                    "Found %d candidates but all %d slots full: [%s]",
+                    len(candidates),
+                    self.config.max_positions,
+                    ranking_str,
+                )
+
+            for setup in top_candidates:
+                # Re-check slots before burning LLM call
+                if risk_manager:
+                    cur_count = len(risk_manager._open_positions) + len(risk_manager._pending_intents)
+                    if cur_count >= self.config.max_positions:
+                        logger.info("All slots filled during execution, stopping")
+                        break
+                await self._execute_setup(setup)
 
         # Check pending LLM decisions (uses cached prices, zero extra API calls)
         if self._outcome_tracker and states:
@@ -820,20 +879,18 @@ class ConservativeBot:
             if resolved > 0:
                 logger.info("Resolved %d LLM decision outcomes", resolved)
 
-    async def _evaluate_asset(self, state: MarketState) -> None:
-        """
-        Evaluate a single asset for trading opportunities.
+    def _evaluate_asset_candidate(self, state: MarketState) -> Optional[Setup]:
+        """Phase 1: Evaluate a single asset for strategy setups (cheap, no API calls).
+
+        Runs regime check + strategy evaluation only. Returns the best Setup
+        found for this symbol, or None if no valid setup exists.
 
         Args:
             state: Current market state for the asset
-        """
-        # Early gate: skip evaluation if already at max positions
-        risk_svc = self._services.get("risk_manager")
-        if risk_svc:
-            pos_count = len(risk_svc._open_positions) + len(risk_svc._pending_intents)
-            if pos_count >= self.config.max_positions:
-                return
 
+        Returns:
+            Setup object if a valid candidate was found, None otherwise
+        """
         logger.debug(
             "Evaluating %s: regime=%s, ADX=%.1f",
             state.symbol,
@@ -841,7 +898,7 @@ class ConservativeBot:
             float(state.adx),
         )
 
-        # Try each strategy
+        # Try each strategy, return the first valid setup
         for strategy in self._strategies:
             # Check if strategy can trade in current regime
             if not strategy.can_trade(state):
@@ -856,64 +913,97 @@ class ConservativeBot:
             setup = result.setup
 
             logger.info(
-                "Setup found: %s %s @ %.2f (%s)",
+                "Setup found: %s %s @ %.2f (quality=%.2f, %s)",
                 setup.direction.value.upper(),
                 setup.symbol,
                 float(setup.entry_price),
+                float(setup.setup_quality),
                 strategy.name,
             )
 
-            # Pass through LLM veto
-            llm_service = self._services.get("llm_veto")
-            if llm_service:
-                _t0 = _time.monotonic()
-                approved, decision = await llm_service.evaluate_setup(setup)
-                _latency_ms = int((_time.monotonic() - _t0) * 1000)
+            return setup
 
-                # Log decision to outcome tracker (both ALLOW and DENY)
-                market_state_for_log = self._services.get("market_state")
-                ms_snapshot = (
-                    market_state_for_log.get_state(setup.symbol)
-                    if market_state_for_log else None
+        return None
+
+    async def _execute_setup(self, setup: Setup) -> None:
+        """Phase 2: Run expensive checks (LLM veto + spread) and execute a setup.
+
+        Called only for the top-N candidates after quality ranking.
+
+        Args:
+            setup: The Setup candidate to vet and execute
+        """
+        # Pass through LLM veto
+        llm_service = self._services.get("llm_veto")
+        if llm_service:
+            _t0 = _time.monotonic()
+            approved, decision = await llm_service.evaluate_setup(setup)
+            _latency_ms = int((_time.monotonic() - _t0) * 1000)
+
+            # Log decision to outcome tracker (both ALLOW and DENY)
+            market_state_for_log = self._services.get("market_state")
+            ms_snapshot = (
+                market_state_for_log.get_state(setup.symbol)
+                if market_state_for_log else None
+            )
+            if self._outcome_tracker:
+                await self._outcome_tracker.log_decision(
+                    setup=setup,
+                    decision=decision,
+                    market_state=ms_snapshot,
+                    latency_ms=_latency_ms,
                 )
-                if self._outcome_tracker:
-                    await self._outcome_tracker.log_decision(
-                        setup=setup,
-                        decision=decision,
-                        market_state=ms_snapshot,
-                        latency_ms=_latency_ms,
-                    )
 
-                if not approved:
-                    logger.info(
-                        "Setup DENIED by LLM: %s - %s",
-                        setup.symbol,
-                        decision.reason[:50],
-                    )
-                    continue
-
+            if not approved:
                 logger.info(
-                    "Setup APPROVED by LLM: %s (confidence: %.0f%%)",
+                    "Setup DENIED by LLM: %s - %s",
                     setup.symbol,
-                    float(decision.confidence) * 100,
+                    decision.reason[:50],
                 )
+                return
 
-                # Mark as approved
-                setup.llm_approved = True
+            logger.info(
+                "Setup APPROVED by LLM: %s (confidence: %.0f%%)",
+                setup.symbol,
+                float(decision.confidence) * 100,
+            )
 
-            # Check bid-ask spread before entering
-            if self._exchange:
-                spread_pct = await self._exchange.get_spread_pct(state.symbol)
-                if spread_pct > self.config.max_spread_pct:
-                    logger.info(
-                        "SKIP %s: bid-ask spread %.3f%% > max %.2f%% (illiquid)",
-                        state.symbol, spread_pct, self.config.max_spread_pct,
-                    )
-                    return
+            # Mark as approved
+            setup.llm_approved = True
 
-            # Publish setup for risk manager
-            if self._bus:
-                await self._bus.publish(Topic.SETUPS, setup.model_dump())
+        # Check bid-ask spread before entering
+        if self._exchange:
+            spread_pct = await self._exchange.get_spread_pct(setup.symbol)
+            if spread_pct > self.config.max_spread_pct:
+                logger.info(
+                    "SKIP %s: bid-ask spread %.3f%% > max %.2f%% (illiquid)",
+                    setup.symbol, spread_pct, self.config.max_spread_pct,
+                )
+                return
+
+        # Publish setup for risk manager
+        if self._bus:
+            await self._bus.publish(Topic.SETUPS, setup.model_dump())
+
+    async def _evaluate_asset(self, state: MarketState) -> None:
+        """Evaluate a single asset for trading opportunities.
+
+        Backward-compatible wrapper: runs both candidate evaluation and
+        execution sequentially. Used by tests that call _evaluate_asset directly.
+
+        Args:
+            state: Current market state for the asset
+        """
+        # Early gate: skip evaluation if already at max positions
+        risk_svc = self._services.get("risk_manager")
+        if risk_svc:
+            pos_count = len(risk_svc._open_positions) + len(risk_svc._pending_intents)
+            if pos_count >= self.config.max_positions:
+                return
+
+        setup = self._evaluate_asset_candidate(state)
+        if setup is not None:
+            await self._execute_setup(setup)
 
     # =========================================================================
     # Health Monitoring

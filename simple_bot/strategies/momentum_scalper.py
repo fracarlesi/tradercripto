@@ -45,6 +45,7 @@ class MomentumScalperStrategy(BaseStrategy):
         self.take_profit_pct = self.config.get("take_profit_pct", 1.6)
         self._volume_filter_multiplier = float(self.config.get("volume_filter_multiplier", 20))
         self._min_volume_usd = Decimal(str(self.config.get("min_volume_usd", 20000)))
+        self.min_adx = self.config.get("min_adx", 30)
 
         # RSI thresholds
         self.rsi_long_min = self.config.get("rsi_long_min", 30)
@@ -53,11 +54,12 @@ class MomentumScalperStrategy(BaseStrategy):
         self.rsi_short_max = self.config.get("rsi_short_max", 70)
 
         self._logger.info(
-            "MomentumScalper initialized: SL=%.1f%%, TP=%.1f%%, short=%s, min_atr=%.2f%%",
+            "MomentumScalper initialized: SL=%.1f%%, TP=%.1f%%, short=%s, min_atr=%.2f%%, min_adx=%d",
             self.stop_loss_pct,
             self.take_profit_pct,
             self.allow_short,
             self.min_atr_pct,
+            self.min_adx,
         )
 
     @property
@@ -91,6 +93,12 @@ class MomentumScalperStrategy(BaseStrategy):
         # Check EMA9/EMA21 are available
         if state.ema9 is None or state.ema21 is None:
             return self.reject("EMA9/EMA21 not available")
+
+        # ADX minimum entry threshold (above regime's 25, adds buffer against borderline entries)
+        if state.adx is not None and float(state.adx) < self.min_adx:
+            return self.reject(
+                f"ADX {float(state.adx):.1f} below entry min {self.min_adx}"
+            )
 
         # Check minimum volatility
         if float(state.atr_pct) < self.min_atr_pct:

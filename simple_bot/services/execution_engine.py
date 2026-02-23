@@ -383,8 +383,16 @@ class ExecutionEngineService(BaseService):
         )
     
     async def _run_iteration(self) -> None:
-        """Periodic position sync (backup to continuous monitoring)."""
-        await self._sync_positions_from_exchange()
+        """No-op: position sync is handled exclusively by _monitor_positions().
+
+        We deliberately avoid calling _sync_positions_from_exchange() here
+        because the background _monitor_positions task already syncs every
+        ~5 seconds.  Having two concurrent callers doubles exchange API
+        traffic and widens the race-condition window for position state
+        changes (e.g. a symbol appearing "closed" in one caller while
+        still settling in the other).
+        """
+        pass
     
     async def _health_check_impl(self) -> bool:
         """Check execution engine health."""

@@ -315,8 +315,10 @@ class MarketStateService(BaseService):
         # Current market states
         self._market_states: Dict[str, MarketState] = {}
 
-        # Regime history for hysteresis
-        self._regime_history: Dict[str, List[Regime]] = {}
+        # Regime hysteresis state (per symbol)
+        self._confirmed_regime: Dict[str, Regime] = {}
+        self._regime_change_counter: Dict[str, int] = {}
+        self._pending_regime: Dict[str, Regime] = {}
 
         self._logger.info(
             "MarketStateService initialized: assets=%s, timeframe=%s, interval=%ds",
@@ -642,7 +644,7 @@ class MarketStateService(BaseService):
         """
         cfg = self._state_config
 
-        # Determine raw regime
+        # Determine raw regime from current indicators
         if adx >= cfg.trend_adx_min and abs(ema200_slope) >= cfg.ema_slope_threshold:
             raw_regime = Regime.TREND
         elif adx <= cfg.range_adx_max and choppiness >= cfg.choppiness_range_min:
@@ -650,30 +652,33 @@ class MarketStateService(BaseService):
         else:
             raw_regime = Regime.CHAOS
 
-        # Initialize history if needed
-        if symbol not in self._regime_history:
-            self._regime_history[symbol] = []
+        # Initialize confirmed regime on first call for this symbol
+        if symbol not in self._confirmed_regime:
+            self._confirmed_regime[symbol] = raw_regime
+            self._regime_change_counter[symbol] = 0
+            return raw_regime
 
-        history = self._regime_history[symbol]
-        history.append(raw_regime)
+        confirmed = self._confirmed_regime[symbol]
 
-        # Keep only last N+1 entries
-        max_history = cfg.regime_confirmation_bars + 1
-        if len(history) > max_history:
-            history = history[-max_history:]
-            self._regime_history[symbol] = history
+        if raw_regime != confirmed:
+            pending = self._pending_regime.get(symbol)
+            if pending is not None and pending != raw_regime:
+                # Different alternative than last bar — reset counter
+                self._regime_change_counter[symbol] = 1
+            else:
+                self._regime_change_counter[symbol] += 1
+            self._pending_regime[symbol] = raw_regime
 
-        # Check if regime is confirmed
-        if len(history) >= cfg.regime_confirmation_bars:
-            recent = history[-cfg.regime_confirmation_bars:]
-            if all(r == raw_regime for r in recent):
+            if self._regime_change_counter[symbol] >= cfg.regime_confirmation_bars:
+                self._confirmed_regime[symbol] = raw_regime
+                self._regime_change_counter[symbol] = 0
+                self._pending_regime.pop(symbol, None)
                 return raw_regime
-
-            # Return previous confirmed regime if no consensus
-            if len(history) > cfg.regime_confirmation_bars:
-                return history[-cfg.regime_confirmation_bars - 1]
-
-        return raw_regime
+            return confirmed
+        else:
+            self._regime_change_counter[symbol] = 0
+            self._pending_regime.pop(symbol, None)
+            return confirmed
 
     # =========================================================================
     # Publishing
