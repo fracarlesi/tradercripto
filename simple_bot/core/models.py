@@ -86,6 +86,10 @@ class MarketState(BaseModel):
     ema9: Optional[Decimal] = Field(None, ge=0, description="EMA(9)")
     ema21: Optional[Decimal] = Field(None, ge=0, description="EMA(21)")
 
+    # EMA slopes (4-bar lookback, as fractional change)
+    ema9_slope: Decimal = Field(default=Decimal("0"), description="EMA9 slope: (ema9 - ema9_4bars_ago) / ema9_4bars_ago")
+    ema21_slope: Decimal = Field(default=Decimal("0"), description="EMA21 slope: (ema21 - ema21_4bars_ago) / ema21_4bars_ago")
+
     # Previous candle data for candlestick pattern detection
     prev_open: Optional[Decimal] = Field(None, ge=0, description="Previous candle open")
     prev_high: Optional[Decimal] = Field(None, ge=0, description="Previous candle high")

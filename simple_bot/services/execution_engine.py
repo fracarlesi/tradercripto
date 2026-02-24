@@ -64,6 +64,10 @@ logger = logging.getLogger(__name__)
 # the trade is rejected to prevent instant SL triggers.
 MIN_STOP_DISTANCE_PCT = 0.001  # 0.1%
 
+# When a position reaches this unrealized P&L %, the stop-loss is moved
+# to the entry price (breakeven) so the trade becomes risk-free.
+BREAKEVEN_THRESHOLD_PCT = 0.5  # 0.5%
+
 
 # =============================================================================
 # Data Classes
@@ -199,6 +203,7 @@ class ExecutionPosition:
     closed_at: Optional[datetime] = None
     exit_reason: Optional[str] = None  # "stop_loss", "take_profit", "roi_target", "regime_change", "manual"
     entry_regime: Optional[str] = None  # Regime at entry ("trend", "range", "chaos")
+    breakeven_activated: bool = False  # True once SL has been moved to entry price
     
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary."""
@@ -222,6 +227,7 @@ class ExecutionPosition:
             "closed_at": self.closed_at.isoformat() if self.closed_at else None,
             "exit_reason": self.exit_reason,
             "entry_regime": self.entry_regime,
+            "breakeven_activated": self.breakeven_activated,
         }
 
 
@@ -1545,6 +1551,9 @@ class ExecutionEngineService(BaseService):
                 # Check for closed positions (SL/TP hit)
                 await self._check_closed_positions()
 
+                # Move SL to breakeven when profit threshold is reached
+                await self._check_breakeven_stops()
+
                 # Check for ROI-based exits (time-based take profit)
                 await self._check_roi_exits()
 
@@ -1703,6 +1712,88 @@ class ExecutionEngineService(BaseService):
                     self._logger.error(
                         "Failed to close %s after %s: %s", symbol, hit_reason, e
                     )
+
+    async def _check_breakeven_stops(self) -> None:
+        """Move SL to entry price (breakeven) when unrealized P&L reaches threshold.
+
+        For each OPEN position that has not yet been moved to breakeven:
+        1. Calculate current P&L % using Decimal arithmetic.
+        2. If P&L % >= BREAKEVEN_THRESHOLD_PCT:
+           a. Cancel the old SL trigger on the exchange.
+           b. Place a new SL trigger at the entry price.
+           c. Mark the position as breakeven_activated.
+        """
+        from decimal import Decimal
+
+        threshold = Decimal(str(BREAKEVEN_THRESHOLD_PCT))
+
+        for symbol, position in list(self.active_positions.items()):
+            if position.status != PositionStatus.OPEN:
+                continue
+            if position.breakeven_activated:
+                continue
+            if symbol in self._settling_symbols:
+                continue
+            if position.entry_price <= 0:
+                continue
+
+            # Calculate P&L % with Decimal precision
+            entry = Decimal(str(position.entry_price))
+            current = Decimal(str(position.current_price))
+
+            if position.side == "long":
+                pnl_pct = (current - entry) / entry * Decimal("100")
+            else:
+                pnl_pct = (entry - current) / entry * Decimal("100")
+
+            if pnl_pct < threshold:
+                continue
+
+            # --- Breakeven triggered ---
+            is_long = position.side == "long"
+            new_sl_price = position.entry_price
+
+            self._logger.info(
+                "Breakeven activated: %s %s — SL moved to entry %.4f (P&L %.2f%%)",
+                "LONG" if is_long else "SHORT",
+                symbol,
+                new_sl_price,
+                float(pnl_pct),
+            )
+
+            # 1) Cancel old SL trigger
+            if position.sl_order_id:
+                try:
+                    await self.client.cancel_order(symbol, int(position.sl_order_id))
+                    self._logger.debug(
+                        "Cancelled old SL order %s for %s", position.sl_order_id, symbol,
+                    )
+                except Exception as e:
+                    self._logger.warning(
+                        "Failed to cancel old SL %s for %s: %s",
+                        position.sl_order_id, symbol, e,
+                    )
+
+            # 2) Place new SL trigger at entry (breakeven)
+            try:
+                sl_result = await self._place_trigger_with_retry(
+                    symbol=symbol,
+                    is_buy=not is_long,
+                    size=position.size,
+                    trigger_price=new_sl_price,
+                    tpsl="sl",
+                )
+                position.sl_order_id = sl_result.get("orderId")
+                position.sl_price = new_sl_price
+                position.breakeven_activated = True
+                self._logger.info(
+                    "Breakeven SL placed: %s @ %.4f (order %s)",
+                    symbol, new_sl_price, position.sl_order_id,
+                )
+            except Exception as e:
+                self._logger.error(
+                    "Failed to place breakeven SL for %s: %s", symbol, e,
+                )
 
     async def should_exit_on_roi(self, position: ExecutionPosition) -> tuple[bool, float, float]:
         """

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
@@ -114,11 +113,6 @@ def _extract_features(
     else:
         bb_position = 0.5
 
-    # Time features
-    dt = datetime.fromtimestamp(candles[idx]["t"] / 1000, tz=timezone.utc)
-    hour_utc = dt.hour
-    day_of_week = dt.weekday()
-
     # EMA slopes (4-bar lookback)
     if idx >= 4 and not np.isnan(ind["ema9"][idx - 4]) and ind["ema9"][idx - 4] > 0:
         ema9_slope = (ind["ema9"][idx] - ind["ema9"][idx - 4]) / ind["ema9"][idx - 4]
@@ -143,9 +137,6 @@ def _extract_features(
         "ema_spread_pct": ema_spread_pct,
         "volume_ratio": volume_ratio,
         "bb_position": bb_position,
-        "hour_utc": hour_utc,
-        "day_of_week": day_of_week,
-        "direction_encoded": 1 if direction == 1 else 0,
         "ema9_slope": ema9_slope,
         "ema21_slope": ema21_slope,
         "close_vs_ema200": close_vs_ema200,

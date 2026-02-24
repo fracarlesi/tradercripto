@@ -18,10 +18,11 @@ Author: Francesco Carlesi
 import asyncio
 import logging
 import os
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any, Deque, Dict, List, Optional
 
 import numpy as np
 from hyperliquid.info import Info
@@ -320,6 +321,10 @@ class MarketStateService(BaseService):
         self._regime_change_counter: Dict[str, int] = {}
         self._pending_regime: Dict[str, Regime] = {}
 
+        # EMA slope history buffers (keep last 5 values to compute 4-bar lookback)
+        self._ema9_history: Dict[str, Deque[float]] = {}
+        self._ema21_history: Dict[str, Deque[float]] = {}
+
         self._logger.info(
             "MarketStateService initialized: assets=%s, timeframe=%s, interval=%ds",
             self._state_config.assets,
@@ -367,6 +372,8 @@ class MarketStateService(BaseService):
         self._logger.info("Stopping MarketStateService...")
         self._info = None
         self._ohlcv_cache.clear()
+        self._ema9_history.clear()
+        self._ema21_history.clear()
 
     async def _run_iteration(self) -> None:
         """Fetch and publish market states."""
@@ -448,6 +455,11 @@ class MarketStateService(BaseService):
             # Fast EMAs for momentum scalper
             ema9 = calculate_ema(close, 9)
             ema21 = calculate_ema(close, 21)
+
+            # EMA slopes (4-bar lookback, matching ml_dataset formula)
+            ema9_slope, ema21_slope = self._compute_ema_slopes(
+                symbol, float(ema9[-1]), float(ema21[-1])
+            )
 
             # ADX
             adx_values = calculate_adx(high, low, close, 14)
@@ -533,6 +545,8 @@ class MarketStateService(BaseService):
                 sma50=Decimal(str(sma50_arr[-1])),
                 ema9=Decimal(str(ema9[-1])),
                 ema21=Decimal(str(ema21[-1])),
+                ema9_slope=ema9_slope,
+                ema21_slope=ema21_slope,
                 prev_open=prev_open,
                 prev_high=prev_high,
                 prev_low=prev_low,
@@ -620,6 +634,57 @@ class MarketStateService(BaseService):
         except Exception as e:
             self._logger.error("Failed to fetch OHLCV for %s: %s", symbol, e)
             return None
+
+    # =========================================================================
+    # EMA Slope Calculation
+    # =========================================================================
+
+    def _compute_ema_slopes(
+        self,
+        symbol: str,
+        ema9_current: float,
+        ema21_current: float,
+    ) -> tuple[Decimal, Decimal]:
+        """Compute EMA9 and EMA21 slopes using 4-bar lookback.
+
+        Formula matches ml_dataset._extract_features:
+            slope = (ema_current - ema_4bars_ago) / ema_4bars_ago
+
+        Maintains a per-symbol deque of the last 5 EMA values.
+        Returns (Decimal("0"), Decimal("0")) if fewer than 5 data points
+        are available (i.e. 4-bar lookback not yet possible).
+        """
+        # Initialize history buffers for new symbols
+        if symbol not in self._ema9_history:
+            self._ema9_history[symbol] = deque(maxlen=5)
+            self._ema21_history[symbol] = deque(maxlen=5)
+
+        # Append current values
+        self._ema9_history[symbol].append(ema9_current)
+        self._ema21_history[symbol].append(ema21_current)
+
+        ema9_buf = self._ema9_history[symbol]
+        ema21_buf = self._ema21_history[symbol]
+
+        # Need at least 5 values (current + 4 bars ago)
+        if len(ema9_buf) < 5:
+            return Decimal("0"), Decimal("0")
+
+        # slope = (current - 4_bars_ago) / 4_bars_ago
+        ema9_4ago = ema9_buf[0]  # oldest in the 5-element deque
+        ema21_4ago = ema21_buf[0]
+
+        if ema9_4ago > 0:
+            ema9_slope = Decimal(str((ema9_current - ema9_4ago) / ema9_4ago))
+        else:
+            ema9_slope = Decimal("0")
+
+        if ema21_4ago > 0:
+            ema21_slope = Decimal(str((ema21_current - ema21_4ago) / ema21_4ago))
+        else:
+            ema21_slope = Decimal("0")
+
+        return ema9_slope, ema21_slope
 
     # =========================================================================
     # Regime Detection

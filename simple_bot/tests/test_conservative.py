@@ -588,6 +588,139 @@ dry_run: false
 
 
 # =============================================================================
+# Regime Gate Tests
+# =============================================================================
+
+class TestRegimeGate:
+    """Test that _evaluate_all_assets skips non-TREND assets."""
+
+    def _make_bot(self) -> "ConservativeBot":
+        """Create a ConservativeBot with mocked dependencies for regime gate testing."""
+        from simple_bot.main import ConservativeBot, ConservativeConfig
+        from simple_bot.services.ml_model import MLTradeModel
+
+        bot = ConservativeBot.__new__(ConservativeBot)
+        bot._config = MagicMock(spec=ConservativeConfig)
+        bot._config.max_positions = 3
+        bot._config.ml_min_probability = 0.55
+        bot._config.stop_loss_pct = 0.8
+        bot._config.take_profit_pct = 1.6
+        bot._config.max_spread_pct = 0.10
+        bot._exchange = AsyncMock()
+        bot._bus = AsyncMock(spec_set=["publish"])
+        bot._bus.publish = AsyncMock()
+
+        # ML model mock: always returns high probability
+        bot._ml_model = MagicMock(spec=MLTradeModel)
+        bot._ml_model.is_loaded = True
+        bot._ml_model.extract_features = MagicMock(return_value={"feat": 1.0})
+        bot._ml_model.predict = MagicMock(return_value=(0.75, "mock reason"))
+
+        # Services: no kill switch, no cooldown, no protections
+        bot._services = {}
+
+        return bot
+
+    def _make_state(self, symbol: str, regime: Regime) -> MarketState:
+        """Create a MarketState with the given regime."""
+        return MarketState(
+            symbol=symbol,
+            timeframe="15m",
+            timestamp=datetime.now(timezone.utc),
+            open=Decimal("100"),
+            high=Decimal("105"),
+            low=Decimal("95"),
+            close=Decimal("102"),
+            volume=Decimal("1000"),
+            atr=Decimal("5"),
+            atr_pct=Decimal("0.5"),
+            adx=Decimal("30"),
+            rsi=Decimal("55"),
+            ema50=Decimal("100"),
+            ema200=Decimal("98"),
+            ema200_slope=Decimal("0.001"),
+            sma20=Decimal("101"),
+            sma50=Decimal("99"),
+            prev_open=Decimal("99"),
+            prev_high=Decimal("101"),
+            prev_low=Decimal("97"),
+            prev_close=Decimal("100"),
+            bullish_engulfing=False,
+            bearish_engulfing=False,
+            regime=regime,
+            trend_direction=Direction.LONG if regime == Regime.TREND else Direction.FLAT,
+        )
+
+    @pytest.mark.asyncio
+    async def test_range_assets_skipped(self) -> None:
+        """Assets in RANGE regime are skipped by the regime gate."""
+        bot = self._make_bot()
+        market_state_svc = MagicMock()
+        market_state_svc.get_all_states.return_value = {
+            "ETH": self._make_state("ETH", Regime.RANGE),
+            "SOL": self._make_state("SOL", Regime.RANGE),
+        }
+        bot._services = {"market_state": market_state_svc}
+
+        await bot._evaluate_all_assets()
+
+        # ML predict should never be called (all assets are RANGE)
+        bot._ml_model.predict.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_chaos_assets_skipped(self) -> None:
+        """Assets in CHAOS regime are skipped by the regime gate."""
+        bot = self._make_bot()
+        market_state_svc = MagicMock()
+        market_state_svc.get_all_states.return_value = {
+            "BTC": self._make_state("BTC", Regime.CHAOS),
+        }
+        bot._services = {"market_state": market_state_svc}
+
+        await bot._evaluate_all_assets()
+
+        bot._ml_model.predict.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_trend_assets_evaluated(self) -> None:
+        """Assets in TREND regime pass the regime gate and reach ML prediction."""
+        bot = self._make_bot()
+        market_state_svc = MagicMock()
+        market_state_svc.get_all_states.return_value = {
+            "BTC": self._make_state("BTC", Regime.TREND),
+        }
+        bot._services = {"market_state": market_state_svc}
+
+        # Mock _execute_setup so it doesn't try real execution
+        bot._execute_setup = AsyncMock(return_value=True)
+
+        await bot._evaluate_all_assets()
+
+        # ML predict should have been called once (direction from market state)
+        assert bot._ml_model.predict.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_mixed_regimes_only_trend_evaluated(self) -> None:
+        """Only TREND assets are evaluated when a mix of regimes is present."""
+        bot = self._make_bot()
+        market_state_svc = MagicMock()
+        market_state_svc.get_all_states.return_value = {
+            "BTC": self._make_state("BTC", Regime.TREND),
+            "ETH": self._make_state("ETH", Regime.RANGE),
+            "SOL": self._make_state("SOL", Regime.CHAOS),
+            "DOGE": self._make_state("DOGE", Regime.TREND),
+        }
+        bot._services = {"market_state": market_state_svc}
+
+        bot._execute_setup = AsyncMock(return_value=True)
+
+        await bot._evaluate_all_assets()
+
+        # 2 TREND assets x 1 predict each = 2 predict calls
+        assert bot._ml_model.predict.call_count == 2
+
+
+# =============================================================================
 # Integration Tests
 # =============================================================================
 

@@ -32,9 +32,6 @@ class MLTradeModel:
         "ema_spread_pct",
         "volume_ratio",
         "bb_position",
-        "hour_utc",
-        "day_of_week",
-        "direction_encoded",
         "ema9_slope",
         "ema21_slope",
         "close_vs_ema200",
@@ -162,12 +159,11 @@ class MLTradeModel:
     # Feature extraction
     # ------------------------------------------------------------------
 
-    def extract_features(self, state: MarketState, direction_encoded: int) -> dict:
+    def extract_features(self, state: MarketState) -> dict:
         """Extract features from a live MarketState for prediction.
 
         Args:
             state: MarketState with all indicators
-            direction_encoded: 1 for LONG, 0 for SHORT
 
         Returns:
             dict with keys matching FEATURES
@@ -197,11 +193,8 @@ class MLTradeModel:
             "ema_spread_pct": ema_spread_pct,
             "volume_ratio": float(state.volume_ratio) if state.volume_ratio is not None else 1.0,
             "bb_position": bb_position,
-            "hour_utc": state.timestamp.hour,
-            "day_of_week": state.timestamp.weekday(),
-            "direction_encoded": direction_encoded,
-            "ema9_slope": 0.0,   # Not available in single-bar MarketState
-            "ema21_slope": 0.0,  # Not available in single-bar MarketState
+            "ema9_slope": float(state.ema9_slope),
+            "ema21_slope": float(state.ema21_slope),
             "close_vs_ema200": close_vs_ema200,
         }
 
@@ -228,6 +221,18 @@ class MLTradeModel:
             payload = joblib.load(path)
             self._model = payload["model"]
             self._feature_importances = payload.get("feature_importances", {})
+
+            # Warn if saved model was trained with different features
+            model_features = set(self._feature_importances.keys())
+            expected_features = set(self.FEATURES)
+            if model_features and model_features != expected_features:
+                logger.warning(
+                    "ML model features mismatch - retrain required: "
+                    "model=%s, expected=%s",
+                    sorted(model_features),
+                    sorted(expected_features),
+                )
+
             logger.info("Model loaded from %s", path)
             return True
         except FileNotFoundError:

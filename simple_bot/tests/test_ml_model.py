@@ -1,6 +1,7 @@
 """Tests for ML trade selection model."""
 from __future__ import annotations
 
+import logging
 import tempfile
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -28,9 +29,6 @@ def mock_dataset() -> pd.DataFrame:
         "ema_spread_pct": np.random.uniform(0, 2, n),
         "volume_ratio": np.random.uniform(0.3, 3.0, n),
         "bb_position": np.random.uniform(0, 1, n),
-        "hour_utc": np.random.randint(0, 24, n),
-        "day_of_week": np.random.randint(0, 7, n),
-        "direction_encoded": np.random.randint(0, 2, n),
         "ema9_slope": np.random.uniform(-0.01, 0.01, n),
         "ema21_slope": np.random.uniform(-0.01, 0.01, n),
         "close_vs_ema200": np.random.uniform(-5, 5, n),
@@ -70,6 +68,8 @@ def sample_market_state() -> MarketState:
         sma50=Decimal("49500"),
         ema9=Decimal("50100"),
         ema21=Decimal("49900"),
+        ema9_slope=Decimal("0.003"),
+        ema21_slope=Decimal("0.0015"),
         prev_open=Decimal("49900"),
         prev_high=Decimal("50300"),
         prev_low=Decimal("49700"),
@@ -133,8 +133,7 @@ class TestMLPrediction:
         features = {
             "adx": 35, "rsi": 55, "atr_pct": 0.4,
             "ema_spread_pct": 0.5, "volume_ratio": 1.2,
-            "bb_position": 0.6, "hour_utc": 14, "day_of_week": 1,
-            "direction_encoded": 1, "ema9_slope": 0.002,
+            "bb_position": 0.6, "ema9_slope": 0.002,
             "ema21_slope": 0.001, "close_vs_ema200": 2.0,
         }
         prob, explanation = trained_model.predict(features)
@@ -155,26 +154,32 @@ class TestFeatureExtraction:
     def test_extract_features_all_keys(
         self, trained_model: MLTradeModel, sample_market_state: MarketState
     ) -> None:
-        features = trained_model.extract_features(sample_market_state, 1)
+        features = trained_model.extract_features(sample_market_state)
         for feat in MLTradeModel.FEATURES:
             assert feat in features, f"Missing feature: {feat}"
+
+    def test_extract_features_no_removed_features(
+        self, trained_model: MLTradeModel, sample_market_state: MarketState
+    ) -> None:
+        """Verify removed overfitting features are not present."""
+        features = trained_model.extract_features(sample_market_state)
+        assert "direction_encoded" not in features
+        assert "hour_utc" not in features
+        assert "day_of_week" not in features
 
     def test_extract_features_values_reasonable(
         self, trained_model: MLTradeModel, sample_market_state: MarketState
     ) -> None:
-        features = trained_model.extract_features(sample_market_state, 1)
+        features = trained_model.extract_features(sample_market_state)
         assert features["adx"] == 35.0
         assert features["rsi"] == 55.0
-        assert features["direction_encoded"] == 1
-        assert features["hour_utc"] == 14
-        assert features["day_of_week"] == 1  # Tuesday (2026-02-24)
 
     def test_extract_features_no_bollinger(
         self, trained_model: MLTradeModel, sample_market_state: MarketState
     ) -> None:
         sample_market_state.bb_upper = None
         sample_market_state.bb_lower = None
-        features = trained_model.extract_features(sample_market_state, 0)
+        features = trained_model.extract_features(sample_market_state)
         assert features["bb_position"] == 0.5
 
     def test_extract_features_no_ema9(
@@ -182,8 +187,115 @@ class TestFeatureExtraction:
     ) -> None:
         sample_market_state.ema9 = None
         sample_market_state.ema21 = None
-        features = trained_model.extract_features(sample_market_state, 1)
+        features = trained_model.extract_features(sample_market_state)
         assert features["ema_spread_pct"] == 0.0
+
+    def test_extract_features_reads_slopes_from_market_state(
+        self, trained_model: MLTradeModel, sample_market_state: MarketState
+    ) -> None:
+        """Verify extract_features reads slopes from MarketState, not hardcoded 0."""
+        features = trained_model.extract_features(sample_market_state)
+        assert features["ema9_slope"] == pytest.approx(0.003)
+        assert features["ema21_slope"] == pytest.approx(0.0015)
+
+    def test_extract_features_default_slopes_are_zero(
+        self, trained_model: MLTradeModel, sample_market_state: MarketState
+    ) -> None:
+        """Verify slopes default to 0 when not set (backwards compat)."""
+        sample_market_state.ema9_slope = Decimal("0")
+        sample_market_state.ema21_slope = Decimal("0")
+        features = trained_model.extract_features(sample_market_state)
+        assert features["ema9_slope"] == 0.0
+        assert features["ema21_slope"] == 0.0
+
+    def test_extract_features_negative_slopes(
+        self, trained_model: MLTradeModel, sample_market_state: MarketState
+    ) -> None:
+        """Verify negative slopes are propagated correctly."""
+        sample_market_state.ema9_slope = Decimal("-0.005")
+        sample_market_state.ema21_slope = Decimal("-0.002")
+        features = trained_model.extract_features(sample_market_state)
+        assert features["ema9_slope"] == pytest.approx(-0.005)
+        assert features["ema21_slope"] == pytest.approx(-0.002)
+
+
+# ── EMA Slope Computation Tests ──────────────────────────────────────────
+
+class TestEMASlopeComputation:
+    """Tests for MarketStateService._compute_ema_slopes."""
+
+    def _make_service(self) -> "MarketStateService":
+        """Create a minimal MarketStateService for testing slopes."""
+        from simple_bot.services.market_state import MarketStateService
+        return MarketStateService(name="test_market_state", bus=None, db=None)
+
+    def test_slopes_zero_with_fewer_than_5_bars(self) -> None:
+        """Slopes should be 0 until we have 5 data points (4-bar lookback)."""
+        svc = self._make_service()
+        for i in range(4):
+            ema9_slope, ema21_slope = svc._compute_ema_slopes("BTC", 100.0 + i, 100.0 + i)
+            assert ema9_slope == Decimal("0")
+            assert ema21_slope == Decimal("0")
+
+    def test_slopes_computed_with_5_bars(self) -> None:
+        """After 5 data points, slopes should be computed correctly."""
+        svc = self._make_service()
+        ema9_values = [100.0, 101.0, 102.0, 103.0, 104.0]
+        ema21_values = [200.0, 200.5, 201.0, 201.5, 202.0]
+
+        for i in range(5):
+            ema9_slope, ema21_slope = svc._compute_ema_slopes(
+                "BTC", ema9_values[i], ema21_values[i]
+            )
+
+        # slope = (current - 4bars_ago) / 4bars_ago
+        expected_ema9 = (104.0 - 100.0) / 100.0  # 0.04
+        expected_ema21 = (202.0 - 200.0) / 200.0  # 0.01
+
+        assert float(ema9_slope) == pytest.approx(expected_ema9)
+        assert float(ema21_slope) == pytest.approx(expected_ema21)
+
+    def test_slopes_rolling_window(self) -> None:
+        """Deque should roll: after 6th data point, oldest is evicted."""
+        svc = self._make_service()
+        values = [100.0, 101.0, 102.0, 103.0, 104.0, 108.0]
+
+        for val in values:
+            ema9_slope, _ = svc._compute_ema_slopes("BTC", val, val)
+
+        # After 6 values, deque=[101, 102, 103, 104, 108], 4bars_ago=101
+        expected = (108.0 - 101.0) / 101.0
+        assert float(ema9_slope) == pytest.approx(expected)
+
+    def test_slopes_per_symbol_isolation(self) -> None:
+        """Different symbols should have independent slope buffers."""
+        svc = self._make_service()
+
+        # Fill BTC with 5 bars
+        for val in [100.0, 101.0, 102.0, 103.0, 104.0]:
+            svc._compute_ema_slopes("BTC", val, val)
+
+        # ETH has only 3 bars
+        for val in [50.0, 51.0, 52.0]:
+            eth_slope, _ = svc._compute_ema_slopes("ETH", val, val)
+
+        # BTC should have valid slopes, ETH should still be 0
+        btc_slope, _ = svc._compute_ema_slopes("BTC", 105.0, 105.0)
+        assert float(btc_slope) != 0.0
+
+        assert eth_slope == Decimal("0")
+
+    def test_slopes_negative_trend(self) -> None:
+        """Slopes should be negative for declining EMA values."""
+        svc = self._make_service()
+        values = [100.0, 99.0, 98.0, 97.0, 96.0]
+
+        for val in values:
+            ema9_slope, _ = svc._compute_ema_slopes("BTC", val, val)
+
+        expected = (96.0 - 100.0) / 100.0  # -0.04
+        assert float(ema9_slope) == pytest.approx(expected)
+        assert ema9_slope < Decimal("0")
 
 
 # ── Persistence Tests ─────────────────────────────────────────────────────
@@ -195,8 +307,7 @@ class TestMLPersistence:
         features = {
             "adx": 35, "rsi": 55, "atr_pct": 0.4,
             "ema_spread_pct": 0.5, "volume_ratio": 1.2,
-            "bb_position": 0.6, "hour_utc": 14, "day_of_week": 1,
-            "direction_encoded": 1, "ema9_slope": 0.002,
+            "bb_position": 0.6, "ema9_slope": 0.002,
             "ema21_slope": 0.001, "close_vs_ema200": 2.0,
         }
         prob_before, _ = trained_model.predict(features)
@@ -217,6 +328,28 @@ class TestMLPersistence:
         model = MLTradeModel()
         assert not model.load("/tmp/nonexistent_model.joblib")
         assert not model.is_loaded
+
+    def test_load_warns_on_feature_mismatch(
+        self, trained_model: MLTradeModel, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Loading a model trained with different features logs a warning."""
+        with tempfile.NamedTemporaryFile(suffix=".joblib", delete=False) as f:
+            path = f.name
+
+        # Save a model that has current features
+        trained_model.save(path)
+
+        # Manually inject old features to simulate mismatch
+        import joblib as _joblib
+        payload = _joblib.load(path)
+        payload["feature_importances"]["direction_encoded"] = 0.15
+        payload["feature_importances"]["hour_utc"] = 0.08
+        _joblib.dump(payload, path)
+
+        loaded = MLTradeModel()
+        with caplog.at_level(logging.WARNING):
+            assert loaded.load(path)
+        assert "features mismatch" in caplog.text
 
 
 # ── Dataset Generator Tests ───────────────────────────────────────────────

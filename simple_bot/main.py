@@ -44,7 +44,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from database.db import Database
 
 from .core.enums import Topic
-from .core.models import Direction, MarketState, Setup, SetupType
+from .core.models import Direction, MarketState, Regime, Setup, SetupType
 
 # Services
 from .services.message_bus import MessageBus
@@ -622,25 +622,29 @@ class ConservativeBot:
         if risk_manager:
             symbols_with_positions = set(risk_manager._open_positions.keys())
 
+        regime_skipped: int = 0
         for symbol, state in states.items():
             if symbol in symbols_with_positions:
                 continue
 
-            # Predict P(TP) for both directions, pick best
-            best_prob = 0.0
-            best_direction: Direction | None = None
-            best_reason = ""
-
-            for dir_enc, direction in [(1, Direction.LONG), (0, Direction.SHORT)]:
-                features = self._ml_model.extract_features(state, dir_enc)
-                prob, reason = self._ml_model.predict(features)
-                if prob > best_prob:
-                    best_prob = prob
-                    best_direction = direction
-                    best_reason = reason
-
-            if best_prob < self.config.ml_min_probability or best_direction is None:
+            # Regime gate: only trade in TREND regime
+            if state.regime != Regime.TREND:
+                regime_skipped += 1
                 continue
+
+            # Direction from EMA crossover (trend_direction in MarketState)
+            direction = state.trend_direction
+
+            # Predict P(TP) for this market setup
+            features = self._ml_model.extract_features(state)
+            prob, reason = self._ml_model.predict(features)
+
+            if prob < self.config.ml_min_probability:
+                continue
+
+            best_prob = prob
+            best_direction = direction
+            best_reason = reason
 
             # Create Setup
             sl_pct = Decimal(str(self.config.stop_loss_pct))
@@ -672,6 +676,9 @@ class ConservativeBot:
                 best_direction.value.upper(), symbol, best_prob * 100, best_reason,
             )
             candidates.append((symbol, setup, best_prob, best_reason))
+
+        if regime_skipped > 0:
+            logger.debug("Regime gate: skipped %d assets (non-TREND regime)", regime_skipped)
 
         # --- Sort by P(TP) desc, execute top N ---
         if not candidates:
