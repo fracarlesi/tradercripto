@@ -9,6 +9,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application
 COPY simple_bot/ ./simple_bot/
 COPY database/ ./database/
+COPY models/ ./models/
+COPY backtesting/ ./backtesting/
 # NOTE: .env NOT copied - provided via docker-compose env_file
 
 # Set Python path

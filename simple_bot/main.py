@@ -28,6 +28,7 @@ import logging
 import os
 import signal
 import sys
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -165,6 +166,8 @@ class ConservativeConfig:
     # ML Model
     ml_model_path: str
     ml_min_probability: float
+    ml_retrain_interval_days: int
+    ml_retrain_days: int
 
     # Execution
     prefer_limit: bool
@@ -234,6 +237,8 @@ class ConservativeConfig:
             regime_confirmation_bars=regime.get("confirmation_bars", 2),
             ml_model_path=ml.get("model_path", "models/trade_model.joblib"),
             ml_min_probability=ml.get("min_probability", 0.55),
+            ml_retrain_interval_days=ml.get("retrain_interval_days", 3),
+            ml_retrain_days=ml.get("retrain_days", 30),
             prefer_limit=execution.get("prefer_limit", True),
             max_slippage_pct=execution.get("max_slippage_pct", 0.1),
             max_spread_pct=execution.get("max_spread_pct", 0.10),
@@ -296,6 +301,7 @@ class ConservativeBot:
         # Background tasks
         self._strategy_task: Optional[asyncio.Task] = None
         self._health_task: Optional[asyncio.Task] = None
+        self._retrain_task: Optional[asyncio.Task] = None
 
     # =========================================================================
     # Properties
@@ -718,6 +724,78 @@ class ConservativeBot:
             await self._bus.publish(Topic.SETUPS, setup.model_dump())
 
     # =========================================================================
+    # ML Model Retraining
+    # =========================================================================
+
+    async def _retrain_loop(self) -> None:
+        """Periodically retrain the ML model with fresh data."""
+        await asyncio.sleep(60)  # Let bot fully initialize
+
+        interval = self.config.ml_retrain_interval_days * 86400
+
+        while self._running and not self._shutdown_event.is_set():
+            try:
+                await self._do_retrain()
+            except Exception as e:
+                logger.error("Retrain error: %s", e, exc_info=True)
+
+            try:
+                await asyncio.wait_for(self._shutdown_event.wait(), timeout=interval)
+                break
+            except asyncio.TimeoutError:
+                pass
+
+    async def _do_retrain(self) -> None:
+        """Execute model retraining if model is stale or missing."""
+        model_path = Path(self.config.ml_model_path)
+        if model_path.exists():
+            age_days = (time.time() - model_path.stat().st_mtime) / 86400
+            if age_days < self.config.ml_retrain_interval_days:
+                logger.info("Model is %.1f days old, retrain not needed yet", age_days)
+                return
+
+        logger.info("Starting ML model retrain (%d days of data)...", self.config.ml_retrain_days)
+
+        metrics = await asyncio.get_event_loop().run_in_executor(None, self._retrain_sync)
+
+        if metrics is None:
+            logger.warning("Retrain produced no results (insufficient data)")
+            return
+
+        if metrics["cv_auc_mean"] < 0.52:
+            logger.warning(
+                "New model CV AUC %.4f too low (<0.52), keeping old model",
+                metrics["cv_auc_mean"],
+            )
+            return
+
+        self._ml_model.load(self.config.ml_model_path)
+        logger.info(
+            "Model retrained and loaded: CV AUC=%.4f, %d samples",
+            metrics["cv_auc_mean"], metrics["n_samples"],
+        )
+
+    def _retrain_sync(self) -> dict | None:
+        """Synchronous retrain — runs in thread pool."""
+        from backtesting.api import get_all_assets
+        from backtesting.config import load_config
+        from simple_bot.services.ml_dataset import generate_dataset
+
+        cfg = load_config()
+        all_assets = get_all_assets()
+        symbols = [s for s in all_assets if s not in cfg.exclude_symbols]
+
+        df = generate_dataset(symbols, days=self.config.ml_retrain_days, cfg=cfg)
+        if df.empty or len(df) < 50:
+            return None
+
+        model = MLTradeModel()
+        metrics = model.train(df)
+        Path(self.config.ml_model_path).parent.mkdir(parents=True, exist_ok=True)
+        model.save(self.config.ml_model_path)
+        return metrics
+
+    # =========================================================================
     # Health Monitoring
     # =========================================================================
 
@@ -805,6 +883,9 @@ class ConservativeBot:
             self._health_task = asyncio.create_task(
                 self._health_loop(), name="health_loop",
             )
+            self._retrain_task = asyncio.create_task(
+                self._retrain_loop(), name="retrain_loop",
+            )
 
             self._running = True
             self._start_time = datetime.now(timezone.utc)
@@ -844,7 +925,7 @@ class ConservativeBot:
         self._running = False
         self._shutdown_event.set()
 
-        for task in [self._strategy_task, self._health_task]:
+        for task in [self._strategy_task, self._health_task, self._retrain_task]:
             if task and not task.done():
                 task.cancel()
                 try:

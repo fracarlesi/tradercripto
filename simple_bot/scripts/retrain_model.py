@@ -19,7 +19,7 @@ from simple_bot.services.ml_dataset import generate_dataset
 from simple_bot.services.ml_model import MLTradeModel
 
 DEFAULT_MODEL_PATH = "models/trade_model.joblib"
-DEFAULT_DAYS = 90
+DEFAULT_DAYS = 30
 
 
 def main() -> None:
