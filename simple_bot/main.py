@@ -1,26 +1,19 @@
 #!/usr/bin/env python3
 """
-HLQuantBot Conservative System - Main Orchestrator
-====================================================
+HLQuantBot v4 - XGBoost ML Trade Selector
+==========================================
 
-"Boring but scalable" trading system with strict risk controls.
+Trading system with ML-based trade selection and strict risk controls.
+
+Architecture:
+    MarketState → XGBoost.predict(features) → P(TP) → RiskManager → Execution
 
 This orchestrator:
-1. Loads conservative trading configuration
+1. Loads configuration from trading.yaml
 2. Initializes core services (database, message bus)
-3. Starts specialized services in dependency order:
-   - MarketStateService: Fetches data for BTC/ETH only
-   - KillSwitchService: Monitors drawdowns (CRITICAL)
-   - LLMVetoService: Trade filter (not decision maker)
-   - RiskManagerService: Position sizing
-   - ExecutionEngineService: Order execution
-4. Runs strategies that only trade in appropriate regimes
-5. Monitors health and handles graceful shutdown
-
-Target: 1-3% monthly, 5-15 trades/month, max 15% drawdown
-
-Usage:
-    python -m simple_bot.main_conservative
+3. Loads pre-trained XGBoost model
+4. Scans all assets, predicts P(TP) for each direction
+5. Executes top-N candidates by P(TP) descending
 
 Author: Francesco Carlesi
 """
@@ -35,7 +28,7 @@ import logging
 import os
 import signal
 import sys
-import time as _time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -50,7 +43,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from database.db import Database
 
 from .core.enums import Topic
-from .core.models import MarketState, Setup
+from .core.models import Direction, MarketState, Setup, SetupType
 
 # Services
 from .services.message_bus import MessageBus
@@ -69,23 +62,13 @@ from .services.kill_switch import (
     KillSwitchConfig,
     create_kill_switch,
 )
-from .services.llm_veto import (
-    LLMVetoService,
-    LLMVetoConfig,
-    create_llm_veto,
-)
 from .services.execution_engine import (
     ExecutionEngineService,
-    create_execution_engine,
 )
 from .services.telegram_service import TelegramService
 from .services.whatsapp_service import WhatsAppService
 from .services.protections import ProtectionManager
-from .services.outcome_tracker import OutcomeTrackerService
-
-# Strategies
-from .strategies.trend_follow import TrendFollowStrategy
-from .strategies.momentum_scalper import MomentumScalperStrategy
+from .services.ml_model import MLTradeModel
 
 # API Client
 from .api.hyperliquid import HyperliquidClient
@@ -96,7 +79,7 @@ from .api.hyperliquid import HyperliquidClient
 # =============================================================================
 
 def setup_logging(log_level: str = "INFO") -> logging.Logger:
-    """Configure logging for the conservative bot."""
+    """Configure logging for the bot."""
     level = getattr(logging, log_level.upper(), logging.INFO)
 
     formatter = logging.Formatter(
@@ -129,20 +112,10 @@ def setup_logging(log_level: str = "INFO") -> logging.Logger:
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("asyncpg").setLevel(logging.WARNING)
 
-    return logging.getLogger("hlquantbot.conservative")
+    return logging.getLogger("hlquantbot")
 
 
-logger = logging.getLogger("hlquantbot.conservative.main")
-
-# Timeframe to seconds mapping
-TIMEFRAME_SECONDS = {
-    "1m": 60,
-    "5m": 300,
-    "15m": 900,
-    "1h": 3600,
-    "4h": 14400,
-    "1d": 86400,
-}
+logger = logging.getLogger("hlquantbot.main")
 
 
 # =============================================================================
@@ -151,7 +124,7 @@ TIMEFRAME_SECONDS = {
 
 @dataclass
 class ConservativeConfig:
-    """Configuration for conservative trading system."""
+    """Configuration for trading system."""
 
     # Universe
     assets: List[str]
@@ -178,33 +151,25 @@ class ConservativeConfig:
     # Stops
     initial_atr_mult: float
     trailing_atr_mult: float
-    minimal_roi: Dict[str, float]  # Time-based ROI targets {"minutes": roi_pct}
+    minimal_roi: Dict[str, float]
+    stop_loss_pct: float
+    take_profit_pct: float
 
-    # Regime
+    # Regime (for MarketStateService indicator computation)
     trend_adx_min: float
     range_adx_max: float
     ema_slope_threshold: float
     choppiness_range_min: float
     regime_confirmation_bars: int
 
-    # LLM
-    llm_enabled: bool
-    llm_provider: str
-    llm_max_calls: int
-    llm_fallback: str
+    # ML Model
+    ml_model_path: str
+    ml_min_probability: float
 
     # Execution
     prefer_limit: bool
     max_slippage_pct: float
     max_spread_pct: float
-
-    # Strategies
-    trend_follow_enabled: bool
-    trend_momentum_enabled: bool
-
-    # Fixed TP/SL
-    stop_loss_pct: float
-    take_profit_pct: float
 
     # Environment
     testnet: bool
@@ -216,7 +181,6 @@ class ConservativeConfig:
         with open(path, "r") as f:
             data = yaml.safe_load(f)
 
-        # Helper to get nested config with defaults
         def get_section(name: str) -> dict:
             return data.get(name, {})
 
@@ -226,9 +190,8 @@ class ConservativeConfig:
         ks = get_section("kill_switch")
         stops = get_section("stops")
         regime = get_section("regime")
-        llm = get_section("llm")
         execution = get_section("execution")
-        strategies = get_section("strategies")
+        ml = get_section("ml_model")
 
         # Parse universe mode and assets
         universe_mode = universe.get("mode", "manual")
@@ -249,64 +212,57 @@ class ConservativeConfig:
             universe_mode=universe_mode,
             min_volume_24h=universe.get("min_volume_24h", 100000),
             exclude_symbols=universe.get("exclude_symbols", ["USDC", "USDT", "DAI"]),
-            primary_timeframe=timeframes.get("primary", "1h"),
+            primary_timeframe=timeframes.get("primary", "15m"),
             bars_to_fetch=timeframes.get("bars_to_fetch", 200),
-            scan_interval_minutes=timeframes.get("scan_interval_minutes", 15),
-            per_trade_pct=risk.get("per_trade_pct", 0.5),
-            max_positions=risk.get("max_positions", 2),
-            max_exposure_pct=risk.get("max_exposure_pct", 100),
-            leverage=risk.get("leverage", 1),
-            daily_loss_pct=ks.get("daily_loss_pct", 2.0),
-            weekly_loss_pct=ks.get("weekly_loss_pct", 5.0),
-            max_drawdown_pct=ks.get("max_drawdown_pct", 15.0),
+            scan_interval_minutes=timeframes.get("scan_interval_minutes", 5),
+            per_trade_pct=risk.get("per_trade_pct", 10.0),
+            max_positions=risk.get("max_positions", 3),
+            max_exposure_pct=risk.get("max_exposure_pct", 300),
+            leverage=risk.get("leverage", 10),
+            daily_loss_pct=ks.get("daily_loss_pct", 8.0),
+            weekly_loss_pct=ks.get("weekly_loss_pct", 15.0),
+            max_drawdown_pct=ks.get("max_drawdown_pct", 30.0),
             initial_atr_mult=stops.get("initial_atr_mult", 2.5),
             trailing_atr_mult=stops.get("trailing_atr_mult", 2.5),
             minimal_roi=stops.get("minimal_roi", {}),
+            stop_loss_pct=stops.get("stop_loss_pct", 0.8),
+            take_profit_pct=stops.get("take_profit_pct", 1.6),
             trend_adx_min=regime.get("trend_adx_min", 25.0),
             range_adx_max=regime.get("range_adx_max", 20.0),
-            ema_slope_threshold=regime.get("ema_slope_threshold", 0.001),
+            ema_slope_threshold=regime.get("ema_slope_threshold", 0.0003),
             choppiness_range_min=regime.get("choppiness_range_min", 60.0),
             regime_confirmation_bars=regime.get("confirmation_bars", 2),
-            llm_enabled=llm.get("enabled", True),
-            llm_provider=llm.get("provider", "deepseek"),
-            llm_max_calls=llm.get("max_calls_per_day", 6),
-            llm_fallback=llm.get("fallback_on_error", "allow"),
+            ml_model_path=ml.get("model_path", "models/trade_model.joblib"),
+            ml_min_probability=ml.get("min_probability", 0.55),
             prefer_limit=execution.get("prefer_limit", True),
             max_slippage_pct=execution.get("max_slippage_pct", 0.1),
             max_spread_pct=execution.get("max_spread_pct", 0.10),
-            trend_follow_enabled=strategies.get("trend_follow", {}).get("enabled", True),
-            trend_momentum_enabled=strategies.get("trend_momentum", {}).get("enabled", False),
-            stop_loss_pct=stops.get("stop_loss_pct", 0.8),
-            take_profit_pct=stops.get("take_profit_pct", 1.6),
             testnet=env.lower() == "testnet",
             dry_run=data.get("dry_run", False),
         )
 
 
 # =============================================================================
-# Conservative Bot Orchestrator
+# Bot Orchestrator
 # =============================================================================
 
 class ConservativeBot:
     """
-    Main orchestrator for conservative trading system.
+    Main orchestrator for ML-based trading system.
 
     Architecture:
-        MarketState → Strategy → LLMVeto → RiskManager → Execution
+        MarketState → XGBoost(features) → P(TP) → RiskManager → Execution
 
     Critical design principles:
-    1. Trade only BTC/ETH (liquid, low-spread)
-    2. One strategy at a time (trend follow primary)
-    3. Risk-based sizing (0.5% per trade)
-    4. Kill switch ALWAYS active
-    5. LLM as filter, not decision maker
+    1. XGBoost predicts P(TP) for every asset/direction
+    2. Execute top-N candidates sorted by P(TP)
+    3. Kill switch ALWAYS active
+    4. Physical gates: cooldown, protections, spread, max_positions
     """
 
-    # Service startup order (dependencies)
     SERVICE_ORDER = [
         "kill_switch",     # MUST be first - safety critical
         "market_state",    # Data provider
-        "llm_veto",        # Filter (optional)
         "risk_manager",    # Sizing
         "execution",       # Order placement
         "telegram",        # Notifications (non-critical)
@@ -318,13 +274,6 @@ class ConservativeBot:
         config_path: str = "simple_bot/config/trading.yaml",
         config: Optional[ConservativeConfig] = None,
     ) -> None:
-        """
-        Initialize ConservativeBot.
-
-        Args:
-            config_path: Path to trading.yaml
-            config: Optional pre-loaded config
-        """
         self.config_path = config_path
         self._config: Optional[ConservativeConfig] = config
 
@@ -336,11 +285,8 @@ class ConservativeBot:
         # Services
         self._services: Dict[str, Any] = {}
 
-        # Strategies
-        self._strategies: List[Any] = []
-
-        # Outcome tracker
-        self._outcome_tracker: Optional[OutcomeTrackerService] = None
+        # ML Model
+        self._ml_model: MLTradeModel = MLTradeModel()
 
         # State
         self._running = False
@@ -357,24 +303,20 @@ class ConservativeBot:
 
     @property
     def config(self) -> ConservativeConfig:
-        """Get configuration."""
         if self._config is None:
             raise RuntimeError("Configuration not loaded")
         return self._config
 
     @property
     def is_running(self) -> bool:
-        """Check if bot is running."""
         return self._running
 
     @property
     def kill_switch(self) -> Optional[KillSwitchService]:
-        """Get kill switch service."""
         return self._services.get("kill_switch")
 
     @property
     def market_state(self) -> Optional[MarketStateService]:
-        """Get market state service."""
         return self._services.get("market_state")
 
     # =========================================================================
@@ -386,7 +328,6 @@ class ConservativeBot:
         logger.info("Loading configuration from %s", self.config_path)
         self._config = ConservativeConfig.from_yaml(self.config_path)
 
-        # Load raw config for services that need full dict
         with open(self.config_path, "r") as f:
             self._raw_config = yaml.safe_load(f)
 
@@ -401,28 +342,22 @@ class ConservativeBot:
     async def _init_database(self) -> Database:
         """Initialize database connection."""
         logger.info("Connecting to database...")
-
         dsn = os.getenv(
             "DATABASE_URL",
             "postgresql://hlquant:hlquant@localhost:5432/hlquantbot"
         )
-
         self._db = Database(dsn)
         await self._db.connect(min_size=2, max_size=10)
-
         if not await self._db.health_check():
             raise RuntimeError("Database health check failed")
-
         logger.info("Database connected")
         return self._db
 
     async def _init_message_bus(self) -> MessageBus:
         """Initialize message bus."""
         logger.info("Starting message bus...")
-
         self._bus = MessageBus()
         await self._bus.start()
-
         logger.info("Message bus started")
         return self._bus
 
@@ -441,21 +376,11 @@ class ConservativeBot:
         await self._exchange.connect()
 
         account = await self._exchange.get_account_state()
-        logger.info(
-            "Exchange connected: Equity $%.2f",
-            account.get("equity", 0),
-        )
-
+        logger.info("Exchange connected: Equity $%.2f", account.get("equity", 0))
         return self._exchange
 
     async def _load_dynamic_assets(self) -> None:
-        """
-        Dynamically load all available assets from Hyperliquid.
-
-        When universe_mode is "all", fetches all symbols and filters by:
-        - Minimum 24h volume
-        - Exclusion list (stablecoins, etc.)
-        """
+        """Dynamically load all available assets from Hyperliquid."""
         cfg = self.config
         if cfg.universe_mode != "all":
             logger.info("Universe mode is 'manual', using configured assets: %s", cfg.assets)
@@ -467,43 +392,19 @@ class ConservativeBot:
         logger.info("Loading dynamic asset universe...")
 
         try:
-            # Get all available symbols from Hyperliquid
             markets = await self._exchange.get_all_markets()
             all_symbols = [market["name"] for market in markets]
-
             logger.info("Found %d total symbols on Hyperliquid", len(all_symbols))
 
-            # Filter out excluded symbols
-            filtered = [
-                s for s in all_symbols
-                if s not in cfg.exclude_symbols
-            ]
+            filtered = [s for s in all_symbols if s not in cfg.exclude_symbols]
             logger.info("After exclusion filter: %d symbols", len(filtered))
 
-            # Filter by 24h volume if threshold > 0
-            if cfg.min_volume_24h > 0:
-                volume_filtered = []
-                # Fetch spot meta for volume info (this is approximate)
-                # For more accurate volume, we'd need to query each symbol
-                # For now, include all non-excluded symbols
-                volume_filtered = filtered
-                logger.info(
-                    "Volume filter: including all %d symbols (volume check disabled for speed)",
-                    len(volume_filtered)
-                )
-                filtered = volume_filtered
-
-            # Update config with dynamic assets
-            # Note: dataclass is frozen=False by default, so we can modify
             object.__setattr__(cfg, "assets", filtered)
 
             logger.info(
                 "Dynamic universe loaded: %d assets (excluded %d)",
-                len(filtered),
-                len(all_symbols) - len(filtered),
+                len(filtered), len(all_symbols) - len(filtered),
             )
-
-            # Log first 10 and last 5 for visibility
             if len(filtered) > 15:
                 logger.info("First 10: %s", filtered[:10])
                 logger.info("Last 5: %s", filtered[-5:])
@@ -512,13 +413,12 @@ class ConservativeBot:
 
         except Exception as e:
             logger.error("Failed to load dynamic assets: %s", e)
-            # Fallback to BTC/ETH
             fallback = ["BTC", "ETH"]
             object.__setattr__(cfg, "assets", fallback)
             logger.warning("Using fallback assets: %s", fallback)
 
     def _init_services(self) -> None:
-        """Initialize all services with proper configuration."""
+        """Initialize all services."""
         cfg = self.config
 
         # Kill Switch - CRITICAL, must be first
@@ -530,34 +430,22 @@ class ConservativeBot:
             check_interval_seconds=60,
         )
         self._services["kill_switch"] = create_kill_switch(
-            bus=self._bus,
-            db=self._db,
-            config=ks_config,
+            bus=self._bus, db=self._db, config=ks_config,
         )
 
-        # Telegram notifications - initialize early so other services can use it
+        # Notifications
         telegram_service = None
         if self._bus is not None:
-            telegram_service = TelegramService(
-                bus=self._bus,
-                config=self._raw_config,
-            )
+            telegram_service = TelegramService(bus=self._bus, config=self._raw_config)
             self._services["telegram"] = telegram_service
-
-        # WhatsApp notifications
-        if self._bus is not None:
-            whatsapp_service = WhatsAppService(
-                bus=self._bus,
-                config=self._raw_config,
-            )
-            self._services["whatsapp"] = whatsapp_service
+            self._services["whatsapp"] = WhatsAppService(bus=self._bus, config=self._raw_config)
 
         # Market State Service
         ms_config = MarketStateConfig(
             assets=cfg.assets,
             timeframe=cfg.primary_timeframe,
             bars_to_fetch=cfg.bars_to_fetch,
-            interval_seconds=cfg.scan_interval_minutes * 60,  # Convert minutes to seconds
+            interval_seconds=cfg.scan_interval_minutes * 60,
             trend_adx_min=cfg.trend_adx_min,
             range_adx_max=cfg.range_adx_max,
             ema_slope_threshold=cfg.ema_slope_threshold,
@@ -565,26 +453,10 @@ class ConservativeBot:
             regime_confirmation_bars=cfg.regime_confirmation_bars,
         )
         self._services["market_state"] = create_market_state_service(
-            bus=self._bus,
-            db=self._db,
-            config=ms_config,
-            testnet=cfg.testnet,
+            bus=self._bus, db=self._db, config=ms_config, testnet=cfg.testnet,
         )
 
-        # LLM Veto Service
-        llm_config = LLMVetoConfig(
-            enabled=cfg.llm_enabled,
-            provider=cfg.llm_provider,
-            max_calls_per_day=cfg.llm_max_calls,
-            fallback_on_error=cfg.llm_fallback,
-        )
-        self._services["llm_veto"] = create_llm_veto(
-            bus=self._bus,
-            db=self._db,
-            config=llm_config,
-        )
-
-        # Risk Manager Service (with Telegram for cooldown alerts)
+        # Risk Manager
         risk_config = RiskConfig(
             per_trade_pct=cfg.per_trade_pct,
             max_positions=cfg.max_positions,
@@ -594,177 +466,112 @@ class ConservativeBot:
             max_slippage_pct=cfg.max_slippage_pct,
         )
         self._services["risk_manager"] = create_risk_manager(
-            bus=self._bus,
-            db=self._db,
-            config=risk_config,
-            client=self._exchange,  # Pass client for real equity updates
-            telegram=telegram_service,  # Pass telegram for cooldown alerts
+            bus=self._bus, db=self._db, config=risk_config,
+            client=self._exchange, telegram=telegram_service,
         )
 
-        # Execution Engine - executes trades from risk manager
-        # Create minimal config adapter for execution engine
+        # Execution Engine
         class _ExecConfig:
-            """Minimal config adapter for ExecutionEngineService."""
             def __init__(self, cfg: ConservativeConfig):
                 self.order_type = "limit" if cfg.prefer_limit else "market"
                 self.max_slippage_pct = cfg.max_slippage_pct
                 self.limit_timeout_seconds = 60
-                self.retry_attempts = 3  # ExecutionEngine expects retry_attempts
+                self.retry_attempts = 3
                 self.retry_delay_seconds = 5
                 self.position_sync_interval = 30
                 self.fill_sync_interval = 10
 
         class _RiskConfig:
-            """Minimal risk config for TP/SL defaults."""
             def __init__(self, cfg: ConservativeConfig):
                 self.take_profit_pct = cfg.take_profit_pct
                 self.stop_loss_pct = cfg.stop_loss_pct
                 self.leverage = int(cfg.leverage)
 
         class _StopsConfig:
-            """Stops configuration including time-based ROI."""
             def __init__(self, cfg: ConservativeConfig):
                 self.initial_atr_mult = cfg.initial_atr_mult
                 self.trailing_atr_mult = cfg.trailing_atr_mult
-                self.minimal_roi = cfg.minimal_roi  # {"0": 0.03, "30": 0.02, ...}
+                self.minimal_roi = cfg.minimal_roi
 
         class _ServicesConfig:
             def __init__(self, exec_cfg: _ExecConfig):
                 self.execution_engine = exec_cfg
 
         class _ConfigAdapter:
-            """Config adapter for ExecutionEngineService."""
             def __init__(self, cfg: ConservativeConfig):
                 self.services = _ServicesConfig(_ExecConfig(cfg))
                 self.risk = _RiskConfig(cfg)
                 self.stops = _StopsConfig(cfg)
 
         self._services["execution"] = ExecutionEngineService(
-            bus=self._bus,
-            config=_ConfigAdapter(cfg),
-            client=self._exchange,
-            db=self._db,
+            bus=self._bus, config=_ConfigAdapter(cfg),
+            client=self._exchange, db=self._db,
         )
 
-        # Outcome Tracker - tracks LLM decision outcomes
-        self._outcome_tracker = OutcomeTrackerService(
-            db=self._db,
-            stop_loss_pct=cfg.stop_loss_pct,
-            take_profit_pct=cfg.take_profit_pct,
-        )
-
-        # Protection Manager - modular protection system
+        # Protection Manager
         self._services["protection_manager"] = ProtectionManager(
-            config=self._raw_config,
-            db=self._db,
-            telegram=telegram_service,
+            config=self._raw_config, db=self._db, telegram=telegram_service,
         )
+
+        # ML Model - required
+        model_loaded = self._ml_model.load(cfg.ml_model_path)
+        if model_loaded:
+            logger.info("ML model loaded from %s", cfg.ml_model_path)
+        else:
+            logger.warning(
+                "ML model not found at %s — bot will skip trades until model is trained. "
+                "Run: python3 -m simple_bot.scripts.retrain_model",
+                cfg.ml_model_path,
+            )
 
         logger.info(
             "Initialized %d services: %s",
-            len(self._services),
-            ", ".join(self._services.keys()),
+            len(self._services), ", ".join(self._services.keys()),
         )
 
-    def _init_strategies(self) -> None:
-        """Initialize trading strategies."""
-        cfg = self.config
-
-        # Trend Following (primary)
-        if cfg.trend_follow_enabled:
-            trend_config = {
-                "breakout_period": 20,
-                "price_above_ema200": True,
-                "atr_filter": True,
-                "stop_atr_mult": cfg.initial_atr_mult,
-                "min_adx": cfg.trend_adx_min,
-                "allow_short": False,  # Only long positions (shorts failing in bullish market)
-            }
-            self._strategies.append(TrendFollowStrategy(config=trend_config))
-            logger.info("Initialized TrendFollowStrategy")
-
-        # Trend Momentum (EMA crossover, TREND regime only)
-        if cfg.trend_momentum_enabled:
-            strategies_yaml = self._raw_config.get("strategies", {})
-            ms_yaml = strategies_yaml.get("trend_momentum", {})
-            ms_config = {
-                "allow_short": ms_yaml.get("allow_short", True),
-                "min_atr_pct": ms_yaml.get("min_atr_pct", 0.1),
-                "volume_filter_multiplier": ms_yaml.get("volume_filter_multiplier", 20),
-                "stop_loss_pct": cfg.stop_loss_pct,
-                "take_profit_pct": cfg.take_profit_pct,
-                "rsi_long_min": ms_yaml.get("rsi_long_min", 30),
-                "rsi_long_max": ms_yaml.get("rsi_long_max", 65),
-                "rsi_short_min": ms_yaml.get("rsi_short_min", 40),
-                "rsi_short_max": ms_yaml.get("rsi_short_max", 70),
-            }
-            self._strategies.append(MomentumScalperStrategy(config=ms_config))
-            logger.info("Initialized MomentumScalperStrategy")
-
-        logger.info("Initialized %d strategies", len(self._strategies))
-
     # =========================================================================
-    # Strategy Loop
+    # Evaluation Loop
     # =========================================================================
 
     async def _strategy_loop(self) -> None:
-        """
-        Main strategy evaluation loop.
+        """Main evaluation loop: scan all assets with ML model."""
+        logger.info("ML evaluation loop started")
 
-        Runs every 4 hours (on new candle close):
-        1. Get market state for each asset
-        2. Check kill switch status
-        3. Evaluate strategies for setups
-        4. Pass setups through LLM veto
-        5. Send approved setups to risk manager
-        """
-        logger.info("Strategy loop started")
+        await asyncio.sleep(10)  # Let services initialize
 
-        # Initial delay to let services initialize
-        await asyncio.sleep(10)
-
-        # Use configured scan interval (not timeframe duration)
         scan_seconds = self.config.scan_interval_minutes * 60
 
         while self._running and not self._shutdown_event.is_set():
             try:
                 await self._evaluate_all_assets()
 
-                # Wait for next evaluation
                 logger.info("Next scan in %d minutes", self.config.scan_interval_minutes)
                 try:
                     await asyncio.wait_for(
-                        self._shutdown_event.wait(),
-                        timeout=scan_seconds,
+                        self._shutdown_event.wait(), timeout=scan_seconds,
                     )
-                    break  # Shutdown requested
+                    break
                 except asyncio.TimeoutError:
-                    pass  # Normal timeout, continue
+                    pass
 
             except asyncio.CancelledError:
-                logger.debug("Strategy loop cancelled")
+                logger.debug("Evaluation loop cancelled")
                 break
             except Exception as e:
-                logger.error("Strategy loop error: %s", e, exc_info=True)
-                await asyncio.sleep(60)  # Wait before retry
+                logger.error("Evaluation loop error: %s", e, exc_info=True)
+                await asyncio.sleep(60)
 
     async def _evaluate_all_assets(self) -> None:
-        """Evaluate all assets for trading opportunities.
+        """Evaluate all assets with XGBoost ML model.
 
-        Two-pass approach:
-          Pass 1: Collect all valid strategy candidates (cheap: regime + indicators only)
-          Pass 2: Sort by setup_quality, run expensive checks (LLM + spread) on top N
+        Flow: MarketState → extract features → predict P(TP) → sort → execute top N
         """
-        # Check kill switch first
+        # --- Physical gates ---
         kill_switch = self._services.get("kill_switch")
         if kill_switch and not kill_switch.is_trading_allowed():
-            logger.warning(
-                "Trading paused by kill switch: %s",
-                kill_switch.get_status().value,
-            )
+            logger.warning("Trading paused by kill switch: %s", kill_switch.get_status().value)
             return
 
-        # Check cooldown (loss streak protection - reactive)
         risk_manager = self._services.get("risk_manager")
         if risk_manager:
             is_cooldown, cooldown_state = await risk_manager.check_cooldown_required()
@@ -777,200 +584,125 @@ class ConservativeBot:
                 )
                 return
 
-        # Check protections (proactive protection system)
         protection_manager = self._services.get("protection_manager")
         if protection_manager:
             can_trade, protection_result = await protection_manager.check_all_protections()
             if not can_trade and protection_result:
                 logger.warning(
                     "Trading paused by PROTECTION: %s - %s",
-                    protection_result.protection_name,
-                    protection_result.reason,
+                    protection_result.protection_name, protection_result.reason,
                 )
                 return
 
-        # Update dynamic volume filter from current equity
-        if risk_manager and hasattr(risk_manager, '_current_equity'):
-            equity = float(risk_manager._current_equity)
-            if equity > 0:
-                for strategy in self._strategies:
-                    if hasattr(strategy, 'update_min_volume_usd'):
-                        strategy.update_min_volume_usd(
-                            equity=equity,
-                            per_trade_pct=self.config.per_trade_pct,
-                            leverage=self.config.leverage,
-                        )
-
-        # Get market states
+        # --- Get market states ---
         market_state_svc = self._services.get("market_state")
         if not market_state_svc:
             return
 
         states = market_state_svc.get_all_states()
-
         if not states:
             logger.warning("No market states available")
             return
 
-        # --- Pass 1: Collect candidates (cheap: strategy + regime only) ---
-        candidates: List[Setup] = []
+        # --- ML model gate ---
+        if not self._ml_model.is_loaded:
+            logger.debug("ML model not loaded, skipping evaluation")
+            return
+
+        # --- Score all assets with ML ---
+        candidates: list[tuple[str, Setup, float, str]] = []
         symbols_with_positions: set = set()
 
         if risk_manager:
             symbols_with_positions = set(risk_manager._open_positions.keys())
 
         for symbol, state in states.items():
-            # Skip symbols that already have open positions
             if symbol in symbols_with_positions:
                 continue
 
-            setup = self._evaluate_asset_candidate(state)
-            if setup is not None:
-                candidates.append(setup)
+            # Predict P(TP) for both directions, pick best
+            best_prob = 0.0
+            best_direction: Direction | None = None
+            best_reason = ""
 
-        # --- Pass 2: Sort by quality, execute top N ---
-        if candidates:
-            candidates.sort(key=lambda s: s.setup_quality, reverse=True)
+            for dir_enc, direction in [(1, Direction.LONG), (0, Direction.SHORT)]:
+                features = self._ml_model.extract_features(state, dir_enc)
+                prob, reason = self._ml_model.predict(features)
+                if prob > best_prob:
+                    best_prob = prob
+                    best_direction = direction
+                    best_reason = reason
 
-            # Calculate available slots
-            if risk_manager:
-                pos_count = len(risk_manager._open_positions) + len(risk_manager._pending_intents)
-                available_slots = max(0, self.config.max_positions - pos_count)
+            if best_prob < self.config.ml_min_probability or best_direction is None:
+                continue
+
+            # Create Setup
+            sl_pct = Decimal(str(self.config.stop_loss_pct))
+            entry_price = state.close
+            if best_direction == Direction.LONG:
+                stop_price = entry_price * (Decimal("1") - sl_pct / Decimal("100"))
             else:
-                available_slots = self.config.max_positions
+                stop_price = entry_price * (Decimal("1") + sl_pct / Decimal("100"))
 
-            top_candidates = candidates[:available_slots]
-
-            ranking_str = ", ".join(
-                f"{s.symbol}({float(s.setup_quality):.2f})"
-                for s in candidates
+            setup = Setup(
+                id=f"ml_{uuid.uuid4().hex[:8]}",
+                symbol=symbol,
+                timestamp=datetime.now(timezone.utc),
+                setup_type=SetupType.MOMENTUM,
+                direction=best_direction,
+                regime=state.regime,
+                entry_price=entry_price,
+                stop_price=stop_price,
+                stop_distance_pct=sl_pct,
+                atr=state.atr,
+                adx=state.adx,
+                rsi=state.rsi,
+                setup_quality=Decimal(str(round(best_prob, 4))),
+                confidence=Decimal(str(round(best_prob, 4))),
             )
-            if top_candidates:
-                logger.info(
-                    "Collected %d candidates, executing top %d by quality: [%s]",
-                    len(candidates),
-                    len(top_candidates),
-                    ranking_str,
-                )
-            else:
-                logger.info(
-                    "Found %d candidates but all %d slots full: [%s]",
-                    len(candidates),
-                    self.config.max_positions,
-                    ranking_str,
-                )
-
-            for setup in top_candidates:
-                # Re-check slots before burning LLM call
-                if risk_manager:
-                    cur_count = len(risk_manager._open_positions) + len(risk_manager._pending_intents)
-                    if cur_count >= self.config.max_positions:
-                        logger.info("All slots filled during execution, stopping")
-                        break
-                await self._execute_setup(setup)
-
-        # Check pending LLM decisions (uses cached prices, zero extra API calls)
-        if self._outcome_tracker and states:
-            async def _cached_price_getter(sym: str) -> Optional[Decimal]:
-                s = states.get(sym)
-                return s.close if s else None
-
-            resolved = await self._outcome_tracker.check_pending(_cached_price_getter)
-            if resolved > 0:
-                logger.info("Resolved %d LLM decision outcomes", resolved)
-
-    def _evaluate_asset_candidate(self, state: MarketState) -> Optional[Setup]:
-        """Phase 1: Evaluate a single asset for strategy setups (cheap, no API calls).
-
-        Runs regime check + strategy evaluation only. Returns the best Setup
-        found for this symbol, or None if no valid setup exists.
-
-        Args:
-            state: Current market state for the asset
-
-        Returns:
-            Setup object if a valid candidate was found, None otherwise
-        """
-        logger.debug(
-            "Evaluating %s: regime=%s, ADX=%.1f",
-            state.symbol,
-            state.regime.value,
-            float(state.adx),
-        )
-
-        # Try each strategy, return the first valid setup
-        for strategy in self._strategies:
-            # Check if strategy can trade in current regime
-            if not strategy.can_trade(state):
-                continue
-
-            # Evaluate strategy
-            result = strategy.evaluate(state)
-
-            if not result.has_setup or not result.setup:
-                continue
-
-            setup = result.setup
 
             logger.info(
-                "Setup found: %s %s @ %.2f (quality=%.2f, %s)",
-                setup.direction.value.upper(),
-                setup.symbol,
-                float(setup.entry_price),
-                float(setup.setup_quality),
-                strategy.name,
+                "ML_SELECT | %s %s | P(TP)=%.1f%% | %s",
+                best_direction.value.upper(), symbol, best_prob * 100, best_reason,
+            )
+            candidates.append((symbol, setup, best_prob, best_reason))
+
+        # --- Sort by P(TP) desc, execute top N ---
+        if not candidates:
+            return
+
+        candidates.sort(key=lambda x: x[2], reverse=True)
+
+        if risk_manager:
+            pos_count = len(risk_manager._open_positions) + len(risk_manager._pending_intents)
+            available_slots = max(0, self.config.max_positions - pos_count)
+        else:
+            available_slots = self.config.max_positions
+
+        top_candidates = candidates[:available_slots]
+
+        ranking_str = ", ".join(f"{c[0]}({c[2]:.2f})" for c in candidates)
+        if top_candidates:
+            logger.info(
+                "Collected %d candidates, executing top %d: [%s]",
+                len(candidates), len(top_candidates), ranking_str,
+            )
+        else:
+            logger.info(
+                "Found %d candidates but all %d slots full: [%s]",
+                len(candidates), self.config.max_positions, ranking_str,
             )
 
-            return setup
-
-        return None
+        for _, setup, _, _ in top_candidates:
+            if risk_manager:
+                cur_count = len(risk_manager._open_positions) + len(risk_manager._pending_intents)
+                if cur_count >= self.config.max_positions:
+                    logger.info("All slots filled during execution, stopping")
+                    break
+            await self._execute_setup(setup)
 
     async def _execute_setup(self, setup: Setup) -> None:
-        """Phase 2: Run expensive checks (LLM veto + spread) and execute a setup.
-
-        Called only for the top-N candidates after quality ranking.
-
-        Args:
-            setup: The Setup candidate to vet and execute
-        """
-        # Pass through LLM veto
-        llm_service = self._services.get("llm_veto")
-        if llm_service:
-            _t0 = _time.monotonic()
-            approved, decision = await llm_service.evaluate_setup(setup)
-            _latency_ms = int((_time.monotonic() - _t0) * 1000)
-
-            # Log decision to outcome tracker (both ALLOW and DENY)
-            market_state_for_log = self._services.get("market_state")
-            ms_snapshot = (
-                market_state_for_log.get_state(setup.symbol)
-                if market_state_for_log else None
-            )
-            if self._outcome_tracker:
-                await self._outcome_tracker.log_decision(
-                    setup=setup,
-                    decision=decision,
-                    market_state=ms_snapshot,
-                    latency_ms=_latency_ms,
-                )
-
-            if not approved:
-                logger.info(
-                    "Setup DENIED by LLM: %s - %s",
-                    setup.symbol,
-                    decision.reason[:50],
-                )
-                return
-
-            logger.info(
-                "Setup APPROVED by LLM: %s (confidence: %.0f%%)",
-                setup.symbol,
-                float(decision.confidence) * 100,
-            )
-
-            # Mark as approved
-            setup.llm_approved = True
-
+        """Execute a setup: check spread, then publish to risk manager."""
         # Check bid-ask spread before entering
         if self._exchange:
             spread_pct = await self._exchange.get_spread_pct(setup.symbol)
@@ -985,26 +717,6 @@ class ConservativeBot:
         if self._bus:
             await self._bus.publish(Topic.SETUPS, setup.model_dump())
 
-    async def _evaluate_asset(self, state: MarketState) -> None:
-        """Evaluate a single asset for trading opportunities.
-
-        Backward-compatible wrapper: runs both candidate evaluation and
-        execution sequentially. Used by tests that call _evaluate_asset directly.
-
-        Args:
-            state: Current market state for the asset
-        """
-        # Early gate: skip evaluation if already at max positions
-        risk_svc = self._services.get("risk_manager")
-        if risk_svc:
-            pos_count = len(risk_svc._open_positions) + len(risk_svc._pending_intents)
-            if pos_count >= self.config.max_positions:
-                return
-
-        setup = self._evaluate_asset_candidate(state)
-        if setup is not None:
-            await self._execute_setup(setup)
-
     # =========================================================================
     # Health Monitoring
     # =========================================================================
@@ -1016,8 +728,7 @@ class ConservativeBot:
         while self._running and not self._shutdown_event.is_set():
             try:
                 await asyncio.wait_for(
-                    self._shutdown_event.wait(),
-                    timeout=30,  # Check every 30 seconds
+                    self._shutdown_event.wait(), timeout=30,
                 )
                 break
             except asyncio.TimeoutError:
@@ -1033,10 +744,8 @@ class ConservativeBot:
         for name, service in self._services.items():
             try:
                 health = await service.health_check()
-
                 if not health.healthy:
                     logger.warning("Service unhealthy: %s - %s", name, health.message)
-
             except Exception as e:
                 logger.error("Health check failed for %s: %s", name, e)
 
@@ -1047,28 +756,22 @@ class ConservativeBot:
     async def _start_services(self) -> None:
         """Start all services in dependency order."""
         logger.info("Starting services...")
-
         for name in self.SERVICE_ORDER:
             if name in self._services:
-                service = self._services[name]
-                await service.start()
+                await self._services[name].start()
                 logger.info("Started: %s", name)
-
         logger.info("All services started")
 
     async def _stop_services(self) -> None:
         """Stop all services in reverse order."""
         logger.info("Stopping services...")
-
         for name in reversed(self.SERVICE_ORDER):
             if name in self._services:
-                service = self._services[name]
                 try:
-                    await service.stop()
+                    await self._services[name].stop()
                     logger.info("Stopped: %s", name)
                 except Exception as e:
                     logger.error("Error stopping %s: %s", name, e)
-
         logger.info("All services stopped")
 
     async def start(self) -> None:
@@ -1078,64 +781,50 @@ class ConservativeBot:
             return
 
         logger.info("=" * 60)
-        logger.info("HLQuantBot Conservative System Starting")
+        logger.info("HLQuantBot v4 - XGBoost ML Starting")
         logger.info("=" * 60)
 
         try:
-            # Load config
             if self._config is None:
                 self._load_config()
 
-            # Setup logging
             setup_logging(log_level="INFO")
 
-            # Initialize components
             await self._init_database()
             await self._init_message_bus()
             await self._init_exchange()
-
-            # Load dynamic assets if mode="all"
             await self._load_dynamic_assets()
 
-            # Initialize services and strategies
             self._init_services()
-            self._init_strategies()
 
-            # Start services
             await self._start_services()
 
-            # Start background tasks
             self._strategy_task = asyncio.create_task(
-                self._strategy_loop(),
-                name="strategy_loop",
+                self._strategy_loop(), name="ml_evaluation_loop",
             )
             self._health_task = asyncio.create_task(
-                self._health_loop(),
-                name="health_loop",
+                self._health_loop(), name="health_loop",
             )
 
             self._running = True
             self._start_time = datetime.now(timezone.utc)
             self._shutdown_event.clear()
 
-            # Update equity in kill switch
             if self._exchange:
                 account = await self._exchange.get_account_state()
                 equity = account.get("equity", 0)
-
                 if self.kill_switch:
-                    await self.kill_switch.update_equity(
-                        __import__("decimal").Decimal(str(equity))
-                    )
+                    await self.kill_switch.update_equity(Decimal(str(equity)))
 
             logger.info("=" * 60)
             logger.info(
-                "HLQuantBot Conservative Running (%s)",
+                "HLQuantBot v4 Running (%s) | ML threshold: %.0f%%",
                 "TESTNET" if self.config.testnet else "MAINNET",
+                self.config.ml_min_probability * 100,
             )
-            logger.info("Assets: %s", ", ".join(self.config.assets))
-            logger.info("Risk per trade: %.1f%%", self.config.per_trade_pct)
-            logger.info("Max drawdown: %.1f%%", self.config.max_drawdown_pct)
+            logger.info("Assets: %d", len(self.config.assets))
+            logger.info("Risk per trade: %.1f%% | Max DD: %.1f%%",
+                        self.config.per_trade_pct, self.config.max_drawdown_pct)
             logger.info("=" * 60)
 
         except Exception as e:
@@ -1149,13 +838,12 @@ class ConservativeBot:
             return
 
         logger.info("=" * 60)
-        logger.info("HLQuantBot Conservative Stopping")
+        logger.info("HLQuantBot v4 Stopping")
         logger.info("=" * 60)
 
         self._running = False
         self._shutdown_event.set()
 
-        # Cancel background tasks
         for task in [self._strategy_task, self._health_task]:
             if task and not task.done():
                 task.cancel()
@@ -1164,23 +852,17 @@ class ConservativeBot:
                 except asyncio.CancelledError:
                     pass
 
-        # Stop services
         await self._stop_services()
 
-        # Stop message bus
         if self._bus:
             await self._bus.stop()
-
-        # Disconnect exchange
         if self._exchange:
             await self._exchange.disconnect()
-
-        # Disconnect database
         if self._db:
             await self._db.disconnect()
 
         logger.info("=" * 60)
-        logger.info("HLQuantBot Conservative Stopped")
+        logger.info("HLQuantBot v4 Stopped")
         logger.info("=" * 60)
 
     async def run(self) -> None:
@@ -1195,14 +877,12 @@ class ConservativeBot:
             try:
                 loop.add_signal_handler(sig, signal_handler)
             except NotImplementedError:
-                pass  # Windows
+                pass
 
         try:
             await self.start()
-
             while self._running:
                 await asyncio.sleep(1)
-
         except KeyboardInterrupt:
             logger.info("Keyboard interrupt")
         finally:
@@ -1224,10 +904,7 @@ class ConservativeBot:
                     "metrics": getattr(service, "metrics", {}),
                 }
             except Exception as e:
-                service_status[name] = {
-                    "healthy": False,
-                    "message": str(e),
-                }
+                service_status[name] = {"healthy": False, "message": str(e)}
 
         return {
             "running": self._running,
@@ -1243,7 +920,7 @@ class ConservativeBot:
                 "max_drawdown": self.config.max_drawdown_pct if self._config else 0,
             },
             "services": service_status,
-            "strategies": [s.name for s in self._strategies],
+            "ml_model_loaded": self._ml_model.is_loaded,
         }
 
 
@@ -1260,22 +937,11 @@ async def main(config_path: str = "simple_bot/config/trading.yaml") -> None:
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(
-        description="HLQuantBot Conservative Trading System"
-    )
-    parser.add_argument(
-        "-c", "--config",
-        default="simple_bot/config/trading.yaml",
-        help="Path to trading.yaml configuration file",
-    )
-    parser.add_argument(
-        "-v", "--verbose",
-        action="store_true",
-        help="Enable verbose logging",
-    )
+    parser = argparse.ArgumentParser(description="HLQuantBot v4 - XGBoost ML Trading System")
+    parser.add_argument("-c", "--config", default="simple_bot/config/trading.yaml")
+    parser.add_argument("-v", "--verbose", action="store_true")
 
     args = parser.parse_args()
-
     if args.verbose:
         logging.basicConfig(level=logging.DEBUG)
 

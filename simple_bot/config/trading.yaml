@@ -167,7 +167,7 @@ strategies:
 # LLM Veto - DeepSeek confirmation/veto
 # -----------------------------------------------------------------------------
 llm:
-  enabled: true
+  enabled: false
   role: "veto_only"
 
   provider: "deepseek"
@@ -258,6 +258,16 @@ metrics:
     - "fees_total"
 
   track_by_regime: true
+
+# -----------------------------------------------------------------------------
+# ML Model - XGBoost trade selector
+# -----------------------------------------------------------------------------
+ml_model:
+  enabled: true
+  model_path: "models/trade_model.joblib"
+  min_probability: 0.55        # P(TP) minima per tradare
+  retrain_days: 90             # Giorni di dati per training
+  retrain_interval_days: 7     # Ogni quanto ri-addestrare
 
 # -----------------------------------------------------------------------------
 # Environment

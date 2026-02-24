@@ -579,8 +579,6 @@ dry_run: false
             assert config.assets == ["BTC", "ETH"]  # SOL disabled
             assert config.per_trade_pct == 0.5
             assert config.max_drawdown_pct == 15.0
-            assert config.trend_follow_enabled == True
-            assert config.trend_momentum_enabled == True
             assert config.stop_loss_pct == 0.4
             assert config.take_profit_pct == 0.8
             assert config.testnet == True
