@@ -166,6 +166,7 @@ class ConservativeConfig:
     # ML Model
     ml_model_path: str
     ml_min_probability: float
+    ml_mode: str  # "assisted" (regime gate active) or "primary" (ML handles everything)
     ml_retrain_interval_days: int
     ml_retrain_days: int
 
@@ -236,7 +237,8 @@ class ConservativeConfig:
             choppiness_range_min=regime.get("choppiness_range_min", 60.0),
             regime_confirmation_bars=regime.get("confirmation_bars", 2),
             ml_model_path=ml.get("model_path", "models/trade_model.joblib"),
-            ml_min_probability=ml.get("min_probability", 0.55),
+            ml_min_probability=ml.get("min_probability", 0.50),
+            ml_mode=ml.get("ml_mode", "assisted"),
             ml_retrain_interval_days=ml.get("retrain_interval_days", 3),
             ml_retrain_days=ml.get("retrain_days", 30),
             prefer_limit=execution.get("prefer_limit", True),
@@ -617,29 +619,42 @@ class ConservativeBot:
 
         # --- Score all assets with ML ---
         candidates: list[tuple[str, Setup, float, str]] = []
+        all_scores: list[tuple[str, float]] = []  # diagnostic: track ALL scores
         symbols_with_positions: set = set()
 
         if risk_manager:
             symbols_with_positions = set(risk_manager._open_positions.keys())
+
+        # Determine effective threshold (primary mode may use calibrated threshold)
+        threshold = self.config.ml_min_probability
+        if self.config.ml_mode == "primary" and self._ml_model.optimal_threshold is not None:
+            threshold = self._ml_model.optimal_threshold
 
         regime_skipped: int = 0
         for symbol, state in states.items():
             if symbol in symbols_with_positions:
                 continue
 
-            # Regime gate: only trade in TREND regime
-            if state.regime != Regime.TREND:
-                regime_skipped += 1
-                continue
+            # Regime gate: conditional on ml_mode
+            if self.config.ml_mode == "assisted":
+                if state.regime != Regime.TREND:
+                    regime_skipped += 1
+                    continue
 
             # Direction from EMA crossover (trend_direction in MarketState)
             direction = state.trend_direction
+            if direction == Direction.FLAT:
+                regime_skipped += 1
+                continue
 
             # Predict P(TP) for this market setup
-            features = self._ml_model.extract_features(state)
+            features = self._ml_model.extract_features(state, spread_pct=0.0)
             prob, reason = self._ml_model.predict(features)
 
-            if prob < self.config.ml_min_probability:
+            # Diagnostic: collect ALL scores before threshold filter
+            all_scores.append((symbol, prob))
+
+            if prob < threshold:
                 continue
 
             best_prob = prob
@@ -677,8 +692,28 @@ class ConservativeBot:
             )
             candidates.append((symbol, setup, best_prob, best_reason))
 
-        if regime_skipped > 0:
-            logger.debug("Regime gate: skipped %d assets (non-TREND regime)", regime_skipped)
+        # --- Diagnostic: log P(TP) distribution for evaluated assets ---
+        if all_scores:
+            all_scores.sort(key=lambda x: x[1], reverse=True)
+            top5 = all_scores[:5]
+            above = sum(1 for _, p in all_scores if p >= threshold)
+            below_near = sum(1 for _, p in all_scores if threshold - 0.05 <= p < threshold)
+            below_far = sum(1 for _, p in all_scores if p < threshold - 0.05)
+            logger.info(
+                "P(TP) distribution | top5: %s | above %.0f%%: %d, near-miss (%.0f%%-%.0f%%): %d, far below: %d, total scored: %d",
+                ", ".join(f"{s}={p:.1%}" for s, p in top5),
+                threshold * 100, above,
+                (threshold - 0.05) * 100, threshold * 100, below_near,
+                below_far, len(all_scores),
+            )
+
+        # Count assets evaluated (after regime gate + position filter)
+        trend_evaluated = len(states) - regime_skipped - len(symbols_with_positions)
+        logger.info(
+            "Scan: %d assets, %d evaluated, %d skipped, %d candidates (mode=%s, threshold=%.2f)",
+            len(states), max(0, trend_evaluated), regime_skipped, len(candidates),
+            self.config.ml_mode, threshold,
+        )
 
         # --- Sort by P(TP) desc, execute top N ---
         if not candidates:
@@ -927,8 +962,9 @@ class ConservativeBot:
 
             logger.info("=" * 60)
             logger.info(
-                "HLQuantBot v4 Running (%s) | ML threshold: %.0f%%",
+                "HLQuantBot v4 Running (%s) | ML mode: %s, threshold: %.0f%%",
                 "TESTNET" if self.config.testnet else "MAINNET",
+                self.config.ml_mode,
                 self.config.ml_min_probability * 100,
             )
             logger.info("Assets: %d", len(self.config.assets))

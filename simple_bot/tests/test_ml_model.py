@@ -32,6 +32,8 @@ def mock_dataset() -> pd.DataFrame:
         "ema9_slope": np.random.uniform(-0.01, 0.01, n),
         "ema21_slope": np.random.uniform(-0.01, 0.01, n),
         "close_vs_ema200": np.random.uniform(-5, 5, n),
+        "regime_encoded": np.random.choice([0.0, 1.0, 2.0], n),
+        "spread_pct": np.random.uniform(0, 0.1, n),
         "label": np.random.randint(0, 2, n),
     }
     return pd.DataFrame(data)
@@ -135,6 +137,7 @@ class TestMLPrediction:
             "ema_spread_pct": 0.5, "volume_ratio": 1.2,
             "bb_position": 0.6, "ema9_slope": 0.002,
             "ema21_slope": 0.001, "close_vs_ema200": 2.0,
+            "regime_encoded": 2.0, "spread_pct": 0.05,
         }
         prob, explanation = trained_model.predict(features)
 
@@ -217,6 +220,83 @@ class TestFeatureExtraction:
         features = trained_model.extract_features(sample_market_state)
         assert features["ema9_slope"] == pytest.approx(-0.005)
         assert features["ema21_slope"] == pytest.approx(-0.002)
+
+    def test_extract_features_regime_encoded_trend(
+        self, trained_model: MLTradeModel, sample_market_state: MarketState
+    ) -> None:
+        """regime_encoded should be 2.0 for TREND."""
+        sample_market_state.regime = Regime.TREND
+        features = trained_model.extract_features(sample_market_state)
+        assert features["regime_encoded"] == 2.0
+
+    def test_extract_features_regime_encoded_chaos(
+        self, trained_model: MLTradeModel, sample_market_state: MarketState
+    ) -> None:
+        """regime_encoded should be 1.0 for CHAOS."""
+        sample_market_state.regime = Regime.CHAOS
+        features = trained_model.extract_features(sample_market_state)
+        assert features["regime_encoded"] == 1.0
+
+    def test_extract_features_regime_encoded_range(
+        self, trained_model: MLTradeModel, sample_market_state: MarketState
+    ) -> None:
+        """regime_encoded should be 0.0 for RANGE."""
+        sample_market_state.regime = Regime.RANGE
+        features = trained_model.extract_features(sample_market_state)
+        assert features["regime_encoded"] == 0.0
+
+    def test_extract_features_spread_pct_default(
+        self, trained_model: MLTradeModel, sample_market_state: MarketState
+    ) -> None:
+        """spread_pct should default to 0.0 when not provided."""
+        features = trained_model.extract_features(sample_market_state)
+        assert features["spread_pct"] == 0.0
+
+    def test_extract_features_spread_pct_passthrough(
+        self, trained_model: MLTradeModel, sample_market_state: MarketState
+    ) -> None:
+        """spread_pct should pass through the provided value."""
+        features = trained_model.extract_features(sample_market_state, spread_pct=0.07)
+        assert features["spread_pct"] == pytest.approx(0.07)
+
+
+# ── Optimal Threshold Tests ──────────────────────────────────────────────
+
+class TestOptimalThreshold:
+    def test_optimal_threshold_set_after_training(
+        self, mock_dataset: pd.DataFrame
+    ) -> None:
+        """optimal_threshold should be set after train()."""
+        model = MLTradeModel()
+        assert model.optimal_threshold is None
+        model.train(mock_dataset)
+        assert model.optimal_threshold is not None
+        assert 0.50 <= model.optimal_threshold <= 0.70
+
+    def test_optimal_threshold_in_metrics(
+        self, mock_dataset: pd.DataFrame
+    ) -> None:
+        """train() metrics dict should include optimal_threshold."""
+        model = MLTradeModel()
+        metrics = model.train(mock_dataset)
+        assert "optimal_threshold" in metrics
+        assert metrics["optimal_threshold"] is not None
+
+    def test_optimal_threshold_persisted(
+        self, trained_model: MLTradeModel
+    ) -> None:
+        """optimal_threshold should survive save/load roundtrip."""
+        threshold_before = trained_model.optimal_threshold
+        assert threshold_before is not None
+
+        with tempfile.NamedTemporaryFile(suffix=".joblib", delete=False) as f:
+            path = f.name
+
+        trained_model.save(path)
+
+        loaded = MLTradeModel()
+        assert loaded.load(path)
+        assert loaded.optimal_threshold == pytest.approx(threshold_before)
 
 
 # ── EMA Slope Computation Tests ──────────────────────────────────────────
@@ -309,6 +389,7 @@ class TestMLPersistence:
             "ema_spread_pct": 0.5, "volume_ratio": 1.2,
             "bb_position": 0.6, "ema9_slope": 0.002,
             "ema21_slope": 0.001, "close_vs_ema200": 2.0,
+            "regime_encoded": 2.0, "spread_pct": 0.05,
         }
         prob_before, _ = trained_model.predict(features)
 

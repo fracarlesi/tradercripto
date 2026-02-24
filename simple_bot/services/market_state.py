@@ -484,10 +484,10 @@ class MarketStateService(BaseService):
                 symbol=symbol,
             )
 
-            # Trend direction
-            if current_price > Decimal(str(ema200[-1])):
+            # Trend direction: EMA9 vs EMA21 (matches training signal)
+            if ema9[-1] > ema21[-1]:
                 trend_direction = Direction.LONG
-            elif current_price < Decimal(str(ema200[-1])):
+            elif ema9[-1] < ema21[-1]:
                 trend_direction = Direction.SHORT
             else:
                 trend_direction = Direction.FLAT

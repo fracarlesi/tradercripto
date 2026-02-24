@@ -151,17 +151,8 @@ regime:
 strategies:
   trend_follow:
     enabled: false
-
   trend_momentum:
-    enabled: true
-    allow_short: true
-    min_atr_pct: 0.1
-    min_adx: 30  # ADX entry minimum (above regime's 25 threshold, adds buffer)
-    volume_filter_multiplier: 20  # min_volume_usd = equity * per_trade_pct * leverage * this
-    rsi_long_min: 30
-    rsi_long_max: 65
-    rsi_short_min: 40
-    rsi_short_max: 70
+    enabled: false  # Replaced by ML-primary pipeline
 
 # -----------------------------------------------------------------------------
 # LLM Veto - DeepSeek confirmation/veto
@@ -189,8 +180,8 @@ execution:
   prefer_limit: true
   limit_timeout_seconds: 60
 
-  max_slippage_pct: 0.1
-  max_spread_pct: 0.10  # Skip assets with bid-ask spread > this %
+  max_slippage_pct: 0.25       # Relaxed for altcoins — ML handles spread economics
+  max_spread_pct: 0.30         # Relaxed — ML handles spread economics now
 
   max_retries: 3
   retry_delay_seconds: 5
@@ -265,7 +256,8 @@ metrics:
 ml_model:
   enabled: true
   model_path: "models/trade_model.joblib"
-  min_probability: 0.55        # P(TP) minima per tradare
+  min_probability: 0.50        # Floor only — actual threshold calibrated per model
+  ml_mode: "assisted"          # "assisted" keeps regime gate, "primary" removes it
   retrain_days: 30             # Giorni di dati per training
   retrain_interval_days: 3     # Ogni quanto ri-addestrare
 

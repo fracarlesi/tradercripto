@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 import xgboost as xgb
 from sklearn.model_selection import TimeSeriesSplit, cross_val_score
-from sklearn.metrics import accuracy_score, roc_auc_score
+from sklearn.metrics import accuracy_score, precision_recall_curve, roc_auc_score
 
 from ..core.models import MarketState
 
@@ -35,6 +35,8 @@ class MLTradeModel:
         "ema9_slope",
         "ema21_slope",
         "close_vs_ema200",
+        "regime_encoded",   # TREND=2.0, CHAOS=1.0, RANGE=0.0
+        "spread_pct",       # real-time at inference, 0.0 in training
     ]
 
     _DEFAULT_PARAMS: dict = {
@@ -52,6 +54,11 @@ class MLTradeModel:
         self._config = config or {}
         self._model: Optional[xgb.XGBClassifier] = None
         self._feature_importances: dict[str, float] = {}
+        self._optimal_threshold: Optional[float] = None
+
+    @property
+    def optimal_threshold(self) -> Optional[float]:
+        return self._optimal_threshold
 
     # ------------------------------------------------------------------
     # Training
@@ -77,8 +84,15 @@ class MLTradeModel:
         n_positive = int(y.sum())
         n_negative = int(len(y) - n_positive)
 
-        # Merge default params with any user overrides
-        params = {**self._DEFAULT_PARAMS, **self._config.get("xgb_params", {})}
+        # Handle class imbalance
+        scale_pos_weight = max(1.0, n_negative / n_positive) if n_positive > 0 else 1.0
+
+        # Merge default params with class weight and any user overrides
+        params = {
+            **self._DEFAULT_PARAMS,
+            "scale_pos_weight": scale_pos_weight,
+            **self._config.get("xgb_params", {}),
+        }
 
         self._model = xgb.XGBClassifier(**params)
 
@@ -92,6 +106,9 @@ class MLTradeModel:
         self._model.fit(X, y)
 
         assert self._model is not None  # for type checker
+
+        # ------ Optimal threshold calibration (F-beta, beta=0.5) ------
+        self._optimal_threshold = self._calibrate_threshold(X, y)
 
         # Feature importances
         importances = self._model.feature_importances_
@@ -113,19 +130,82 @@ class MLTradeModel:
             "n_samples": len(df),
             "n_positive": n_positive,
             "n_negative": n_negative,
+            "optimal_threshold": self._optimal_threshold,
         }
 
         logger.info(
             "Model trained: %d samples (%d pos / %d neg), "
-            "CV AUC=%.4f +/- %.4f",
+            "CV AUC=%.4f +/- %.4f, optimal_threshold=%.4f",
             len(df),
             n_positive,
             n_negative,
             metrics["cv_auc_mean"],
             metrics["cv_auc_std"],
+            self._optimal_threshold if self._optimal_threshold is not None else 0.55,
         )
 
         return metrics
+
+    def _calibrate_threshold(
+        self, X: pd.DataFrame, y: pd.Series
+    ) -> float:
+        """Find optimal threshold using F-beta (beta=0.5, precision-weighted).
+
+        Uses the LAST fold of TimeSeriesSplit(n_splits=5) as holdout.
+        Only considers thresholds where precision >= 0.55.
+        Clamps result to [0.50, 0.70], default 0.55 if not enough data.
+        """
+        assert self._model is not None
+
+        default = 0.55
+        try:
+            tscv = TimeSeriesSplit(n_splits=5)
+            splits = list(tscv.split(X))
+            _, val_idx = splits[-1]
+
+            X_val = X.iloc[val_idx]
+            y_val = y.iloc[val_idx]
+
+            if len(y_val) < 10 or y_val.sum() < 2:
+                return default
+
+            y_proba_val = self._model.predict_proba(X_val)[:, 1]
+            precision, recall, thresholds = precision_recall_curve(
+                y_val, y_proba_val
+            )
+
+            # F-beta with beta=0.5 (precision-weighted)
+            beta = 0.5
+            beta_sq = beta ** 2
+            best_threshold = default
+            best_fbeta = -1.0
+
+            for i in range(len(thresholds)):
+                p = precision[i]
+                r = recall[i]
+                if p < 0.55:
+                    continue
+                denom = beta_sq * p + r
+                if denom <= 0:
+                    continue
+                fbeta = (1 + beta_sq) * (p * r) / denom
+                if fbeta > best_fbeta:
+                    best_fbeta = fbeta
+                    best_threshold = float(thresholds[i])
+
+            # Clamp to [0.50, 0.70]
+            best_threshold = max(0.50, min(0.70, best_threshold))
+
+            logger.info(
+                "Threshold calibration: %.4f (F0.5=%.4f)",
+                best_threshold,
+                best_fbeta if best_fbeta >= 0 else 0.0,
+            )
+            return best_threshold
+
+        except Exception:
+            logger.warning("Threshold calibration failed, using default %.2f", default)
+            return default
 
     # ------------------------------------------------------------------
     # Prediction
@@ -159,15 +239,21 @@ class MLTradeModel:
     # Feature extraction
     # ------------------------------------------------------------------
 
-    def extract_features(self, state: MarketState) -> dict:
+    def extract_features(self, state: MarketState, spread_pct: float = 0.0) -> dict:
         """Extract features from a live MarketState for prediction.
 
         Args:
             state: MarketState with all indicators
+            spread_pct: Bid-ask spread as %; 0.0 in training, real-time at inference.
 
         Returns:
             dict with keys matching FEATURES
         """
+        from ..core.models import Regime
+
+        _REGIME_MAP = {Regime.TREND: 2.0, Regime.CHAOS: 1.0, Regime.RANGE: 0.0}
+        regime_encoded = _REGIME_MAP.get(state.regime, 1.0)
+
         close = float(state.close)
         ema9 = float(state.ema9) if state.ema9 is not None else close
         ema21 = float(state.ema21) if state.ema21 is not None else close
@@ -196,6 +282,8 @@ class MLTradeModel:
             "ema9_slope": float(state.ema9_slope),
             "ema21_slope": float(state.ema21_slope),
             "close_vs_ema200": close_vs_ema200,
+            "regime_encoded": regime_encoded,
+            "spread_pct": spread_pct,
         }
 
     # ------------------------------------------------------------------
@@ -210,6 +298,7 @@ class MLTradeModel:
         payload = {
             "model": self._model,
             "feature_importances": self._feature_importances,
+            "optimal_threshold": self._optimal_threshold,
         }
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         joblib.dump(payload, path)
@@ -221,6 +310,7 @@ class MLTradeModel:
             payload = joblib.load(path)
             self._model = payload["model"]
             self._feature_importances = payload.get("feature_importances", {})
+            self._optimal_threshold = payload.get("optimal_threshold", None)
 
             # Warn if saved model was trained with different features
             model_features = set(self._feature_importances.keys())

@@ -204,148 +204,6 @@ class TestModels:
 
 
 # =============================================================================
-# Strategy Tests
-# =============================================================================
-
-class TestTrendFollowStrategy:
-    """Test TrendFollowStrategy (SMA Crossover)."""
-
-    def test_import(self):
-        """Test strategy can be imported."""
-        from simple_bot.strategies import TrendFollowStrategy
-        assert TrendFollowStrategy is not None
-
-    def test_strategy_initialization(self):
-        """Test strategy initialization."""
-        from simple_bot.strategies import TrendFollowStrategy
-
-        strategy = TrendFollowStrategy()
-        assert strategy.name == "trend_follow"
-        assert strategy.required_regime == Regime.TREND
-
-    def test_strategy_with_config(self):
-        """Test strategy with custom config."""
-        from simple_bot.strategies import TrendFollowStrategy
-
-        config = {
-            "stop_atr_mult": 3.0,
-            "allow_short": True,
-            "min_atr_pct": 0.5,
-        }
-        strategy = TrendFollowStrategy(config=config)
-        assert strategy.stop_atr_mult == 3.0
-        assert strategy.allow_short == True
-        assert strategy.min_atr_pct == 0.5
-
-    def test_can_trade_in_any_regime(self, market_state_trend, market_state_range, market_state_chaos):
-        """Test SMA strategy can trade in any regime (signals are self-contained)."""
-        from simple_bot.strategies import TrendFollowStrategy
-
-        strategy = TrendFollowStrategy()
-        # SMA crossover strategy doesn't rely on regime
-        assert strategy.can_trade(market_state_trend) == True
-        assert strategy.can_trade(market_state_range) == True
-        assert strategy.can_trade(market_state_chaos) == True
-
-    def test_evaluate_generates_long_setup_on_golden_cross(self, market_state_trend):
-        """Test strategy generates LONG setup on golden cross with candle confirmation."""
-        from simple_bot.strategies import TrendFollowStrategy
-
-        strategy = TrendFollowStrategy()
-        result = strategy.evaluate(market_state_trend)
-
-        assert result.has_setup == True
-        assert result.setup is not None
-        assert result.setup.direction == Direction.LONG
-        assert result.setup.symbol == "BTC"
-        assert "Golden Cross" in result.reason
-        assert "bullish engulfing" in result.reason  # Candle confirmation in reason
-
-    def test_evaluate_rejects_without_candle_confirmation(self, market_state_trend):
-        """Test strategy rejects setup without candle confirmation when required."""
-        from simple_bot.strategies import TrendFollowStrategy
-
-        # Remove the bullish engulfing signal
-        market_state_trend.bullish_engulfing = False
-
-        strategy = TrendFollowStrategy()
-        result = strategy.evaluate(market_state_trend)
-
-        # Should reject because no bullish engulfing
-        assert result.has_setup == False
-        assert "No bullish engulfing candle confirmation" in result.reason
-
-    def test_evaluate_generates_setup_without_candle_confirm_disabled(self, market_state_trend):
-        """Test strategy generates setup when candle confirmation is disabled."""
-        from simple_bot.strategies import TrendFollowStrategy
-
-        # Remove the bullish engulfing signal
-        market_state_trend.bullish_engulfing = False
-
-        # Disable candle confirmation requirement
-        strategy = TrendFollowStrategy(config={"require_candle_confirm": False})
-        result = strategy.evaluate(market_state_trend)
-
-        # Should still generate setup because candle confirmation is disabled
-        assert result.has_setup == True
-        assert result.setup is not None
-        assert result.setup.direction == Direction.LONG
-        assert "Golden Cross" in result.reason
-        assert "bullish engulfing" not in result.reason  # No candle mention when disabled
-
-    def test_evaluate_rejects_mixed_signal(self, market_state_chaos):
-        """Test strategy rejects when SMAs give mixed signal."""
-        from simple_bot.strategies import TrendFollowStrategy
-
-        strategy = TrendFollowStrategy()
-        result = strategy.evaluate(market_state_chaos)
-
-        # Price < SMA20 but SMA20 > SMA50 - no clear signal
-        assert result.has_setup == False
-        assert "No SMA crossover signal" in result.reason
-
-    def test_short_disabled_by_default(self, market_state_range):
-        """Test short positions are disabled by default."""
-        from simple_bot.strategies import TrendFollowStrategy
-
-        # Create a death cross scenario
-        market_state_range.close = Decimal("3380")  # Price < SMA20
-        market_state_range.sma20 = Decimal("3400")  # SMA20 < SMA50
-        market_state_range.sma50 = Decimal("3450")  # Death cross setup
-
-        strategy = TrendFollowStrategy()
-        result = strategy.evaluate(market_state_range)
-
-        # Should reject because shorts are disabled
-        assert result.has_setup == False
-        assert "Short positions disabled" in result.reason
-
-
-class TestMomentumScalperStrategy:
-    """Test MomentumScalperStrategy."""
-
-    def test_import(self):
-        """Test strategy can be imported."""
-        from simple_bot.strategies import MomentumScalperStrategy
-        assert MomentumScalperStrategy is not None
-
-    def test_strategy_initialization(self):
-        """Test strategy initialization."""
-        from simple_bot.strategies import MomentumScalperStrategy
-
-        strategy = MomentumScalperStrategy()
-        assert strategy.name == "trend_momentum"
-
-    def test_can_trade_only_in_trend_regime(self, market_state_range, market_state_trend):
-        """Test strategy only trades in TREND regime."""
-        from simple_bot.strategies import MomentumScalperStrategy
-
-        strategy = MomentumScalperStrategy()
-        assert strategy.can_trade(market_state_range) == False
-        assert strategy.can_trade(market_state_trend) == True
-
-
-# =============================================================================
 # Service Configuration Tests
 # =============================================================================
 
@@ -594,7 +452,7 @@ dry_run: false
 class TestRegimeGate:
     """Test that _evaluate_all_assets skips non-TREND assets."""
 
-    def _make_bot(self) -> "ConservativeBot":
+    def _make_bot(self, ml_mode: str = "assisted") -> "ConservativeBot":
         """Create a ConservativeBot with mocked dependencies for regime gate testing."""
         from simple_bot.main import ConservativeBot, ConservativeConfig
         from simple_bot.services.ml_model import MLTradeModel
@@ -603,9 +461,10 @@ class TestRegimeGate:
         bot._config = MagicMock(spec=ConservativeConfig)
         bot._config.max_positions = 3
         bot._config.ml_min_probability = 0.55
+        bot._config.ml_mode = ml_mode
         bot._config.stop_loss_pct = 0.8
         bot._config.take_profit_pct = 1.6
-        bot._config.max_spread_pct = 0.10
+        bot._config.max_spread_pct = 0.30
         bot._exchange = AsyncMock()
         bot._bus = AsyncMock(spec_set=["publish"])
         bot._bus.publish = AsyncMock()
@@ -615,6 +474,7 @@ class TestRegimeGate:
         bot._ml_model.is_loaded = True
         bot._ml_model.extract_features = MagicMock(return_value={"feat": 1.0})
         bot._ml_model.predict = MagicMock(return_value=(0.75, "mock reason"))
+        bot._ml_model.optimal_threshold = None
 
         # Services: no kill switch, no cooldown, no protections
         bot._services = {}
@@ -718,6 +578,77 @@ class TestRegimeGate:
 
         # 2 TREND assets x 1 predict each = 2 predict calls
         assert bot._ml_model.predict.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_primary_mode_evaluates_range_assets(self) -> None:
+        """In primary mode, RANGE assets ARE evaluated by ML (regime gate disabled)."""
+        bot = self._make_bot(ml_mode="primary")
+        market_state_svc = MagicMock()
+        # Give RANGE assets a non-FLAT direction so they pass the direction gate
+        range_state = self._make_state("ETH", Regime.RANGE)
+        range_state.trend_direction = Direction.LONG
+        market_state_svc.get_all_states.return_value = {"ETH": range_state}
+        bot._services = {"market_state": market_state_svc}
+        bot._execute_setup = AsyncMock(return_value=True)
+
+        await bot._evaluate_all_assets()
+
+        # In primary mode, ML predict should be called even for RANGE assets
+        assert bot._ml_model.predict.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_primary_mode_evaluates_chaos_assets(self) -> None:
+        """In primary mode, CHAOS assets ARE evaluated by ML (regime gate disabled)."""
+        bot = self._make_bot(ml_mode="primary")
+        market_state_svc = MagicMock()
+        chaos_state = self._make_state("BTC", Regime.CHAOS)
+        chaos_state.trend_direction = Direction.SHORT
+        market_state_svc.get_all_states.return_value = {"BTC": chaos_state}
+        bot._services = {"market_state": market_state_svc}
+        bot._execute_setup = AsyncMock(return_value=True)
+
+        await bot._evaluate_all_assets()
+
+        assert bot._ml_model.predict.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_primary_mode_uses_calibrated_threshold(self) -> None:
+        """In primary mode, calibrated optimal_threshold is used if available."""
+        bot = self._make_bot(ml_mode="primary")
+        bot._config.ml_min_probability = 0.50
+        bot._ml_model.optimal_threshold = 0.62  # Calibrated threshold
+        bot._ml_model.predict = MagicMock(return_value=(0.58, "above floor but below calibrated"))
+
+        market_state_svc = MagicMock()
+        trend_state = self._make_state("BTC", Regime.TREND)
+        market_state_svc.get_all_states.return_value = {"BTC": trend_state}
+        bot._services = {"market_state": market_state_svc}
+        bot._execute_setup = AsyncMock(return_value=True)
+
+        await bot._evaluate_all_assets()
+
+        # P(TP)=0.58 is above floor (0.50) but below calibrated threshold (0.62)
+        # So it should NOT generate a candidate -> execute_setup not called
+        bot._execute_setup.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_assisted_mode_ignores_calibrated_threshold(self) -> None:
+        """In assisted mode, only ml_min_probability is used (not calibrated threshold)."""
+        bot = self._make_bot(ml_mode="assisted")
+        bot._config.ml_min_probability = 0.50
+        bot._ml_model.optimal_threshold = 0.62  # Should be ignored in assisted mode
+        bot._ml_model.predict = MagicMock(return_value=(0.58, "above floor"))
+
+        market_state_svc = MagicMock()
+        trend_state = self._make_state("BTC", Regime.TREND)
+        market_state_svc.get_all_states.return_value = {"BTC": trend_state}
+        bot._services = {"market_state": market_state_svc}
+        bot._execute_setup = AsyncMock(return_value=True)
+
+        await bot._evaluate_all_assets()
+
+        # P(TP)=0.58 is above floor (0.50), and assisted mode uses floor only
+        bot._execute_setup.assert_called_once()
 
 
 # =============================================================================

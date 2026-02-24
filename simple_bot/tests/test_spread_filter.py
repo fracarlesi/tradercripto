@@ -223,7 +223,7 @@ class TestGetSpreadPct:
 class TestSpreadFilterInExecuteSetup:
     """Tests for the spread filter integration in _execute_setup."""
 
-    def _make_bot(self, max_spread_pct: float = 0.10) -> ConservativeBot:
+    def _make_bot(self, max_spread_pct: float = 0.30) -> ConservativeBot:
         """Create a ConservativeBot with mocked dependencies for testing."""
         bot = ConservativeBot.__new__(ConservativeBot)
         bot._config = MagicMock(spec=ConservativeConfig)
@@ -257,9 +257,9 @@ class TestSpreadFilterInExecuteSetup:
     @pytest.mark.asyncio
     async def test_narrow_spread_allows_trade(self) -> None:
         """Asset with spread below threshold passes the filter."""
-        bot = self._make_bot(max_spread_pct=0.10)
+        bot = self._make_bot(max_spread_pct=0.30)
         setup = self._make_setup("BTC")
-        bot._exchange.get_spread_pct = AsyncMock(return_value=0.02)  # 0.02% < 0.10%
+        bot._exchange.get_spread_pct = AsyncMock(return_value=0.02)  # 0.02% < 0.30%
 
         await bot._execute_setup(setup)
 
@@ -271,9 +271,9 @@ class TestSpreadFilterInExecuteSetup:
     @pytest.mark.asyncio
     async def test_wide_spread_blocks_trade(self) -> None:
         """Asset with spread above threshold is skipped."""
-        bot = self._make_bot(max_spread_pct=0.10)
+        bot = self._make_bot(max_spread_pct=0.30)
         setup = self._make_setup("BTC")
-        bot._exchange.get_spread_pct = AsyncMock(return_value=0.25)  # 0.25% > 0.10%
+        bot._exchange.get_spread_pct = AsyncMock(return_value=0.50)  # 0.50% > 0.30%
 
         await bot._execute_setup(setup)
 
@@ -283,9 +283,9 @@ class TestSpreadFilterInExecuteSetup:
     @pytest.mark.asyncio
     async def test_spread_at_threshold_passes(self) -> None:
         """Asset with spread exactly at threshold passes (not strictly greater)."""
-        bot = self._make_bot(max_spread_pct=0.10)
+        bot = self._make_bot(max_spread_pct=0.30)
         setup = self._make_setup("BTC")
-        bot._exchange.get_spread_pct = AsyncMock(return_value=0.10)  # exactly at threshold
+        bot._exchange.get_spread_pct = AsyncMock(return_value=0.30)  # exactly at threshold
 
         await bot._execute_setup(setup)
 
@@ -295,7 +295,7 @@ class TestSpreadFilterInExecuteSetup:
     @pytest.mark.asyncio
     async def test_spread_api_error_allows_trade(self) -> None:
         """API error returns 0.0 which is below threshold (fail-open)."""
-        bot = self._make_bot(max_spread_pct=0.10)
+        bot = self._make_bot(max_spread_pct=0.30)
         setup = self._make_setup("BTC")
         bot._exchange.get_spread_pct = AsyncMock(return_value=0.0)
 
@@ -307,7 +307,7 @@ class TestSpreadFilterInExecuteSetup:
     @pytest.mark.asyncio
     async def test_no_exchange_allows_trade(self) -> None:
         """When exchange is None, spread check is skipped (e.g., dry run)."""
-        bot = self._make_bot(max_spread_pct=0.10)
+        bot = self._make_bot(max_spread_pct=0.30)
         setup = self._make_setup("BTC")
         bot._exchange = None  # No exchange client
 

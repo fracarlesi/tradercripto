@@ -86,6 +86,22 @@ def signal_momentum_breakout(ind: dict, idx: int, cfg: BacktestConfig) -> int:
     return 0
 
 
+def signal_ema_crossover_only(ind: dict, idx: int) -> int:
+    """EMA9/EMA21 crossover — no regime, RSI, or ATR filter.
+
+    Returns: 1=LONG, -1=SHORT, 0=no signal (EMA9==EMA21 or NaN)
+    """
+    ema9 = ind["ema9"][idx]
+    ema21 = ind["ema21"][idx]
+    if np.isnan(ema9) or np.isnan(ema21):
+        return 0
+    if ema9 > ema21:
+        return 1
+    if ema9 < ema21:
+        return -1
+    return 0
+
+
 def signal_mean_reversion(ind: dict, idx: int, cfg: BacktestConfig) -> int:
     """RSI < 25 + below BB lower for LONG, RSI > 75 + above BB upper for SHORT."""
     if "bb_upper" not in ind or "bb_lower" not in ind:

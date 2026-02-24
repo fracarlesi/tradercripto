@@ -20,7 +20,7 @@ from backtesting.indicators import (
     calc_sma,
     compute_indicators,
 )
-from backtesting.signals import signal_trend_momentum
+from backtesting.signals import signal_ema_crossover_only
 
 __all__ = ["generate_dataset"]
 
@@ -130,6 +130,16 @@ def _extract_features(
     else:
         close_vs_ema200 = 0.0
 
+    # Regime encoding: TREND=2.0, RANGE=0.0, CHAOS=1.0
+    adx_val = ind["adx"][idx]
+    is_trend = ind["is_trend"][idx]
+    if not np.isnan(adx_val) and is_trend:
+        regime_encoded = 2.0  # TREND
+    elif not np.isnan(adx_val) and adx_val <= 20:
+        regime_encoded = 0.0  # RANGE
+    else:
+        regime_encoded = 1.0  # CHAOS
+
     return {
         "adx": ind["adx"][idx],
         "rsi": ind["rsi"][idx],
@@ -140,6 +150,8 @@ def _extract_features(
         "ema9_slope": ema9_slope,
         "ema21_slope": ema21_slope,
         "close_vs_ema200": close_vs_ema200,
+        "regime_encoded": regime_encoded,
+        "spread_pct": 0.0,  # unavailable in backtesting
     }
 
 
@@ -200,7 +212,7 @@ def generate_dataset(
         # Scan for signals and label them
         signal_count = 0
         for idx in range(cfg.warmup_bars, len(candles)):
-            sig = signal_trend_momentum(ind, idx, cfg)
+            sig = signal_ema_crossover_only(ind, idx)
             if sig == 0:
                 continue
 

@@ -1,8 +1,6 @@
 """Trading strategies for HLQuantBot."""
 
 from .base import BaseStrategy, StrategyResult
-from .trend_follow import TrendFollowStrategy
-from .momentum_scalper import MomentumScalperStrategy
 
 # Re-export indicator functions
 from simple_bot.services.market_state import (
@@ -18,8 +16,6 @@ from simple_bot.services.market_state import (
 __all__ = [
     "BaseStrategy",
     "StrategyResult",
-    "TrendFollowStrategy",
-    "MomentumScalperStrategy",
     # Indicator functions
     "calculate_adx",
     "calculate_atr",
