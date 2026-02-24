@@ -315,9 +315,9 @@ class RiskManagerService(BaseService):
             if not symbol:
                 return
 
-            if event in ("order_error", "order_cancelled"):
+            if event in ("order_error", "order_cancelled", "slippage_rejected"):
                 self.clear_pending_intent(symbol)
-                self._logger.debug(
+                self._logger.info(
                     "Cleared pending intent for %s on %s event", symbol, event
                 )
         except Exception as e:
