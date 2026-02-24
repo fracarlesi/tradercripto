@@ -1605,6 +1605,7 @@ class ExecutionEngineService(BaseService):
                         leverage=pos.get("leverage", 1),
                         status=PositionStatus.OPEN,
                         opened_at=datetime.now(timezone.utc),
+                        entry_regime="trend",  # We only open in TREND
                     )
                     self.active_positions[symbol] = new_pos
                     self._logger.info(
