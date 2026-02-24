@@ -527,6 +527,7 @@ class RiskManagerService(BaseService):
             trailing_atr_mult=risk.trailing_distance_atr,
             risk_amount=risk.risk_amount,
             risk_pct=Decimal(str(self._config.per_trade_pct)),
+            regime=setup.regime.value if setup.regime else None,
             prefer_limit=True,
             max_slippage_pct=Decimal(str(self._config.max_slippage_pct)),
         )

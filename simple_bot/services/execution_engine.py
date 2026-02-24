@@ -197,7 +197,8 @@ class ExecutionPosition:
     sl_price: Optional[float] = None
     opened_at: Optional[datetime] = None
     closed_at: Optional[datetime] = None
-    exit_reason: Optional[str] = None  # "stop_loss", "take_profit", "roi_target", "manual"
+    exit_reason: Optional[str] = None  # "stop_loss", "take_profit", "roi_target", "regime_change", "manual"
+    entry_regime: Optional[str] = None  # Regime at entry ("trend", "range", "chaos")
     
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary."""
@@ -220,6 +221,7 @@ class ExecutionPosition:
             "opened_at": self.opened_at.isoformat() if self.opened_at else None,
             "closed_at": self.closed_at.isoformat() if self.closed_at else None,
             "exit_reason": self.exit_reason,
+            "entry_regime": self.entry_regime,
         }
 
 
@@ -348,7 +350,10 @@ class ExecutionEngineService(BaseService):
         
         # Subscribe to trade intents (from risk manager)
         await self.subscribe(Topic.TRADE_INTENT, self._handle_signal)
-        
+
+        # Subscribe to regime changes (close positions on regime invalidation)
+        await self.subscribe(Topic.REGIME, self._handle_regime_change)
+
         # Start background tasks
         self._position_monitor_task = asyncio.create_task(
             self._monitor_positions(),
@@ -565,6 +570,45 @@ class ExecutionEngineService(BaseService):
             self._settling_symbols.discard(symbol)
             self._logger.debug("Settling ended for %s", symbol)
     
+    async def _handle_regime_change(self, message: Message) -> None:
+        """Close positions whose entry regime no longer matches current regime.
+
+        If a position was opened in TREND and regime flips to RANGE/CHAOS,
+        close at market to free the slot for a better opportunity.
+        """
+        payload = message.payload
+        symbol = payload.get("symbol", "")
+        new_regime = payload.get("regime", "")
+
+        if symbol not in self.active_positions:
+            return
+
+        position = self.active_positions[symbol]
+
+        # Only act on positions with known entry regime
+        if not position.entry_regime:
+            return
+
+        # Only close if regime actually changed from entry
+        if new_regime == position.entry_regime:
+            return
+
+        # Position is already closing — skip
+        if position.status != PositionStatus.OPEN:
+            return
+
+        self._logger.info(
+            "Regime invalidation: %s changed %s -> %s, closing %s %s position",
+            symbol,
+            position.entry_regime,
+            new_regime,
+            position.side,
+            symbol,
+        )
+
+        position.exit_reason = "regime_change"
+        await self.close_position(symbol)
+
     def _validate_signal(self, signal: Dict[str, Any]) -> bool:
         """
         Validate signal before execution.
@@ -980,6 +1024,7 @@ class ExecutionEngineService(BaseService):
             signal_id=order.signal_id,
             status=PositionStatus.OPEN,
             opened_at=datetime.now(timezone.utc),
+            entry_regime=signal.get("regime"),
         )
         
         self.active_positions[symbol] = position

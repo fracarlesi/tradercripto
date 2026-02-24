@@ -226,6 +226,9 @@ class TradeIntent(BaseModel):
     risk_amount: Decimal = Field(..., ge=0)
     risk_pct: Decimal = Field(..., ge=0, le=100)
 
+    # Regime at entry (for regime-invalidation exits)
+    regime: Optional[str] = Field(default=None, description="Regime when setup was created")
+
     # Order preferences
     prefer_limit: bool = Field(default=True)
     max_slippage_pct: Decimal = Field(default=Decimal("0.1"))
