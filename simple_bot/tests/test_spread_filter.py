@@ -229,6 +229,7 @@ class TestSpreadFilterInExecuteSetup:
         bot._config = MagicMock(spec=ConservativeConfig)
         bot._config.max_positions = 3
         bot._config.max_spread_pct = max_spread_pct
+        bot._config.stop_loss_pct = 0.8
         bot._exchange = AsyncMock(spec=HyperliquidClient)
         bot._bus = AsyncMock(spec_set=["publish"])
         bot._bus.publish = AsyncMock()

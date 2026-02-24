@@ -685,13 +685,11 @@ class ConservativeBot:
         else:
             available_slots = self.config.max_positions
 
-        top_candidates = candidates[:available_slots]
-
         ranking_str = ", ".join(f"{c[0]}({c[2]:.2f})" for c in candidates)
-        if top_candidates:
+        if available_slots > 0:
             logger.info(
-                "Collected %d candidates, executing top %d: [%s]",
-                len(candidates), len(top_candidates), ranking_str,
+                "Collected %d candidates, %d slots available: [%s]",
+                len(candidates), available_slots, ranking_str,
             )
         else:
             logger.info(
@@ -699,16 +697,23 @@ class ConservativeBot:
                 len(candidates), self.config.max_positions, ranking_str,
             )
 
-        for _, setup, _, _ in top_candidates:
+        executed = 0
+        for _, setup, _, _ in candidates:
+            if executed >= available_slots:
+                break
             if risk_manager:
                 cur_count = len(risk_manager._open_positions) + len(risk_manager._pending_intents)
                 if cur_count >= self.config.max_positions:
                     logger.info("All slots filled during execution, stopping")
                     break
-            await self._execute_setup(setup)
+            if await self._execute_setup(setup):
+                executed += 1
 
-    async def _execute_setup(self, setup: Setup) -> None:
-        """Execute a setup: check spread, then publish to risk manager."""
+    async def _execute_setup(self, setup: Setup) -> bool:
+        """Execute a setup: check spread and tick size, then publish to risk manager.
+
+        Returns True if setup was forwarded, False if skipped.
+        """
         # Check bid-ask spread before entering
         if self._exchange:
             spread_pct = await self._exchange.get_spread_pct(setup.symbol)
@@ -717,11 +722,27 @@ class ConservativeBot:
                     "SKIP %s: bid-ask spread %.3f%% > max %.2f%% (illiquid)",
                     setup.symbol, spread_pct, self.config.max_spread_pct,
                 )
-                return
+                return False
+
+        # Check tick size vs TP/SL — skip if rounding would collapse stops
+        price = float(setup.entry_price)
+        if price > 0:
+            from math import log10, floor
+            magnitude = floor(log10(price))
+            max_decimals = min(4, max(0, 4 - magnitude))
+            min_tick = 10 ** (-max_decimals)
+            tp_distance = price * self.config.stop_loss_pct / 100  # SL is smaller than TP
+            if tp_distance < min_tick * 1.5:
+                logger.info(
+                    "SKIP %s: price $%.6f too low for TP/SL (tick=%.6f, SL_dist=%.6f)",
+                    setup.symbol, price, min_tick, tp_distance,
+                )
+                return False
 
         # Publish setup for risk manager
         if self._bus:
             await self._bus.publish(Topic.SETUPS, setup.model_dump())
+        return True
 
     # =========================================================================
     # ML Model Retraining
