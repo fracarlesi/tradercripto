@@ -452,7 +452,7 @@ dry_run: false
 class TestRegimeGate:
     """Test that _evaluate_all_assets skips non-TREND assets."""
 
-    def _make_bot(self, ml_mode: str = "assisted") -> "ConservativeBot":
+    def _make_bot(self) -> "ConservativeBot":
         """Create a ConservativeBot with mocked dependencies for regime gate testing."""
         from simple_bot.main import ConservativeBot, ConservativeConfig
         from simple_bot.services.ml_model import MLTradeModel
@@ -461,7 +461,6 @@ class TestRegimeGate:
         bot._config = MagicMock(spec=ConservativeConfig)
         bot._config.max_positions = 3
         bot._config.ml_min_probability = 0.55
-        bot._config.ml_mode = ml_mode
         bot._config.stop_loss_pct = 0.8
         bot._config.take_profit_pct = 1.6
         bot._config.max_spread_pct = 0.30
@@ -474,7 +473,6 @@ class TestRegimeGate:
         bot._ml_model.is_loaded = True
         bot._ml_model.extract_features = MagicMock(return_value={"feat": 1.0})
         bot._ml_model.predict = MagicMock(return_value=(0.75, "mock reason"))
-        bot._ml_model.optimal_threshold = None
 
         # Services: no kill switch, no cooldown, no protections
         bot._services = {}
@@ -578,77 +576,6 @@ class TestRegimeGate:
 
         # 2 TREND assets x 1 predict each = 2 predict calls
         assert bot._ml_model.predict.call_count == 2
-
-    @pytest.mark.asyncio
-    async def test_primary_mode_evaluates_range_assets(self) -> None:
-        """In primary mode, RANGE assets ARE evaluated by ML (regime gate disabled)."""
-        bot = self._make_bot(ml_mode="primary")
-        market_state_svc = MagicMock()
-        # Give RANGE assets a non-FLAT direction so they pass the direction gate
-        range_state = self._make_state("ETH", Regime.RANGE)
-        range_state.trend_direction = Direction.LONG
-        market_state_svc.get_all_states.return_value = {"ETH": range_state}
-        bot._services = {"market_state": market_state_svc}
-        bot._execute_setup = AsyncMock(return_value=True)
-
-        await bot._evaluate_all_assets()
-
-        # In primary mode, ML predict should be called even for RANGE assets
-        assert bot._ml_model.predict.call_count == 1
-
-    @pytest.mark.asyncio
-    async def test_primary_mode_evaluates_chaos_assets(self) -> None:
-        """In primary mode, CHAOS assets ARE evaluated by ML (regime gate disabled)."""
-        bot = self._make_bot(ml_mode="primary")
-        market_state_svc = MagicMock()
-        chaos_state = self._make_state("BTC", Regime.CHAOS)
-        chaos_state.trend_direction = Direction.SHORT
-        market_state_svc.get_all_states.return_value = {"BTC": chaos_state}
-        bot._services = {"market_state": market_state_svc}
-        bot._execute_setup = AsyncMock(return_value=True)
-
-        await bot._evaluate_all_assets()
-
-        assert bot._ml_model.predict.call_count == 1
-
-    @pytest.mark.asyncio
-    async def test_primary_mode_uses_calibrated_threshold(self) -> None:
-        """In primary mode, calibrated optimal_threshold is used if available."""
-        bot = self._make_bot(ml_mode="primary")
-        bot._config.ml_min_probability = 0.50
-        bot._ml_model.optimal_threshold = 0.62  # Calibrated threshold
-        bot._ml_model.predict = MagicMock(return_value=(0.58, "above floor but below calibrated"))
-
-        market_state_svc = MagicMock()
-        trend_state = self._make_state("BTC", Regime.TREND)
-        market_state_svc.get_all_states.return_value = {"BTC": trend_state}
-        bot._services = {"market_state": market_state_svc}
-        bot._execute_setup = AsyncMock(return_value=True)
-
-        await bot._evaluate_all_assets()
-
-        # P(TP)=0.58 is above floor (0.50) but below calibrated threshold (0.62)
-        # So it should NOT generate a candidate -> execute_setup not called
-        bot._execute_setup.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_assisted_mode_ignores_calibrated_threshold(self) -> None:
-        """In assisted mode, only ml_min_probability is used (not calibrated threshold)."""
-        bot = self._make_bot(ml_mode="assisted")
-        bot._config.ml_min_probability = 0.50
-        bot._ml_model.optimal_threshold = 0.62  # Should be ignored in assisted mode
-        bot._ml_model.predict = MagicMock(return_value=(0.58, "above floor"))
-
-        market_state_svc = MagicMock()
-        trend_state = self._make_state("BTC", Regime.TREND)
-        market_state_svc.get_all_states.return_value = {"BTC": trend_state}
-        bot._services = {"market_state": market_state_svc}
-        bot._execute_setup = AsyncMock(return_value=True)
-
-        await bot._evaluate_all_assets()
-
-        # P(TP)=0.58 is above floor (0.50), and assisted mode uses floor only
-        bot._execute_setup.assert_called_once()
 
 
 # =============================================================================

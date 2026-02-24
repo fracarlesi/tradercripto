@@ -256,8 +256,7 @@ metrics:
 ml_model:
   enabled: true
   model_path: "models/trade_model.joblib"
-  min_probability: 0.50        # Floor only — actual threshold calibrated per model
-  ml_mode: "assisted"          # "assisted" keeps regime gate, "primary" removes it
+  min_probability: 0.50        # P(TP) minima per tradare
   retrain_days: 30             # Giorni di dati per training
   retrain_interval_days: 3     # Ogni quanto ri-addestrare
 
