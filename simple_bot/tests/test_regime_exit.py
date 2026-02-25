@@ -11,7 +11,7 @@ Run:
 """
 
 import pytest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 from simple_bot.services.execution_engine import (
@@ -40,7 +40,11 @@ def _make_position(
     entry_regime: str | None = "trend",
     status: PositionStatus = PositionStatus.OPEN,
 ) -> ExecutionPosition:
-    """Create a minimal ExecutionPosition for testing."""
+    """Create a minimal ExecutionPosition for testing.
+
+    Default opened_at is 1 hour ago to be well past the grace period
+    (REGIME_GRACE_PERIOD_MINUTES = 20).
+    """
     return ExecutionPosition(
         symbol=symbol,
         side=side,
@@ -48,7 +52,7 @@ def _make_position(
         entry_price=95000.0,
         current_price=95100.0,
         status=status,
-        opened_at=datetime.now(timezone.utc),
+        opened_at=datetime.now(timezone.utc) - timedelta(hours=1),
         entry_regime=entry_regime,
     )
 

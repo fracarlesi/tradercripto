@@ -380,7 +380,7 @@ class ExecutionEngineService(BaseService):
         
         # Sync existing positions from exchange
         await self._sync_positions_from_exchange()
-        
+
         self._logger.info(
             "ExecutionEngine started: %d active positions",
             len(self.active_positions)
@@ -598,11 +598,20 @@ class ExecutionEngineService(BaseService):
             self._settling_symbols.discard(symbol)
             self._logger.debug("Settling ended for %s", symbol)
     
+    # Minimum age (minutes) before a position can be closed by regime change.
+    # Prevents immediate regime-exit after entry when the confirmation counter
+    # is in a transient state (e.g. after service restart).
+    REGIME_GRACE_PERIOD_MINUTES: int = 20
+
     async def _handle_regime_change(self, message: Message) -> None:
         """Close positions whose entry regime no longer matches current regime.
 
         If a position was opened in TREND and regime flips to RANGE/CHAOS,
         close at market to free the slot for a better opportunity.
+
+        A grace period (REGIME_GRACE_PERIOD_MINUTES) protects recently opened
+        positions from being closed by transient regime readings, especially
+        after a service restart where the confirmation counter resets.
         """
         payload = message.payload
         symbol = payload.get("symbol", "")
@@ -623,6 +632,21 @@ class ExecutionEngineService(BaseService):
 
         # Position is already closing — skip
         if position.status != PositionStatus.OPEN:
+            return
+
+        # Grace period: skip regime-close for very new positions
+        age_minutes = (
+            datetime.now(timezone.utc) - position.opened_at
+        ).total_seconds() / 60.0
+        if age_minutes < self.REGIME_GRACE_PERIOD_MINUTES:
+            self._logger.info(
+                "Regime change %s -> %s for %s ignored: position age %.1f min < %d min grace period",
+                position.entry_regime,
+                new_regime,
+                symbol,
+                age_minutes,
+                self.REGIME_GRACE_PERIOD_MINUTES,
+            )
             return
 
         self._logger.info(

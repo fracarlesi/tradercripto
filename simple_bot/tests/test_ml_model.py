@@ -308,6 +308,36 @@ class TestOptimalThreshold:
         assert loaded.load(path)
         assert loaded.optimal_threshold == pytest.approx(threshold_before)
 
+    def test_effective_threshold_uses_max_of_optimal_and_floor(
+        self, mock_dataset: pd.DataFrame
+    ) -> None:
+        """The effective threshold at runtime should be
+        max(config_floor, optimal_threshold). Verify optimal_threshold
+        is always >= 0.50 so it can be compared with min_probability."""
+        model = MLTradeModel()
+        model.train(mock_dataset)
+
+        config_floor = 0.50  # min_probability from YAML
+        optimal = model.optimal_threshold
+        assert optimal is not None
+        effective = max(config_floor, optimal)
+
+        # effective must be >= both floor and optimal
+        assert effective >= config_floor
+        assert effective >= optimal
+        # And optimal is within calibrated range [0.50, 0.70]
+        assert 0.50 <= optimal <= 0.70
+
+    def test_optimal_threshold_none_falls_back_to_floor(self) -> None:
+        """When optimal_threshold is None (no model loaded), the effective
+        threshold should fall back to the config floor."""
+        model = MLTradeModel()
+        assert model.optimal_threshold is None
+
+        config_floor = 0.50
+        effective = max(config_floor, model.optimal_threshold or config_floor)
+        assert effective == config_floor
+
     def test_threshold_calibrated_on_holdout(
         self, mock_dataset: pd.DataFrame
     ) -> None:

@@ -160,9 +160,9 @@ class ConservativeConfig:
     take_profit_pct: float
 
     # Regime (for MarketStateService indicator computation)
-    trend_adx_min: float
+    trend_adx_entry_min: float
+    trend_adx_exit_min: float
     range_adx_max: float
-    ema_slope_threshold: float
     choppiness_range_min: float
     regime_confirmation_bars: int
 
@@ -236,11 +236,11 @@ class ConservativeConfig:
             minimal_roi=stops.get("minimal_roi", {}),
             stop_loss_pct=stops.get("stop_loss_pct", 0.8),
             take_profit_pct=stops.get("take_profit_pct", 1.6),
-            trend_adx_min=regime.get("trend_adx_min", 25.0),
+            trend_adx_entry_min=regime.get("trend_adx_entry_min", 28.0),
+            trend_adx_exit_min=regime.get("trend_adx_exit_min", 22.0),
             range_adx_max=regime.get("range_adx_max", 20.0),
-            ema_slope_threshold=regime.get("ema_slope_threshold", 0.0003),
             choppiness_range_min=regime.get("choppiness_range_min", 60.0),
-            regime_confirmation_bars=regime.get("confirmation_bars", 2),
+            regime_confirmation_bars=regime.get("confirmation_bars", 3),
             ml_model_path=ml.get("model_path", "models/trade_model.joblib"),
             ml_min_probability=ml.get("min_probability", 0.50),
             # ml_mode removed — regime gate always active (trend strategy)
@@ -459,9 +459,9 @@ class ConservativeBot:
             timeframe=cfg.primary_timeframe,
             bars_to_fetch=cfg.bars_to_fetch,
             interval_seconds=cfg.scan_interval_minutes * 60,
-            trend_adx_min=cfg.trend_adx_min,
+            trend_adx_entry_min=cfg.trend_adx_entry_min,
+            trend_adx_exit_min=cfg.trend_adx_exit_min,
             range_adx_max=cfg.range_adx_max,
-            ema_slope_threshold=cfg.ema_slope_threshold,
             choppiness_range_min=cfg.choppiness_range_min,
             regime_confirmation_bars=cfg.regime_confirmation_bars,
         )
@@ -532,7 +532,16 @@ class ConservativeBot:
         # ML Model - required
         model_loaded = self._ml_model.load(cfg.ml_model_path)
         if model_loaded:
-            logger.info("ML model loaded from %s", cfg.ml_model_path)
+            effective_threshold = max(
+                cfg.ml_min_probability,
+                self._ml_model.optimal_threshold or cfg.ml_min_probability,
+            )
+            logger.info(
+                "ML model loaded: optimal_threshold=%.4f, config_floor=%.2f, effective_threshold=%.4f",
+                self._ml_model.optimal_threshold or 0.0,
+                cfg.ml_min_probability,
+                effective_threshold,
+            )
         else:
             logger.warning(
                 "ML model not found at %s — bot will skip trades until model is trained. "
@@ -633,7 +642,10 @@ class ConservativeBot:
         if risk_manager:
             symbols_with_positions = set(risk_manager._open_positions.keys())
 
-        threshold = self.config.ml_min_probability
+        threshold = max(
+            self.config.ml_min_probability,
+            self._ml_model.optimal_threshold or self.config.ml_min_probability,
+        )
 
         regime_skipped: int = 0
         for symbol, state in states.items():
@@ -908,6 +920,30 @@ class ConservativeBot:
                 logger.info("Started: %s", name)
         logger.info("All services started")
 
+    async def _init_regime_for_open_positions(self) -> None:
+        """Initialize confirmed regime to TREND for symbols with open positions.
+
+        After a restart, MarketStateService has an empty _confirmed_regime dict.
+        The first reading would become confirmed immediately, bypassing the
+        N-bar confirmation requirement. This seeds TREND for any symbol where
+        the execution engine already has an open position, so regime change
+        confirmation works correctly from the first scan.
+        """
+        execution = self._services.get("execution")
+        market_state_svc = self._services.get("market_state")
+        if not execution or not market_state_svc:
+            return
+
+        open_symbols = list(execution.active_positions.keys())
+        if not open_symbols:
+            return
+
+        market_state_svc.init_confirmed_regime_for_symbols(open_symbols)
+        logger.info(
+            "Initialized confirmed regime (TREND) for %d open positions: %s",
+            len(open_symbols), open_symbols,
+        )
+
     async def _stop_services(self) -> None:
         """Stop all services in reverse order."""
         logger.info("Stopping services...")
@@ -945,6 +981,10 @@ class ConservativeBot:
 
             await self._start_services()
 
+            # Initialize confirmed regime for open positions to prevent
+            # false regime changes after restart (Problem 4 fix)
+            await self._init_regime_for_open_positions()
+
             self._strategy_task = asyncio.create_task(
                 self._strategy_loop(), name="ml_evaluation_loop",
             )
@@ -965,11 +1005,15 @@ class ConservativeBot:
                 if self.kill_switch:
                     await self.kill_switch.update_equity(Decimal(str(equity)))
 
+            effective_threshold = max(
+                self.config.ml_min_probability,
+                self._ml_model.optimal_threshold or self.config.ml_min_probability,
+            )
             logger.info("=" * 60)
             logger.info(
                 "HLQuantBot v4 Running (%s) | ML threshold: %.0f%%",
                 "TESTNET" if self.config.testnet else "MAINNET",
-                self.config.ml_min_probability * 100,
+                effective_threshold * 100,
             )
             logger.info("Assets: %d", len(self.config.assets))
             logger.info("Risk per trade: %.1f%% | Max DD: %.1f%%",

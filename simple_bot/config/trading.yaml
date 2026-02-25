@@ -144,11 +144,11 @@ stops:
 # Regime Detection
 # -----------------------------------------------------------------------------
 regime:
-  trend_adx_min: 25
+  trend_adx_entry_min: 28     # Stricter entry: need strong trend to open
+  trend_adx_exit_min: 22      # Lenient exit: allow trend to weaken before closing
   range_adx_max: 20
-  ema_slope_threshold: 0.0003
   choppiness_range_min: 60
-  confirmation_bars: 2
+  confirmation_bars: 3         # 15 min minimum (was 10 min with 2 bars)
 
 # -----------------------------------------------------------------------------
 # Strategies

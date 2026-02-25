@@ -261,12 +261,12 @@ class MarketStateConfig:
     # Update interval
     interval_seconds: int = 14400  # 4 hours
 
-    # Regime detection thresholds
-    trend_adx_min: float = 25.0
+    # Regime detection thresholds (level hysteresis)
+    trend_adx_entry_min: float = 28.0   # Stricter threshold for entering TREND
+    trend_adx_exit_min: float = 22.0    # Lenient threshold for staying in TREND
     range_adx_max: float = 20.0
-    ema_slope_threshold: float = 0.001
     choppiness_range_min: float = 60.0
-    regime_confirmation_bars: int = 2
+    regime_confirmation_bars: int = 3
 
     def __post_init__(self):
         if self.assets is None:
@@ -698,24 +698,43 @@ class MarketStateService(BaseService):
         symbol: str,
     ) -> Regime:
         """
-        Detect market regime with hysteresis.
+        Detect market regime with level hysteresis.
 
-        Rules:
-        - TREND: ADX > 25 and EMA200 slope confirms direction
-        - RANGE: ADX < 20 and choppiness > 60
-        - CHAOS: Everything else (stay flat)
+        Level hysteresis prevents whipsaw:
+        - Entering TREND requires ADX >= trend_adx_entry_min (stricter)
+        - Staying in TREND only requires ADX >= trend_adx_exit_min (lenient)
+        - RANGE: ADX <= range_adx_max and choppiness >= choppiness_range_min
+        - CHAOS: Everything else
+
+        Note: ema200_slope is intentionally NOT used for regime classification.
+        Direction is captured by EMA9/21 crossover (the ML entry signal).
+        The ema200_slope parameter is kept in the signature for backward
+        compatibility but is ignored.
 
         Hysteresis: Regime only changes after N consecutive bars confirm.
         """
         cfg = self._state_config
 
-        # Determine raw regime from current indicators
-        if adx >= cfg.trend_adx_min and abs(ema200_slope) >= cfg.ema_slope_threshold:
-            raw_regime = Regime.TREND
-        elif adx <= cfg.range_adx_max and choppiness >= cfg.choppiness_range_min:
-            raw_regime = Regime.RANGE
+        # Level hysteresis: use different ADX thresholds depending on
+        # whether we are already confirmed in TREND or not
+        current_confirmed = self._confirmed_regime.get(symbol)
+
+        if current_confirmed == Regime.TREND:
+            # Already in TREND — use lower exit threshold (stay in TREND longer)
+            if adx >= cfg.trend_adx_exit_min:
+                raw_regime = Regime.TREND
+            elif adx <= cfg.range_adx_max and choppiness >= cfg.choppiness_range_min:
+                raw_regime = Regime.RANGE
+            else:
+                raw_regime = Regime.CHAOS
         else:
-            raw_regime = Regime.CHAOS
+            # Not in TREND — use stricter entry threshold
+            if adx >= cfg.trend_adx_entry_min:
+                raw_regime = Regime.TREND
+            elif adx <= cfg.range_adx_max and choppiness >= cfg.choppiness_range_min:
+                raw_regime = Regime.RANGE
+            else:
+                raw_regime = Regime.CHAOS
 
         # Initialize confirmed regime on first call for this symbol
         if symbol not in self._confirmed_regime:
@@ -744,6 +763,30 @@ class MarketStateService(BaseService):
             self._regime_change_counter[symbol] = 0
             self._pending_regime.pop(symbol, None)
             return confirmed
+
+    def init_confirmed_regime_for_symbols(
+        self, symbols: List[str], regime: Regime = Regime.TREND
+    ) -> None:
+        """Initialize confirmed regime for symbols with open positions.
+
+        Called at startup to prevent the confirmation counter from being
+        bypassed after a service restart. Without this, the first reading
+        becomes confirmed immediately, which can cause a false regime
+        change and close positions that should remain open.
+
+        Args:
+            symbols: List of symbols with open positions.
+            regime: Regime to initialize to (default TREND since we only
+                    open positions in TREND).
+        """
+        for symbol in symbols:
+            if symbol not in self._confirmed_regime:
+                self._confirmed_regime[symbol] = regime
+                self._regime_change_counter[symbol] = 0
+                self._logger.info(
+                    "Initialized confirmed regime for %s to %s (open position)",
+                    symbol, regime.value,
+                )
 
     # =========================================================================
     # Publishing

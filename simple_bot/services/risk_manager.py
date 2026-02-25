@@ -335,6 +335,7 @@ class RiskManagerService(BaseService):
 
             if event in ("order_error", "order_cancelled", "slippage_rejected"):
                 self.clear_pending_intent(symbol)
+                self.decrement_trade_count()
                 self._logger.info(
                     "Cleared pending intent for %s on %s event", symbol, event
                 )
@@ -749,6 +750,15 @@ class RiskManagerService(BaseService):
 
         self._trades_today += 1
         self._logger.info("Daily trade count incremented to %d", self._trades_today)
+
+    def decrement_trade_count(self) -> None:
+        """Decrement the daily trade counter when an unfilled order is cancelled."""
+        if self._trades_today > 0:
+            self._trades_today -= 1
+            self._logger.info(
+                "Daily trade count decremented to %d (cancelled/expired order)",
+                self._trades_today,
+            )
 
     def _count_consecutive_stoplosses(self, trades: List[Dict]) -> int:
         """Count consecutive stoploss exits from most recent trade."""

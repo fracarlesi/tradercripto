@@ -217,7 +217,8 @@ class TestServiceConfigs:
         config = MarketStateConfig()
         assert config.assets == ["BTC", "ETH"]
         assert config.timeframe == "4h"
-        assert config.trend_adx_min == 25.0
+        assert config.trend_adx_entry_min == 28.0
+        assert config.trend_adx_exit_min == 22.0
 
     def test_risk_config(self):
         """Test RiskConfig defaults."""
@@ -441,7 +442,8 @@ kill_switch:
   max_drawdown_pct: 15.0
 
 regime:
-  trend_adx_min: 25
+  trend_adx_entry_min: 28
+  trend_adx_exit_min: 22
 
 llm:
   enabled: true
@@ -508,6 +510,7 @@ class TestRegimeGate:
         # ML model mock: always returns high probability
         bot._ml_model = MagicMock(spec=MLTradeModel)
         bot._ml_model.is_loaded = True
+        bot._ml_model.optimal_threshold = 0.60
         bot._ml_model.extract_features = MagicMock(return_value={"feat": 1.0})
         bot._ml_model.predict = MagicMock(return_value=(0.75, "mock reason"))
 
@@ -613,6 +616,177 @@ class TestRegimeGate:
 
         # 2 TREND assets x 1 predict each = 2 predict calls
         assert bot._ml_model.predict.call_count == 2
+
+
+# =============================================================================
+# ML Threshold Selection Tests
+# =============================================================================
+
+class TestMLThresholdSelection:
+    """Test that _evaluate_all_assets uses the ML model's calibrated
+    optimal_threshold instead of just config.ml_min_probability."""
+
+    def _make_bot(
+        self,
+        *,
+        ml_min_probability: float = 0.50,
+        optimal_threshold: float | None = 0.70,
+        predict_prob: float = 0.65,
+    ) -> "ConservativeBot":
+        """Create a ConservativeBot with configurable threshold parameters."""
+        from simple_bot.main import ConservativeBot, ConservativeConfig
+        from simple_bot.services.ml_model import MLTradeModel
+
+        bot = ConservativeBot.__new__(ConservativeBot)
+        bot._config = MagicMock(spec=ConservativeConfig)
+        bot._config.max_positions = 3
+        bot._config.ml_min_probability = ml_min_probability
+        bot._config.stop_loss_pct = 0.8
+        bot._config.take_profit_pct = 1.6
+        bot._config.max_spread_pct = 0.30
+        bot._exchange = AsyncMock()
+        bot._bus = AsyncMock(spec_set=["publish"])
+        bot._bus.publish = AsyncMock()
+
+        bot._ml_model = MagicMock(spec=MLTradeModel)
+        bot._ml_model.is_loaded = True
+        bot._ml_model.optimal_threshold = optimal_threshold
+        bot._ml_model.extract_features = MagicMock(return_value={"feat": 1.0})
+        bot._ml_model.predict = MagicMock(return_value=(predict_prob, "mock reason"))
+
+        bot._services = {}
+        return bot
+
+    def _make_trend_state(self, symbol: str) -> MarketState:
+        """Create a TREND MarketState."""
+        return MarketState(
+            symbol=symbol,
+            timeframe="15m",
+            timestamp=datetime.now(timezone.utc),
+            open=Decimal("100"),
+            high=Decimal("105"),
+            low=Decimal("95"),
+            close=Decimal("102"),
+            volume=Decimal("1000"),
+            atr=Decimal("5"),
+            atr_pct=Decimal("0.5"),
+            adx=Decimal("30"),
+            rsi=Decimal("55"),
+            ema50=Decimal("100"),
+            ema200=Decimal("98"),
+            ema200_slope=Decimal("0.001"),
+            sma20=Decimal("101"),
+            sma50=Decimal("99"),
+            prev_open=Decimal("99"),
+            prev_high=Decimal("101"),
+            prev_low=Decimal("97"),
+            prev_close=Decimal("100"),
+            bullish_engulfing=False,
+            bearish_engulfing=False,
+            regime=Regime.TREND,
+            trend_direction=Direction.LONG,
+        )
+
+    @pytest.mark.asyncio
+    async def test_optimal_threshold_used_over_min_probability(self) -> None:
+        """When optimal_threshold (0.70) > min_probability (0.50),
+        a signal at 0.65 should be REJECTED."""
+        bot = self._make_bot(
+            ml_min_probability=0.50,
+            optimal_threshold=0.70,
+            predict_prob=0.65,
+        )
+        market_state_svc = MagicMock()
+        market_state_svc.get_all_states.return_value = {
+            "BTC": self._make_trend_state("BTC"),
+        }
+        bot._services = {"market_state": market_state_svc}
+        bot._execute_setup = AsyncMock(return_value=True)
+
+        await bot._evaluate_all_assets()
+
+        # Signal at 0.65 is below optimal_threshold 0.70 -> rejected
+        bot._execute_setup.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_signal_above_optimal_threshold_accepted(self) -> None:
+        """Signal above optimal_threshold should be accepted."""
+        bot = self._make_bot(
+            ml_min_probability=0.50,
+            optimal_threshold=0.70,
+            predict_prob=0.75,
+        )
+        market_state_svc = MagicMock()
+        market_state_svc.get_all_states.return_value = {
+            "BTC": self._make_trend_state("BTC"),
+        }
+        bot._services = {"market_state": market_state_svc}
+        bot._execute_setup = AsyncMock(return_value=True)
+
+        await bot._evaluate_all_assets()
+
+        bot._execute_setup.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_min_probability_used_as_floor_when_no_optimal(self) -> None:
+        """When optimal_threshold is None, min_probability is the fallback."""
+        bot = self._make_bot(
+            ml_min_probability=0.50,
+            optimal_threshold=None,
+            predict_prob=0.55,
+        )
+        market_state_svc = MagicMock()
+        market_state_svc.get_all_states.return_value = {
+            "BTC": self._make_trend_state("BTC"),
+        }
+        bot._services = {"market_state": market_state_svc}
+        bot._execute_setup = AsyncMock(return_value=True)
+
+        await bot._evaluate_all_assets()
+
+        # 0.55 > 0.50 -> accepted
+        bot._execute_setup.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_min_probability_is_absolute_floor(self) -> None:
+        """min_probability acts as floor even if optimal_threshold is lower
+        (should not happen in practice, but guards against edge cases)."""
+        bot = self._make_bot(
+            ml_min_probability=0.60,
+            optimal_threshold=0.55,
+            predict_prob=0.57,
+        )
+        market_state_svc = MagicMock()
+        market_state_svc.get_all_states.return_value = {
+            "BTC": self._make_trend_state("BTC"),
+        }
+        bot._services = {"market_state": market_state_svc}
+        bot._execute_setup = AsyncMock(return_value=True)
+
+        await bot._evaluate_all_assets()
+
+        # max(0.60, 0.55) = 0.60, signal 0.57 < 0.60 -> rejected
+        bot._execute_setup.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_signal_exactly_at_threshold_accepted(self) -> None:
+        """Signal exactly at the effective threshold should pass (not < threshold)."""
+        bot = self._make_bot(
+            ml_min_probability=0.50,
+            optimal_threshold=0.70,
+            predict_prob=0.70,
+        )
+        market_state_svc = MagicMock()
+        market_state_svc.get_all_states.return_value = {
+            "BTC": self._make_trend_state("BTC"),
+        }
+        bot._services = {"market_state": market_state_svc}
+        bot._execute_setup = AsyncMock(return_value=True)
+
+        await bot._evaluate_all_assets()
+
+        # 0.70 is NOT < 0.70 -> accepted
+        bot._execute_setup.assert_called_once()
 
 
 # =============================================================================
@@ -964,6 +1138,115 @@ class TestIncrementTradeCount:
         await service._publish_intent(intent)
         assert service._trades_today == 1
         assert "BTC" in service._last_trade_time
+
+        await bus.stop()
+        await service.stop()
+
+
+# =============================================================================
+# Decrement Trade Count Tests
+# =============================================================================
+
+class TestDecrementTradeCount:
+    """Test that cancelled/expired orders decrement the daily trade counter."""
+
+    def _make_service(self):
+        from simple_bot.services.risk_manager import RiskManagerService, RiskConfig
+        config = RiskConfig(max_daily_trades=8)
+        service = RiskManagerService(config=config)
+        return service
+
+    @pytest.mark.asyncio
+    async def test_decrement_trade_count_on_cancel(self):
+        """When an order is cancelled, the daily trade count is decremented."""
+        from simple_bot.services.message_bus import MessageBus, Message
+
+        bus = MessageBus()
+        await bus.start()
+
+        service = self._make_service()
+        service.bus = bus
+        await service.start()
+
+        # Simulate: intent published (count goes to 1)
+        service.increment_trade_count()
+        assert service._trades_today == 1
+
+        # Track a pending intent so clear_pending_intent has something to clear
+        service._pending_intents["BTC"] = MagicMock()
+
+        # Simulate order_cancelled event
+        msg = Message(
+            topic=Topic.ORDERS,
+            payload={"event": "order_cancelled", "symbol": "BTC"},
+        )
+        await service._handle_order_event(msg)
+
+        # Count should be back to 0
+        assert service._trades_today == 0
+
+        await bus.stop()
+        await service.stop()
+
+    def test_decrement_trade_count_not_below_zero(self):
+        """decrement_trade_count() does not go below 0."""
+        service = self._make_service()
+        assert service._trades_today == 0
+
+        # Decrement when already at 0 - should stay at 0
+        service.decrement_trade_count()
+        assert service._trades_today == 0
+
+        # Increment once, decrement twice - should stay at 0
+        service.increment_trade_count()
+        assert service._trades_today == 1
+        service.decrement_trade_count()
+        assert service._trades_today == 0
+        service.decrement_trade_count()
+        assert service._trades_today == 0
+
+    @pytest.mark.asyncio
+    async def test_trade_count_correct_after_cancel_cycle(self):
+        """Simulate: increment (intent) -> cancel event -> verify count restored."""
+        from simple_bot.services.message_bus import MessageBus, Message
+
+        bus = MessageBus()
+        await bus.start()
+
+        service = self._make_service()
+        service.bus = bus
+        await service.start()
+
+        # Start at 0
+        assert service._trades_today == 0
+
+        # First trade intent: count -> 1
+        service.increment_trade_count()
+        service._pending_intents["SOL"] = MagicMock()
+        assert service._trades_today == 1
+
+        # Second trade intent: count -> 2
+        service.increment_trade_count()
+        service._pending_intents["ETH"] = MagicMock()
+        assert service._trades_today == 2
+
+        # SOL order cancelled: count -> 1
+        msg_cancel = Message(
+            topic=Topic.ORDERS,
+            payload={"event": "order_cancelled", "symbol": "SOL"},
+        )
+        await service._handle_order_event(msg_cancel)
+        assert service._trades_today == 1
+        assert "SOL" not in service._pending_intents
+
+        # ETH order error: count -> 0
+        msg_error = Message(
+            topic=Topic.ORDERS,
+            payload={"event": "order_error", "symbol": "ETH"},
+        )
+        await service._handle_order_event(msg_error)
+        assert service._trades_today == 0
+        assert "ETH" not in service._pending_intents
 
         await bus.stop()
         await service.stop()
