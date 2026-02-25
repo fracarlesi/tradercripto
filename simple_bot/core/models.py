@@ -147,6 +147,7 @@ class Setup(BaseModel):
 
     # Indicators at setup time
     atr: Decimal = Field(..., ge=0)
+    atr_pct: Optional[Decimal] = Field(None, ge=0, description="ATR as % of price")
     adx: Decimal = Field(..., ge=0, le=100)
     rsi: Decimal = Field(..., ge=0, le=100)
 
@@ -229,6 +230,9 @@ class TradeIntent(BaseModel):
     # Risk info
     risk_amount: Decimal = Field(..., ge=0)
     risk_pct: Decimal = Field(..., ge=0, le=100)
+
+    # Market context (for ATR-adaptive stops in execution engine)
+    atr_pct: Optional[Decimal] = Field(None, ge=0, description="ATR as % of price at entry")
 
     # Regime at entry (for regime-invalidation exits)
     regime: Optional[str] = Field(default=None, description="Regime when setup was created")

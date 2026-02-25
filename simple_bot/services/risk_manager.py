@@ -37,6 +37,20 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
+# Correlation Groups
+# =============================================================================
+
+CORR_GROUPS: Dict[str, List[str]] = {
+    "btc_ecosystem": ["BTC", "STX", "ORDI", "RUNE"],
+    "eth_ecosystem": ["ETH", "ARB", "OP", "MATIC", "STRK", "ZK", "SCROLL", "BLAST"],
+    "layer1": ["SOL", "AVAX", "SUI", "APT", "SEI", "TIA", "NEAR", "ADA", "DOT"],
+    "defi": ["UNI", "AAVE", "CRV", "SNX", "DYDX", "GMX", "PENDLE", "JUP"],
+    "meme": ["DOGE", "SHIB", "PEPE", "WIF", "BONK", "FLOKI", "MEME", "MYRO"],
+    "ai": ["FET", "RNDR", "TAO", "ARKM", "WLD", "NEAR"],
+}
+
+
+# =============================================================================
 # Configuration
 # =============================================================================
 
@@ -115,6 +129,10 @@ class RiskManagerService(BaseService):
 
         # Cooldown state
         self._cooldown_state: Optional[CooldownState] = None
+
+        # In-memory per-symbol cooldown (prevent re-entry within N minutes)
+        self._last_trade_time: Dict[str, datetime] = {}
+        self._cooldown_minutes: int = 3  # Minimum minutes between trades on same symbol
 
         # In-memory daily trade counter (resets at UTC midnight)
         self._trades_today: int = 0
@@ -374,9 +392,7 @@ class RiskManagerService(BaseService):
         equity = self._current_equity
         cfg = self._config
 
-        # Check position limits (including pending intents!)
-        total_position_count = len(self._open_positions) + len(self._pending_intents)
-        if total_position_count >= cfg.max_positions:
+        def _reject(reason: str) -> RiskParams:
             return RiskParams(
                 risk_amount=Decimal("0"),
                 position_size=Decimal("0"),
@@ -386,38 +402,40 @@ class RiskManagerService(BaseService):
                 exposure_pct=Decimal("0"),
                 total_exposure_pct=self._get_total_exposure_pct(),
                 size_approved=False,
-                rejection_reason=f"Max positions reached: {cfg.max_positions} (open={len(self._open_positions)}, pending={len(self._pending_intents)})",
+                rejection_reason=reason,
+            )
+
+        # Check position limits (including pending intents!)
+        total_position_count = len(self._open_positions) + len(self._pending_intents)
+        if total_position_count >= cfg.max_positions:
+            return _reject(
+                f"Max positions reached: {cfg.max_positions} "
+                f"(open={len(self._open_positions)}, pending={len(self._pending_intents)})"
             )
 
         # Check if already in position or pending for this symbol
         if setup.symbol in self._open_positions:
-            return RiskParams(
-                risk_amount=Decimal("0"),
-                position_size=Decimal("0"),
-                notional_value=Decimal("0"),
-                stop_price=setup.stop_price,
-                stop_distance_pct=setup.stop_distance_pct,
-                exposure_pct=Decimal("0"),
-                total_exposure_pct=self._get_total_exposure_pct(),
-                size_approved=False,
-                rejection_reason=f"Already in position: {setup.symbol}",
-            )
+            return _reject(f"Already in position: {setup.symbol}")
 
         if setup.symbol in self._pending_intents:
-            return RiskParams(
-                risk_amount=Decimal("0"),
-                position_size=Decimal("0"),
-                notional_value=Decimal("0"),
-                stop_price=setup.stop_price,
-                stop_distance_pct=setup.stop_distance_pct,
-                exposure_pct=Decimal("0"),
-                total_exposure_pct=self._get_total_exposure_pct(),
-                size_approved=False,
-                rejection_reason=f"Already pending intent: {setup.symbol}",
-            )
+            return _reject(f"Already pending intent: {setup.symbol}")
 
-        # Calculate risk amount
-        risk_pct = Decimal(str(cfg.per_trade_pct)) / 100
+        # Per-symbol cooldown check
+        if setup.symbol in self._last_trade_time:
+            elapsed = (datetime.now(timezone.utc) - self._last_trade_time[setup.symbol]).total_seconds() / 60
+            if elapsed < self._cooldown_minutes:
+                remaining = self._cooldown_minutes - elapsed
+                return _reject(f"Cooldown: {remaining:.1f}min remaining for {setup.symbol}")
+
+        # Correlation filter: max 1 position per correlated group
+        if not self._check_correlation(setup.symbol):
+            return _reject(f"Correlation filter: {setup.symbol} blocked by open position in same group")
+
+        # Kelly sizing based on setup confidence/probability
+        if hasattr(setup, 'confidence') and setup.confidence and float(setup.confidence) > 0:
+            risk_pct = Decimal(str(self._kelly_fraction(float(setup.confidence))))
+        else:
+            risk_pct = Decimal(str(cfg.per_trade_pct)) / 100
         risk_amount = equity * risk_pct
 
         # Calculate position size from risk
@@ -507,6 +525,47 @@ class RiskManagerService(BaseService):
             return Decimal("0")
         return (total_notional / self._current_equity) * 100
 
+    def _kelly_fraction(self, prob: float, rr_ratio: float = 2.0) -> float:
+        """Half-Kelly criterion for position sizing.
+
+        Args:
+            prob: Estimated probability of winning (P(TP))
+            rr_ratio: Risk-reward ratio (TP/SL), default 2.0
+
+        Returns:
+            Fractional risk as decimal (e.g. 0.035 = 3.5%)
+        """
+        if prob <= 0.5:
+            return 0.02  # minimum 2% risk
+        q = 1.0 - prob
+        kelly = (prob * rr_ratio - q) / rr_ratio
+        half_kelly = kelly / 2.0
+        # Clamp between 2% and max_per_trade_pct
+        max_frac = float(self._config.max_per_trade_pct) / 100
+        return max(0.02, min(max_frac, half_kelly))
+
+    def _check_correlation(self, symbol: str) -> bool:
+        """Check if adding this symbol would violate correlation limits.
+
+        Max 1 position per correlated group.
+
+        Args:
+            symbol: Symbol to check
+
+        Returns:
+            True if the symbol is allowed, False if blocked
+        """
+        for group_name, group_symbols in CORR_GROUPS.items():
+            if symbol in group_symbols:
+                for open_sym in self._open_positions:
+                    if open_sym in group_symbols and open_sym != symbol:
+                        self._logger.info(
+                            "Correlation filter: %s blocked (same group '%s' as open %s)",
+                            symbol, group_name, open_sym,
+                        )
+                        return False
+        return True
+
     # =========================================================================
     # Trade Intent
     # =========================================================================
@@ -527,6 +586,7 @@ class RiskManagerService(BaseService):
             trailing_atr_mult=risk.trailing_distance_atr,
             risk_amount=risk.risk_amount,
             risk_pct=Decimal(str(self._config.per_trade_pct)),
+            atr_pct=setup.atr_pct,
             regime=setup.regime.value if setup.regime else None,
             prefer_limit=True,
             max_slippage_pct=Decimal(str(self._config.max_slippage_pct)),
@@ -536,6 +596,12 @@ class RiskManagerService(BaseService):
         """Publish trade intent to message bus."""
         if not self.bus:
             return
+
+        # Increment daily trade counter BEFORE publishing
+        self.increment_trade_count()
+
+        # Record per-symbol trade time for cooldown
+        self._last_trade_time[intent.symbol] = datetime.now(timezone.utc)
 
         # Track pending intent to prevent duplicate orders
         self._pending_intents[intent.symbol] = intent

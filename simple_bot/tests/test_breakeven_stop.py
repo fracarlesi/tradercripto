@@ -2,8 +2,9 @@
 Tests for Breakeven Stop Feature
 =================================
 
-When a position's unrealized P&L reaches +0.5%, the stop-loss trigger
-is moved to the entry price (breakeven), making the trade risk-free.
+When a position's unrealized P&L reaches +0.3%, the stop-loss trigger
+is moved slightly above (LONG) or below (SHORT) the entry price
+(breakeven + fee offset), making the trade risk-free.
 
 Run:
     pytest simple_bot/tests/test_breakeven_stop.py -v
@@ -15,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from simple_bot.services.execution_engine import (
     BREAKEVEN_THRESHOLD_PCT,
+    BREAKEVEN_OFFSET_PCT,
     ExecutionEngineService,
     ExecutionPosition,
     PositionStatus,
@@ -73,12 +75,12 @@ class TestBreakevenLong:
 
     @pytest.mark.asyncio
     async def test_activates_at_threshold(self) -> None:
-        """Breakeven triggers when long P&L reaches exactly +0.5%."""
+        """Breakeven triggers when long P&L reaches exactly +0.3%."""
         engine = _make_engine()
-        # +0.5% on a 100_000 entry = 100_500
+        # +0.3% on a 100_000 entry = 100_300
         pos = _make_position(
             entry_price=100_000.0,
-            current_price=100_500.0,
+            current_price=100_300.0,
             side="long",
         )
         engine.active_positions["BTC"] = pos
@@ -87,21 +89,22 @@ class TestBreakevenLong:
 
         # Old SL cancelled
         engine.client.cancel_order.assert_called_once_with("BTC", 999)
-        # New SL placed at entry
+        # New SL placed at entry + offset (0.08%)
+        expected_sl = 100_000.0 * (1 + BREAKEVEN_OFFSET_PCT / 100)
         engine._place_trigger_with_retry.assert_called_once_with(
             symbol="BTC",
             is_buy=False,  # close a long = sell
             size=pos.size,
-            trigger_price=100_000.0,
+            trigger_price=expected_sl,
             tpsl="sl",
         )
         assert pos.breakeven_activated is True
-        assert pos.sl_price == 100_000.0
+        assert pos.sl_price == expected_sl
         assert pos.sl_order_id == "new_sl_123"
 
     @pytest.mark.asyncio
     async def test_activates_above_threshold(self) -> None:
-        """Breakeven triggers when P&L exceeds +0.5% (e.g. +1%)."""
+        """Breakeven triggers when P&L exceeds +0.3% (e.g. +1%)."""
         engine = _make_engine()
         pos = _make_position(
             entry_price=100_000.0,
@@ -112,16 +115,17 @@ class TestBreakevenLong:
 
         await engine._check_breakeven_stops()
 
+        expected_sl = 100_000.0 * (1 + BREAKEVEN_OFFSET_PCT / 100)
         assert pos.breakeven_activated is True
-        assert pos.sl_price == 100_000.0
+        assert pos.sl_price == expected_sl
 
     @pytest.mark.asyncio
     async def test_does_not_activate_below_threshold(self) -> None:
-        """No breakeven when P&L is below +0.5%."""
+        """No breakeven when P&L is below +0.3%."""
         engine = _make_engine()
         pos = _make_position(
             entry_price=100_000.0,
-            current_price=100_400.0,  # +0.4%
+            current_price=100_200.0,  # +0.2%
             side="long",
         )
         engine.active_positions["BTC"] = pos
@@ -159,12 +163,12 @@ class TestBreakevenShort:
 
     @pytest.mark.asyncio
     async def test_activates_at_threshold(self) -> None:
-        """Breakeven triggers when short P&L reaches +0.5% (price drops 0.5%)."""
+        """Breakeven triggers when short P&L reaches +0.3% (price drops 0.3%)."""
         engine = _make_engine()
-        # SHORT: profit when price goes DOWN.  entry=100k, current=99_500 => +0.5%
+        # SHORT: profit when price goes DOWN.  entry=100k, current=99_700 => +0.3%
         pos = _make_position(
             entry_price=100_000.0,
-            current_price=99_500.0,
+            current_price=99_700.0,
             side="short",
             sl_price=100_800.0,
         )
@@ -173,23 +177,25 @@ class TestBreakevenShort:
         await engine._check_breakeven_stops()
 
         engine.client.cancel_order.assert_called_once()
+        # New SL placed at entry - offset (0.08%)
+        expected_sl = 100_000.0 * (1 - BREAKEVEN_OFFSET_PCT / 100)
         engine._place_trigger_with_retry.assert_called_once_with(
             symbol="ETH",
             is_buy=True,  # close a short = buy
             size=pos.size,
-            trigger_price=100_000.0,
+            trigger_price=expected_sl,
             tpsl="sl",
         )
         assert pos.breakeven_activated is True
-        assert pos.sl_price == 100_000.0
+        assert pos.sl_price == expected_sl
 
     @pytest.mark.asyncio
     async def test_does_not_activate_below_threshold(self) -> None:
-        """No breakeven when short P&L is below +0.5%."""
+        """No breakeven when short P&L is below +0.3%."""
         engine = _make_engine()
         pos = _make_position(
             entry_price=100_000.0,
-            current_price=99_700.0,  # +0.3% for short
+            current_price=99_850.0,  # +0.15% for short
             side="short",
         )
         engine.active_positions["ETH"] = pos
@@ -373,7 +379,7 @@ class TestBreakevenOrderLifecycle:
         pos_eth = _make_position(
             symbol="ETH",
             entry_price=3_000.0,
-            current_price=3_010.0,  # +0.33%
+            current_price=3_005.0,  # +0.17% (below 0.3%)
             side="long",
             sl_order_id="222",
         )
@@ -424,7 +430,10 @@ class TestBreakevenField:
 
 
 class TestBreakevenConstant:
-    """Verify the BREAKEVEN_THRESHOLD_PCT constant is correct."""
+    """Verify the BREAKEVEN_THRESHOLD_PCT and BREAKEVEN_OFFSET_PCT constants."""
 
     def test_threshold_value(self) -> None:
-        assert BREAKEVEN_THRESHOLD_PCT == 0.5
+        assert BREAKEVEN_THRESHOLD_PCT == 0.3
+
+    def test_offset_value(self) -> None:
+        assert BREAKEVEN_OFFSET_PCT == 0.08

@@ -90,6 +90,9 @@ def signal_ema_crossover_only(ind: dict, idx: int) -> int:
     """EMA9/EMA21 crossover — no regime, RSI, or ATR filter.
 
     Returns: 1=LONG, -1=SHORT, 0=no signal (EMA9==EMA21 or NaN)
+
+    NOTE: This is STATE-BASED (fires every bar in trend). Use
+    signal_ema_crossover_entry() for ML training to avoid data leakage.
     """
     ema9 = ind["ema9"][idx]
     ema21 = ind["ema21"][idx]
@@ -99,6 +102,30 @@ def signal_ema_crossover_only(ind: dict, idx: int) -> int:
         return 1
     if ema9 < ema21:
         return -1
+    return 0
+
+
+def signal_ema_crossover_entry(ind: dict, idx: int) -> int:
+    """Only fires on the actual EMA9/EMA21 crossover bar.
+
+    Unlike signal_ema_crossover_only (state-based), this detects only the
+    MOMENT of crossover — preventing data leakage where a 200-bar trend
+    would generate 200 identical labels.
+
+    Returns: 1=bullish crossover, -1=bearish crossover, 0=no crossover
+    """
+    if idx < 1:
+        return 0
+    prev_ema9 = ind["ema9"][idx - 1]
+    prev_ema21 = ind["ema21"][idx - 1]
+    curr_ema9 = ind["ema9"][idx]
+    curr_ema21 = ind["ema21"][idx]
+    if np.isnan(prev_ema9) or np.isnan(curr_ema9) or np.isnan(prev_ema21) or np.isnan(curr_ema21):
+        return 0
+    if prev_ema9 <= prev_ema21 and curr_ema9 > curr_ema21:
+        return 1   # Bullish crossover
+    if prev_ema9 >= prev_ema21 and curr_ema9 < curr_ema21:
+        return -1  # Bearish crossover
     return 0
 
 

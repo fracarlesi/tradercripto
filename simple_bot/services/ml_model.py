@@ -36,7 +36,6 @@ class MLTradeModel:
         "ema21_slope",
         "close_vs_ema200",
         "regime_encoded",   # TREND=2.0, CHAOS=1.0, RANGE=0.0
-        "spread_pct",       # real-time at inference, 0.0 in training
     ]
 
     _DEFAULT_PARAMS: dict = {
@@ -67,7 +66,13 @@ class MLTradeModel:
     def train(self, df: pd.DataFrame) -> dict:
         """Train XGBoost on DataFrame with FEATURES + 'label' columns.
 
-        Uses TimeSeriesSplit(n_splits=5) for cross-validation.
+        Pipeline:
+        1. CV AUC via TimeSeriesSplit(n_splits=5) for reporting.
+        2. Threshold calibration on a genuine holdout (last 20%) — a
+           temporary model is trained on the first 80% only, then predicts
+           on the holdout to pick the optimal F0.5 threshold.
+        3. Final model trained on the first 80% with early stopping on
+           the holdout set.
 
         Returns dict with:
             accuracy, auc, feature_importances, n_samples, n_positive, n_negative
@@ -91,24 +96,42 @@ class MLTradeModel:
         params = {
             **self._DEFAULT_PARAMS,
             "scale_pos_weight": scale_pos_weight,
+            "early_stopping_rounds": 20,
             **self._config.get("xgb_params", {}),
         }
 
-        self._model = xgb.XGBClassifier(**params)
-
-        # Time-series aware cross-validation
+        # -- Step 1: CV AUC (for reporting) --------------------------------
+        cv_model = xgb.XGBClassifier(**{
+            k: v for k, v in params.items() if k != "early_stopping_rounds"
+        })
         tscv = TimeSeriesSplit(n_splits=5)
         cv_scores = cross_val_score(
-            self._model, X, y, cv=tscv, scoring="roc_auc"
+            cv_model, X, y, cv=tscv, scoring="roc_auc"
         )
 
-        # Final fit on full data
-        self._model.fit(X, y)
+        # -- Step 2: Threshold calibration on genuine holdout --------------
+        n_holdout = max(100, int(len(X) * 0.2))
+        X_train, X_hold = X.iloc[:-n_holdout], X.iloc[-n_holdout:]
+        y_train, y_hold = y.iloc[:-n_holdout], y.iloc[-n_holdout:]
+
+        cal_model = xgb.XGBClassifier(**{
+            k: v for k, v in params.items() if k != "early_stopping_rounds"
+        })
+        cal_model.fit(X_train, y_train)
+        cal_probs = cal_model.predict_proba(X_hold)[:, 1]
+        self._optimal_threshold = self._calibrate_threshold_from_probs(
+            cal_probs, y_hold
+        )
+
+        # -- Step 3: Final model with early stopping on holdout ------------
+        self._model = xgb.XGBClassifier(**params)
+        self._model.fit(
+            X_train, y_train,
+            eval_set=[(X_hold, y_hold)],
+            verbose=False,
+        )
 
         assert self._model is not None  # for type checker
-
-        # ------ Optimal threshold calibration (F-beta, beta=0.5) ------
-        self._optimal_threshold = self._calibrate_threshold(X, y)
 
         # Feature importances
         importances = self._model.feature_importances_
@@ -146,32 +169,24 @@ class MLTradeModel:
 
         return metrics
 
-    def _calibrate_threshold(
-        self, X: pd.DataFrame, y: pd.Series
+    def _calibrate_threshold_from_probs(
+        self, y_proba: np.ndarray, y_true: pd.Series
     ) -> float:
         """Find optimal threshold using F-beta (beta=0.5, precision-weighted).
 
-        Uses the LAST fold of TimeSeriesSplit(n_splits=5) as holdout.
+        Operates on pre-computed probabilities from a model that has NOT seen
+        y_true during training (holdout data), preventing calibration leakage.
+
         Only considers thresholds where precision >= 0.55.
         Clamps result to [0.50, 0.70], default 0.55 if not enough data.
         """
-        assert self._model is not None
-
         default = 0.55
         try:
-            tscv = TimeSeriesSplit(n_splits=5)
-            splits = list(tscv.split(X))
-            _, val_idx = splits[-1]
-
-            X_val = X.iloc[val_idx]
-            y_val = y.iloc[val_idx]
-
-            if len(y_val) < 10 or y_val.sum() < 2:
+            if len(y_true) < 10 or y_true.sum() < 2:
                 return default
 
-            y_proba_val = self._model.predict_proba(X_val)[:, 1]
             precision, recall, thresholds = precision_recall_curve(
-                y_val, y_proba_val
+                y_true, y_proba
             )
 
             # F-beta with beta=0.5 (precision-weighted)
@@ -239,12 +254,13 @@ class MLTradeModel:
     # Feature extraction
     # ------------------------------------------------------------------
 
-    def extract_features(self, state: MarketState, spread_pct: float = 0.0) -> dict:
+    def extract_features(self, state: MarketState, **kwargs: float) -> dict:
         """Extract features from a live MarketState for prediction.
 
         Args:
             state: MarketState with all indicators
-            spread_pct: Bid-ask spread as %; 0.0 in training, real-time at inference.
+            **kwargs: Ignored. Accepts (but discards) legacy kwargs like
+                spread_pct for backward compatibility.
 
         Returns:
             dict with keys matching FEATURES
@@ -283,7 +299,6 @@ class MLTradeModel:
             "ema21_slope": float(state.ema21_slope),
             "close_vs_ema200": close_vs_ema200,
             "regime_encoded": regime_encoded,
-            "spread_pct": spread_pct,
         }
 
     # ------------------------------------------------------------------

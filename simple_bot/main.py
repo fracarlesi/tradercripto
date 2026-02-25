@@ -140,8 +140,11 @@ class ConservativeConfig:
 
     # Risk
     per_trade_pct: float
+    max_per_trade_pct: float
     max_positions: int
     max_exposure_pct: float
+    max_position_pct: float
+    max_daily_trades: int
     leverage: float
 
     # Kill switch
@@ -218,9 +221,12 @@ class ConservativeConfig:
             primary_timeframe=timeframes.get("primary", "15m"),
             bars_to_fetch=timeframes.get("bars_to_fetch", 200),
             scan_interval_minutes=timeframes.get("scan_interval_minutes", 5),
-            per_trade_pct=risk.get("per_trade_pct", 10.0),
+            per_trade_pct=risk.get("per_trade_pct", 5.0),
+            max_per_trade_pct=risk.get("max_per_trade_pct", 10.0),
             max_positions=risk.get("max_positions", 3),
             max_exposure_pct=risk.get("max_exposure_pct", 300),
+            max_position_pct=risk.get("max_position_pct", 70),
+            max_daily_trades=risk.get("max_daily_trades", 8),
             leverage=risk.get("leverage", 10),
             daily_loss_pct=ks.get("daily_loss_pct", 8.0),
             weekly_loss_pct=ks.get("weekly_loss_pct", 15.0),
@@ -466,8 +472,11 @@ class ConservativeBot:
         # Risk Manager
         risk_config = RiskConfig(
             per_trade_pct=cfg.per_trade_pct,
+            max_per_trade_pct=cfg.max_per_trade_pct,
             max_positions=cfg.max_positions,
             max_exposure_pct=cfg.max_exposure_pct,
+            max_position_pct=cfg.max_position_pct,
+            max_daily_trades=cfg.max_daily_trades,
             leverage=cfg.leverage,
             trailing_atr_mult=cfg.trailing_atr_mult,
             max_slippage_pct=cfg.max_slippage_pct,
@@ -675,6 +684,7 @@ class ConservativeBot:
                 stop_price=stop_price,
                 stop_distance_pct=sl_pct,
                 atr=state.atr,
+                atr_pct=state.atr_pct,
                 adx=state.adx,
                 rsi=state.rsi,
                 setup_quality=Decimal(str(round(best_prob, 4))),
@@ -820,9 +830,9 @@ class ConservativeBot:
             logger.warning("Retrain produced no results (insufficient data)")
             return
 
-        if metrics["cv_auc_mean"] < 0.52:
+        if metrics["cv_auc_mean"] < 0.55:
             logger.warning(
-                "New model CV AUC %.4f too low (<0.52), keeping old model",
+                "New model CV AUC %.4f too low (<0.55), keeping old model",
                 metrics["cv_auc_mean"],
             )
             return

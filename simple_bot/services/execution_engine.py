@@ -66,7 +66,11 @@ MIN_STOP_DISTANCE_PCT = 0.001  # 0.1%
 
 # When a position reaches this unrealized P&L %, the stop-loss is moved
 # to the entry price (breakeven) so the trade becomes risk-free.
-BREAKEVEN_THRESHOLD_PCT = 0.5  # 0.5%
+BREAKEVEN_THRESHOLD_PCT = 0.3  # 0.3% — activates earlier to protect gains
+
+# Offset above/below entry for breakeven SL to cover exchange fees.
+# For LONG: SL = entry * (1 + offset/100); for SHORT: SL = entry * (1 - offset/100).
+BREAKEVEN_OFFSET_PCT = 0.08  # 0.08% offset covers round-trip fees
 
 
 # =============================================================================
@@ -204,6 +208,10 @@ class ExecutionPosition:
     exit_reason: Optional[str] = None  # "stop_loss", "take_profit", "roi_target", "regime_change", "manual"
     entry_regime: Optional[str] = None  # Regime at entry ("trend", "range", "chaos")
     breakeven_activated: bool = False  # True once SL has been moved to entry price
+    highest_price: float = 0.0       # Peak price for LONG trailing stop
+    lowest_price: float = float('inf')  # Trough price for SHORT trailing stop
+    entry_atr_pct: float = 0.0       # ATR% at entry time (for trailing distance)
+    trailing_active: bool = False     # True when trailing stop is actively following price
     
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary."""
@@ -228,6 +236,10 @@ class ExecutionPosition:
             "exit_reason": self.exit_reason,
             "entry_regime": self.entry_regime,
             "breakeven_activated": self.breakeven_activated,
+            "highest_price": self.highest_price,
+            "lowest_price": self.lowest_price,
+            "entry_atr_pct": self.entry_atr_pct,
+            "trailing_active": self.trailing_active,
         }
 
 
@@ -539,11 +551,21 @@ class ExecutionEngineService(BaseService):
                 entry_price = order_result.avg_price or signal["entry_price"]
                 is_long = signal["direction"] == "long"
 
-                # Always recalculate TP/SL from fill price using configured %
-                sl_pct = self._bot_config.risk.stop_loss_pct / 100
-                sl_price = entry_price * (1 - sl_pct) if is_long else entry_price * (1 + sl_pct)
+                # Recalculate TP/SL from fill price (ATR-adaptive or fixed %)
+                atr_pct_raw = signal.get("atr_pct", 0)
+                if atr_pct_raw and float(atr_pct_raw) > 0:
+                    atr_pct_val = float(atr_pct_raw) / 100
+                    initial_mult = getattr(
+                        getattr(self._bot_config, "stops", None),
+                        "initial_atr_mult", 2.5
+                    )
+                    sl_pct = min(max(atr_pct_val * initial_mult, 0.005), 0.02)
+                    tp_pct = max(sl_pct * 5.0, 0.04)
+                else:
+                    sl_pct = self._bot_config.risk.stop_loss_pct / 100
+                    tp_pct = self._bot_config.risk.take_profit_pct / 100
 
-                tp_pct = self._bot_config.risk.take_profit_pct / 100
+                sl_price = entry_price * (1 - sl_pct) if is_long else entry_price * (1 + sl_pct)
                 tp_price = entry_price * (1 + tp_pct) if is_long else entry_price * (1 - tp_pct)
 
                 enriched_signal["tp_price"] = round(tp_price, 6)
@@ -1031,6 +1053,8 @@ class ExecutionEngineService(BaseService):
             status=PositionStatus.OPEN,
             opened_at=datetime.now(timezone.utc),
             entry_regime=signal.get("regime"),
+            highest_price=entry_price,
+            lowest_price=entry_price,
         )
         
         self.active_positions[symbol] = position
@@ -1299,10 +1323,12 @@ class ExecutionEngineService(BaseService):
         """
         Set take profit and stop loss orders using proper trigger orders.
 
-        Both TP and SL are always calculated from the actual fill price using
-        the configured percentages. The signal's pre-computed stop_price is
-        ignored because it was calculated from the signal entry price, which
-        may differ from the actual fill price due to slippage.
+        When `atr_pct` is present in the signal, SL/TP are ATR-adaptive:
+        - SL = initial_atr_mult x ATR%, capped between 0.5% and 2.0%
+        - TP = safety-net only (5x SL or at least 4%), trailing stop handles exit
+        Otherwise falls back to fixed percentages from config.
+
+        Both TP and SL are always calculated from the actual fill price.
 
         Args:
             signal: Original signal with TP/SL levels
@@ -1314,21 +1340,39 @@ class ExecutionEngineService(BaseService):
         entry_price = order.avg_price or signal["entry_price"]
         size = position.size
 
-        # Always recalculate SL from fill price using configured percentage.
-        # The signal's stop_price was computed from the signal entry price
-        # (state.close at evaluation time), NOT from the actual fill price.
-        # Using it directly would give wrong SL distance when fill != signal price.
-        sl_pct = self._bot_config.risk.stop_loss_pct / 100
+        # --- ATR-adaptive or fixed SL/TP ---
+        atr_pct_raw = signal.get("atr_pct", 0)
+
+        if atr_pct_raw and float(atr_pct_raw) > 0:
+            atr_pct_val = float(atr_pct_raw) / 100  # e.g. 0.5% -> 0.005
+            initial_mult = getattr(
+                getattr(self._bot_config, "stops", None),
+                "initial_atr_mult", 2.5
+            )
+
+            # SL = initial_mult x ATR, capped between 0.5% and 2.0%
+            sl_pct = min(max(atr_pct_val * initial_mult, 0.005), 0.02)
+            # TP = safety-net (very wide) — trailing stop handles normal exit
+            tp_pct = max(sl_pct * 5.0, 0.04)  # at least 4%, or 5x SL
+
+            # Store ATR on position for trailing stop calculations
+            position.entry_atr_pct = float(atr_pct_raw)
+
+            self._logger.info(
+                "ATR-adaptive TP/SL for %s: atr_pct=%.2f%%, SL=%.2f%%, TP=%.2f%% (safety-net)",
+                symbol, float(atr_pct_raw), sl_pct * 100, tp_pct * 100,
+            )
+        else:
+            # Fallback to fixed percentages from config
+            sl_pct = self._bot_config.risk.stop_loss_pct / 100
+            tp_pct = self._bot_config.risk.take_profit_pct / 100
+
+        # Calculate prices from fill price
         if is_long:
             sl_price = entry_price * (1 - sl_pct)
-        else:
-            sl_price = entry_price * (1 + sl_pct)
-
-        # Calculate TP price from fill price using configured percentage
-        tp_pct = self._bot_config.risk.take_profit_pct / 100
-        if is_long:
             tp_price = entry_price * (1 + tp_pct)
         else:
+            sl_price = entry_price * (1 + sl_pct)
             tp_price = entry_price * (1 - tp_pct)
 
         self._logger.info(
@@ -1554,6 +1598,9 @@ class ExecutionEngineService(BaseService):
                 # Move SL to breakeven when profit threshold is reached
                 await self._check_breakeven_stops()
 
+                # Trail SL behind price (ATR-based, after breakeven)
+                await self._check_trailing_stops()
+
                 # Check for ROI-based exits (time-based take profit)
                 await self._check_roi_exits()
 
@@ -1604,17 +1651,20 @@ class ExecutionEngineService(BaseService):
                         )
                         continue
 
+                    entry_px = pos.get("entryPrice", 0)
                     new_pos = ExecutionPosition(
                         symbol=symbol,
                         side=pos.get("side", "long"),
                         size=abs(size),
-                        entry_price=pos.get("entryPrice", 0),
+                        entry_price=entry_px,
                         current_price=pos.get("markPrice", 0),
                         unrealized_pnl=pos.get("unrealizedPnl", 0),
                         leverage=pos.get("leverage", 1),
                         status=PositionStatus.OPEN,
                         opened_at=datetime.now(timezone.utc),
                         entry_regime="trend",  # We only open in TREND
+                        highest_price=entry_px,
+                        lowest_price=entry_px,
                     )
                     self.active_positions[symbol] = new_pos
                     self._logger.info(
@@ -1751,7 +1801,11 @@ class ExecutionEngineService(BaseService):
 
             # --- Breakeven triggered ---
             is_long = position.side == "long"
-            new_sl_price = position.entry_price
+            # Offset above/below entry to cover round-trip exchange fees
+            if is_long:
+                new_sl_price = position.entry_price * (1 + BREAKEVEN_OFFSET_PCT / 100)
+            else:
+                new_sl_price = position.entry_price * (1 - BREAKEVEN_OFFSET_PCT / 100)
 
             self._logger.info(
                 "Breakeven activated: %s %s — SL moved to entry %.4f (P&L %.2f%%)",
@@ -1794,6 +1848,117 @@ class ExecutionEngineService(BaseService):
                 self._logger.error(
                     "Failed to place breakeven SL for %s: %s", symbol, e,
                 )
+
+    async def _check_trailing_stops(self) -> None:
+        """ATR-based trailing stop.
+
+        Activates only after breakeven has been triggered. Once active, the SL
+        follows price at a distance of trailing_atr_mult x ATR from the peak
+        (LONG) or trough (SHORT). The SL is only ever tightened, never loosened.
+
+        Requirements for trailing to engage:
+        - Position must be OPEN
+        - Breakeven must already be activated
+        - entry_atr_pct must be > 0 (ATR was available at entry)
+        - current_price must be > 0
+        """
+        trailing_mult = getattr(
+            getattr(self._bot_config, "stops", None),
+            "trailing_atr_mult", 2.5
+        )
+
+        for symbol, position in list(self.active_positions.items()):
+            if position.status != PositionStatus.OPEN:
+                continue
+            if not position.breakeven_activated:
+                continue  # Trailing only after breakeven
+            if position.entry_atr_pct <= 0:
+                continue  # No ATR data, skip
+            if symbol in self._settling_symbols:
+                continue
+
+            current = position.current_price
+            if current <= 0:
+                continue
+
+            # Trailing distance = entry_price * (atr_pct / 100) * trailing_mult
+            trail_distance = position.entry_price * (position.entry_atr_pct / 100) * trailing_mult
+
+            if position.side == "long":
+                # Update peak price
+                if current > position.highest_price:
+                    position.highest_price = current
+
+                # Calculate trailing SL from peak
+                new_sl = position.highest_price - trail_distance
+
+                # Only tighten SL (never lower it for longs)
+                if new_sl > position.sl_price:
+                    if not position.trailing_active:
+                        position.trailing_active = True
+                        self._logger.info(
+                            "TRAILING activated %s LONG: peak=%.4f, trail_sl=%.4f (was %.4f)",
+                            symbol, position.highest_price, new_sl, position.sl_price,
+                        )
+
+                    # Update SL on exchange
+                    try:
+                        if position.sl_order_id:
+                            await self.client.cancel_order(symbol, int(position.sl_order_id))
+
+                        sl_result = await self._place_trigger_with_retry(
+                            symbol=symbol,
+                            is_buy=False,  # Close long = sell
+                            size=position.size,
+                            trigger_price=new_sl,
+                            tpsl="sl",
+                        )
+                        position.sl_order_id = sl_result.get("orderId")
+                        position.sl_price = new_sl
+                        self._logger.info(
+                            "TRAILING updated %s: new_sl=%.4f (peak=%.4f, trail=%.4f)",
+                            symbol, new_sl, position.highest_price, trail_distance,
+                        )
+                    except Exception as e:
+                        self._logger.error("Failed to update trailing SL for %s: %s", symbol, e)
+
+            elif position.side == "short":
+                # Update trough price
+                if current < position.lowest_price:
+                    position.lowest_price = current
+
+                # Calculate trailing SL from trough
+                new_sl = position.lowest_price + trail_distance
+
+                # Only tighten SL (never raise it for shorts)
+                if new_sl < position.sl_price:
+                    if not position.trailing_active:
+                        position.trailing_active = True
+                        self._logger.info(
+                            "TRAILING activated %s SHORT: trough=%.4f, trail_sl=%.4f (was %.4f)",
+                            symbol, position.lowest_price, new_sl, position.sl_price,
+                        )
+
+                    # Update SL on exchange
+                    try:
+                        if position.sl_order_id:
+                            await self.client.cancel_order(symbol, int(position.sl_order_id))
+
+                        sl_result = await self._place_trigger_with_retry(
+                            symbol=symbol,
+                            is_buy=True,  # Close short = buy
+                            size=position.size,
+                            trigger_price=new_sl,
+                            tpsl="sl",
+                        )
+                        position.sl_order_id = sl_result.get("orderId")
+                        position.sl_price = new_sl
+                        self._logger.info(
+                            "TRAILING updated %s: new_sl=%.4f (trough=%.4f, trail=%.4f)",
+                            symbol, new_sl, position.lowest_price, trail_distance,
+                        )
+                    except Exception as e:
+                        self._logger.error("Failed to update trailing SL for %s: %s", symbol, e)
 
     async def should_exit_on_roi(self, position: ExecutionPosition) -> tuple[bool, float, float]:
         """

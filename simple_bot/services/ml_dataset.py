@@ -20,7 +20,7 @@ from backtesting.indicators import (
     calc_sma,
     compute_indicators,
 )
-from backtesting.signals import signal_ema_crossover_only
+from backtesting.signals import signal_ema_crossover_entry
 
 __all__ = ["generate_dataset"]
 
@@ -151,7 +151,6 @@ def _extract_features(
         "ema21_slope": ema21_slope,
         "close_vs_ema200": close_vs_ema200,
         "regime_encoded": regime_encoded,
-        "spread_pct": 0.0,  # unavailable in backtesting
     }
 
 
@@ -212,7 +211,7 @@ def generate_dataset(
         # Scan for signals and label them
         signal_count = 0
         for idx in range(cfg.warmup_bars, len(candles)):
-            sig = signal_ema_crossover_only(ind, idx)
+            sig = signal_ema_crossover_entry(ind, idx)
             if sig == 0:
                 continue
 
