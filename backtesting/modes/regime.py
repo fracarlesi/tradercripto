@@ -17,17 +17,17 @@ from backtesting.api import fetch_all_candles, get_all_assets
 from backtesting.config import BacktestConfig, load_config
 from backtesting.indicators import compute_indicators, compute_regime_series
 
-# Grid-search values
-ADX_THRESHOLDS = [18, 20, 22, 25]
-SLOPE_THRESHOLDS = [0.0003, 0.0005, 0.001]
-CONFIRMATION_BARS = [0, 1, 2]
+# Grid-search values (level hysteresis: entry vs exit ADX thresholds)
+ADX_ENTRY_THRESHOLDS = [22, 25, 28, 30]
+ADX_EXIT_THRESHOLDS = [18, 20, 22]
+CONFIRMATION_BARS = [1, 2, 3]
 
 
 def _run_regime_backtest(
     asset_data: dict[str, dict],
     cfg: BacktestConfig,
-    adx_thresh: float,
-    slope_thresh: float,
+    adx_entry: float,
+    adx_exit: float,
     confirm_bars: int,
     use_filter: bool,
 ) -> dict:
@@ -35,8 +35,8 @@ def _run_regime_backtest(
     override_cfg = BacktestConfig(
         **{k: getattr(cfg, k) for k in cfg.__dataclass_fields__}
     )
-    override_cfg.trend_adx_min = adx_thresh
-    override_cfg.ema_slope_threshold = slope_thresh
+    override_cfg.trend_adx_entry_min = adx_entry
+    override_cfg.trend_adx_exit_min = adx_exit
     override_cfg.confirmation_bars = confirm_bars
 
     all_trades: list[dict] = []
@@ -214,17 +214,19 @@ def run(args: argparse.Namespace) -> None:
     # Build combos
     combos: list[tuple[str, float, float, int, bool]] = []
     combos.append(("NO_FILTER", 0, 0, 0, False))
-    for adx_t, slope_t, conf in product(ADX_THRESHOLDS, SLOPE_THRESHOLDS, CONFIRMATION_BARS):
-        label = f"ADX>={adx_t} Slope>={slope_t} Conf={conf}"
-        combos.append((label, adx_t, slope_t, conf, True))
+    for adx_entry, adx_exit, conf in product(ADX_ENTRY_THRESHOLDS, ADX_EXIT_THRESHOLDS, CONFIRMATION_BARS):
+        if adx_exit >= adx_entry:
+            continue  # Exit must be lower than entry for hysteresis
+        label = f"Entry>={adx_entry} Exit>={adx_exit} Conf={conf}"
+        combos.append((label, adx_entry, adx_exit, conf, True))
 
     print(f"Testing {len(combos)} parameter combinations across "
           f"{len(asset_data)} assets...")
     print()
 
     results: list[dict] = []
-    for i, (label, adx_t, slope_t, conf, use_filter) in enumerate(combos):
-        stats = _run_regime_backtest(asset_data, cfg, adx_t, slope_t, conf, use_filter)
+    for i, (label, adx_entry, adx_exit, conf, use_filter) in enumerate(combos):
+        stats = _run_regime_backtest(asset_data, cfg, adx_entry, adx_exit, conf, use_filter)
         stats["label"] = label
         results.append(stats)
         if (i + 1) % 10 == 0:
@@ -264,8 +266,8 @@ def run(args: argparse.Namespace) -> None:
         print(f"  Sharpe: {best['sharpe']:.2f}, Profit Factor: {best['profit_factor']:.2f}")
 
         # Show current config rank
-        current_label = (f"ADX>={cfg.trend_adx_min:.0f} "
-                         f"Slope>={cfg.ema_slope_threshold} "
+        current_label = (f"Entry>={cfg.trend_adx_entry_min:.0f} "
+                         f"Exit>={cfg.trend_adx_exit_min:.0f} "
                          f"Conf={cfg.confirmation_bars}")
         current = [r for r in results if r["label"] == current_label]
         if current:

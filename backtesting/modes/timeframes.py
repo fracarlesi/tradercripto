@@ -39,8 +39,8 @@ def run(args: argparse.Namespace) -> None:
     print("=" * 80)
     print(f"TIMEFRAME BACKTEST: 5m vs 15m vs 1h - Last {days}d")
     print("=" * 80)
-    print(f"Strategy: EMA9/EMA21 + RSI + Regime (ADX>={cfg_base.trend_adx_min}, "
-          f"slope>={cfg_base.ema_slope_threshold})")
+    print(f"Strategy: EMA9/EMA21 + RSI + Regime (ADX entry>={cfg_base.trend_adx_entry_min}, "
+          f"exit>={cfg_base.trend_adx_exit_min})")
     print(f"TP: {cfg_base.tp_pct*100:.1f}% | SL: {cfg_base.sl_pct*100:.1f}% | "
           f"Fees: {cfg_base.fee_pct*100:.2f}%/side")
     print(f"Account: ${cfg_base.account_size} | {cfg_base.leverage}x | "

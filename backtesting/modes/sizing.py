@@ -52,8 +52,8 @@ def run(args: argparse.Namespace) -> None:
     print("=" * 80)
     print(f"BACKTEST SIZING: Trend Momentum - Last {days}d - All Assets ({tf})")
     print("=" * 80)
-    print(f"Strategy: EMA9/EMA21 + RSI + TREND regime (ADX>={cfg.trend_adx_min}, "
-          f"slope>={cfg.ema_slope_threshold})")
+    print(f"Strategy: EMA9/EMA21 + RSI + TREND regime (ADX entry>={cfg.trend_adx_entry_min}, "
+          f"exit>={cfg.trend_adx_exit_min})")
     print(f"TP: {cfg.tp_pct*100:.1f}% | SL: {cfg.sl_pct*100:.1f}% | "
           f"Fees: {cfg.fee_pct*100:.2f}%/side")
     print(f"Account: ${cfg.account_size} | Max {cfg.max_daily_trades} trades/day")

@@ -38,10 +38,10 @@ class BacktestConfig:
     max_positions: int = 3
     max_daily_trades: int = 8
 
-    # From regime.*
-    trend_adx_min: float = 25.0
-    ema_slope_threshold: float = 0.0003
-    confirmation_bars: int = 2
+    # From regime.* (level hysteresis)
+    trend_adx_entry_min: float = 28.0  # Stricter threshold to enter TREND
+    trend_adx_exit_min: float = 22.0   # Lenient threshold to stay in TREND
+    confirmation_bars: int = 3
 
     # From strategies.trend_momentum.*
     rsi_long_min: float = 30.0
@@ -78,9 +78,9 @@ def load_config(**overrides: object) -> BacktestConfig:
         leverage=risk.get("leverage", 10),
         max_positions=risk.get("max_positions", 3),
         max_daily_trades=risk.get("max_daily_trades", 8),
-        trend_adx_min=regime.get("trend_adx_min", 25),
-        ema_slope_threshold=regime.get("ema_slope_threshold", 0.0003),
-        confirmation_bars=regime.get("confirmation_bars", 2),
+        trend_adx_entry_min=regime.get("trend_adx_entry_min", 28),
+        trend_adx_exit_min=regime.get("trend_adx_exit_min", 22),
+        confirmation_bars=regime.get("confirmation_bars", 3),
         rsi_long_min=strat.get("rsi_long_min", 30),
         rsi_long_max=strat.get("rsi_long_max", 65),
         rsi_short_min=strat.get("rsi_short_min", 40),

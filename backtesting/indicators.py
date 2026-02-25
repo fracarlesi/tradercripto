@@ -169,40 +169,51 @@ def calc_donchian(highs: np.ndarray, lows: np.ndarray,
 
 def compute_regime_series(adx: np.ndarray, ema200_slope: np.ndarray,
                           cfg: BacktestConfig) -> np.ndarray:
-    """Compute TREND regime per bar with N-bar hysteresis (matches bot).
+    """Compute TREND regime per bar with level hysteresis (matches bot).
+
+    Level hysteresis prevents whipsaw:
+    - Entering TREND requires ADX >= trend_adx_entry_min (stricter)
+    - Staying in TREND only requires ADX >= trend_adx_exit_min (lenient)
+    - ema200_slope is kept in signature for API compat but NOT used
 
     Returns boolean array: True = TREND regime.
     """
     n = len(adx)
     is_trend = np.zeros(n, dtype=bool)
-    history: list[bool] = []
+    confirmed_trend = False
     confirmation = cfg.confirmation_bars
+    pending_change: bool | None = None
+    change_counter = 0
 
     for i in range(n):
         a = adx[i]
-        s = ema200_slope[i]
-
-        if np.isnan(a) or np.isnan(s):
-            is_trend[i] = False
+        if np.isnan(a):
+            is_trend[i] = confirmed_trend
             continue
 
-        raw_trend = (a >= cfg.trend_adx_min) and (abs(s) >= cfg.ema_slope_threshold)
-        history.append(raw_trend)
-
-        max_history = confirmation + 1
-        if len(history) > max_history:
-            history = history[-max_history:]
-
-        if len(history) >= confirmation:
-            recent = history[-confirmation:]
-            if all(r == raw_trend for r in recent):
-                is_trend[i] = raw_trend
-            elif len(history) > confirmation:
-                is_trend[i] = history[-confirmation - 1]
-            else:
-                is_trend[i] = raw_trend
+        # Level hysteresis: different ADX thresholds for entry vs exit
+        if confirmed_trend:
+            raw_trend = a >= cfg.trend_adx_exit_min
         else:
-            is_trend[i] = raw_trend
+            raw_trend = a >= cfg.trend_adx_entry_min
+
+        # N-bar confirmation before switching
+        if raw_trend != confirmed_trend:
+            if pending_change is not None and pending_change != raw_trend:
+                change_counter = 1
+            else:
+                change_counter += 1
+            pending_change = raw_trend
+
+            if change_counter >= confirmation:
+                confirmed_trend = raw_trend
+                pending_change = None
+                change_counter = 0
+        else:
+            pending_change = None
+            change_counter = 0
+
+        is_trend[i] = confirmed_trend
 
     return is_trend
 
