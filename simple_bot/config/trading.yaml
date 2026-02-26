@@ -62,6 +62,8 @@ universe:
     - "AI16Z"
     - "JELLY"
     - "LAUNCHCOIN"
+    # No candle data available
+    - "OM"
 
   assets:
     - symbol: "BTC"

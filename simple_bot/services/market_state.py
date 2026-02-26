@@ -123,9 +123,10 @@ def calculate_adx(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: 
         plus_dm_smooth[i] = plus_dm_smooth[i - 1] - (plus_dm_smooth[i - 1] / period) + plus_dm[i]
         minus_dm_smooth[i] = minus_dm_smooth[i - 1] - (minus_dm_smooth[i - 1] / period) + minus_dm[i]
 
-    # Calculate DI+ and DI-
-    plus_di = np.where(atr != 0, 100 * plus_dm_smooth / (atr * period), 0)
-    minus_di = np.where(atr != 0, 100 * minus_dm_smooth / (atr * period), 0)
+    # Calculate DI+ and DI- - use np.divide with where parameter to avoid RuntimeWarning
+    atr_scaled = atr * period
+    plus_di = np.divide(100 * plus_dm_smooth, atr_scaled, out=np.zeros_like(atr_scaled, dtype=float), where=atr_scaled != 0)
+    minus_di = np.divide(100 * minus_dm_smooth, atr_scaled, out=np.zeros_like(atr_scaled, dtype=float), where=atr_scaled != 0)
 
     # Calculate DX - use np.divide with where parameter to avoid RuntimeWarning for division by zero
     di_sum = plus_di + minus_di
