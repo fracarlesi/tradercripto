@@ -9,12 +9,10 @@ Run:
 
 """
 
-import asyncio
-import json
 import pytest
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 from simple_bot.core.models import CooldownState, CooldownReason
 from simple_bot.services.risk_manager import RiskManagerService, RiskConfig
@@ -23,15 +21,6 @@ from simple_bot.services.risk_manager import RiskManagerService, RiskConfig
 # =============================================================================
 # Test Fixtures
 # =============================================================================
-
-@pytest.fixture
-def mock_db():
-    """Create a mock database."""
-    db = AsyncMock()
-    db.fetch = AsyncMock(return_value=[])
-    db.fetchrow = AsyncMock(return_value=None)
-    return db
-
 
 @pytest.fixture
 def mock_telegram():
@@ -51,12 +40,11 @@ def mock_client():
 
 
 @pytest.fixture
-def risk_manager(mock_db, mock_client, mock_telegram):
+def risk_manager(mock_client, mock_telegram):
     """Create a RiskManagerService instance for testing."""
     rm = RiskManagerService(
         name="test_risk_manager",
         bus=None,
-        db=mock_db,
         config=RiskConfig(),
         client=mock_client,
         telegram=mock_telegram,
@@ -132,7 +120,7 @@ class TestStoplossStreakCooldown:
     """
 
     @pytest.mark.asyncio
-    async def test_no_cooldown_on_zero_losses(self, risk_manager, mock_db):
+    async def test_no_cooldown_on_zero_losses(self, risk_manager):
         """No cooldown when _get_recent_trades returns empty (stubbed)."""
         is_cooldown, state = await risk_manager.check_cooldown_required()
 
@@ -140,7 +128,7 @@ class TestStoplossStreakCooldown:
         assert state is None
 
     @pytest.mark.asyncio
-    async def test_no_cooldown_stubbed(self, risk_manager, mock_db):
+    async def test_no_cooldown_stubbed(self, risk_manager):
         """No cooldown since _get_recent_trades always returns []."""
         is_cooldown, state = await risk_manager.check_cooldown_required()
 
@@ -159,7 +147,7 @@ class TestDailyDrawdownCooldown:
     """
 
     @pytest.mark.asyncio
-    async def test_no_cooldown_stubbed(self, risk_manager, mock_db):
+    async def test_no_cooldown_stubbed(self, risk_manager):
         """No DD cooldown since _get_recent_trades returns []."""
         is_cooldown, state = await risk_manager.check_cooldown_required()
 
@@ -177,7 +165,7 @@ class TestLowPerformanceCooldown:
     """
 
     @pytest.mark.asyncio
-    async def test_no_cooldown_stubbed(self, risk_manager, mock_db):
+    async def test_no_cooldown_stubbed(self, risk_manager):
         """No low-perf cooldown since _get_recent_trades returns []."""
         is_cooldown, state = await risk_manager.check_cooldown_required()
 
@@ -192,7 +180,7 @@ class TestCooldownExpiration:
     """Tests for cooldown expiration logic."""
 
     @pytest.mark.asyncio
-    async def test_cooldown_expires(self, risk_manager, mock_db, mock_telegram):
+    async def test_cooldown_expires(self, risk_manager, mock_telegram):
         """Cooldown expires correctly after duration."""
         # Set up an expired cooldown
         now = datetime.now(timezone.utc)
@@ -203,9 +191,7 @@ class TestCooldownExpiration:
             cooldown_until=now - timedelta(hours=1),  # Expired 1h ago
             trigger_details={"consecutive_losses": 3}
         )
-        
-        mock_db.fetch.return_value = []  # No new issues
-        
+
         is_cooldown, state = await risk_manager.check_cooldown_required()
         
         assert is_cooldown is False
@@ -216,7 +202,7 @@ class TestCooldownExpiration:
         mock_telegram.send_custom_alert.assert_called()
 
     @pytest.mark.asyncio
-    async def test_cooldown_still_active(self, risk_manager, mock_db):
+    async def test_cooldown_still_active(self, risk_manager):
         """Cooldown remains active before expiration."""
         now = datetime.now(timezone.utc)
         risk_manager._cooldown_state = CooldownState(
@@ -239,32 +225,12 @@ class TestCooldownExpiration:
 # =============================================================================
 
 class TestCooldownPersistence:
-    """Tests for cooldown database persistence."""
+    """Tests for cooldown persistence (no DB, in-memory only)."""
 
     @pytest.mark.asyncio
-    async def test_load_active_cooldown(self, risk_manager, mock_db):
-        """Load active cooldown from database on startup."""
-        now = datetime.now(timezone.utc)
-        mock_db.fetchrow.return_value = {
-            "reason": "StoplossStreak",
-            "triggered_at": now - timedelta(hours=2),
-            "cooldown_until": now + timedelta(hours=4),
-            "details": json.dumps({"consecutive_losses": 3}),
-        }
-        
+    async def test_load_active_cooldown_noop_without_db(self, risk_manager):
+        """load_active_cooldown is a no-op without DB."""
         await risk_manager.load_active_cooldown()
-        
-        assert risk_manager._cooldown_state is not None
-        assert risk_manager._cooldown_state.active is True
-        assert risk_manager._cooldown_state.reason == CooldownReason.STOPLOSS_STREAK
-
-    @pytest.mark.asyncio
-    async def test_no_active_cooldown_in_db(self, risk_manager, mock_db):
-        """No cooldown state when DB has no active cooldown."""
-        mock_db.fetchrow.return_value = None
-        
-        await risk_manager.load_active_cooldown()
-        
         assert risk_manager._cooldown_state is None
 
     @pytest.mark.asyncio

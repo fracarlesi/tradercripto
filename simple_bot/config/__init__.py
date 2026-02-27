@@ -23,7 +23,6 @@ from simple_bot.config.loader import (
     # System configs
     SystemConfig,
     HyperliquidConfig,
-    DatabaseConfig,
 
     # Service configs
     ServicesConfig,
@@ -53,7 +52,6 @@ __all__ = [
     "Config",
     "SystemConfig",
     "HyperliquidConfig",
-    "DatabaseConfig",
     "ServicesConfig",
     "ExecutionEngineConfig",
     "RiskConfig",

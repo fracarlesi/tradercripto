@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
@@ -140,6 +141,10 @@ def _extract_features(
     else:
         regime_encoded = 1.0  # CHAOS
 
+    # Hour of day (UTC), normalized to [0, 1)
+    ts_ms = candles[idx]["t"]
+    hour_of_day = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).hour / 24.0
+
     return {
         "adx": ind["adx"][idx],
         "rsi": ind["rsi"][idx],
@@ -151,6 +156,7 @@ def _extract_features(
         "ema21_slope": ema21_slope,
         "close_vs_ema200": close_vs_ema200,
         "regime_encoded": regime_encoded,
+        "hour_of_day": hour_of_day,
     }
 
 

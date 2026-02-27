@@ -10,7 +10,7 @@ Architecture:
 
 This orchestrator:
 1. Loads configuration from trading.yaml
-2. Initializes core services (database, message bus)
+2. Initializes core services (message bus)
 3. Loads pre-trained XGBoost model
 4. Scans all assets, predicts P(TP) for each direction
 5. Executes top-N candidates by P(TP) descending
@@ -40,8 +40,6 @@ import yaml
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from database.db import Database
 
 from .core.enums import Topic
 from .core.models import Direction, MarketState, Regime, Setup, SetupType
@@ -111,8 +109,6 @@ def setup_logging(log_level: str = "INFO") -> logging.Logger:
     # Reduce noise
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
-    logging.getLogger("asyncpg").setLevel(logging.WARNING)
-
     return logging.getLogger("hlquantbot")
 
 
@@ -290,7 +286,6 @@ class ConservativeBot:
         self._config: Optional[ConservativeConfig] = config
 
         # Core components
-        self._db: Optional[Database] = None
         self._bus: Optional[MessageBus] = None
         self._exchange: Optional[HyperliquidClient] = None
 
@@ -351,20 +346,6 @@ class ConservativeBot:
             self._config.max_drawdown_pct,
         )
         return self._config
-
-    async def _init_database(self) -> Database:
-        """Initialize database connection."""
-        logger.info("Connecting to database...")
-        dsn = os.getenv(
-            "DATABASE_URL",
-            "postgresql://hlquant:hlquant@localhost:5432/hlquantbot"
-        )
-        self._db = Database(dsn)
-        await self._db.connect(min_size=2, max_size=10)
-        if not await self._db.health_check():
-            raise RuntimeError("Database health check failed")
-        logger.info("Database connected")
-        return self._db
 
     async def _init_message_bus(self) -> MessageBus:
         """Initialize message bus."""
@@ -443,7 +424,7 @@ class ConservativeBot:
             check_interval_seconds=60,
         )
         self._services["kill_switch"] = create_kill_switch(
-            bus=self._bus, db=self._db, config=ks_config,
+            bus=self._bus, config=ks_config,
         )
 
         # Notifications
@@ -466,7 +447,7 @@ class ConservativeBot:
             regime_confirmation_bars=cfg.regime_confirmation_bars,
         )
         self._services["market_state"] = create_market_state_service(
-            bus=self._bus, db=self._db, config=ms_config, testnet=cfg.testnet,
+            bus=self._bus, config=ms_config, testnet=cfg.testnet,
         )
 
         # Risk Manager
@@ -482,7 +463,7 @@ class ConservativeBot:
             max_slippage_pct=cfg.max_slippage_pct,
         )
         self._services["risk_manager"] = create_risk_manager(
-            bus=self._bus, db=self._db, config=risk_config,
+            bus=self._bus, config=risk_config,
             client=self._exchange, telegram=telegram_service,
         )
 
@@ -521,12 +502,12 @@ class ConservativeBot:
 
         self._services["execution"] = ExecutionEngineService(
             bus=self._bus, config=_ConfigAdapter(cfg),
-            client=self._exchange, db=self._db,
+            client=self._exchange,
         )
 
         # Protection Manager
         self._services["protection_manager"] = ProtectionManager(
-            config=self._raw_config, db=self._db, telegram=telegram_service,
+            config=self._raw_config, telegram=telegram_service,
         )
 
         # ML Model - required
@@ -972,7 +953,6 @@ class ConservativeBot:
 
             setup_logging(log_level="INFO")
 
-            await self._init_database()
             await self._init_message_bus()
             await self._init_exchange()
             await self._load_dynamic_assets()
@@ -1051,8 +1031,6 @@ class ConservativeBot:
             await self._bus.stop()
         if self._exchange:
             await self._exchange.disconnect()
-        if self._db:
-            await self._db.disconnect()
 
         logger.info("=" * 60)
         logger.info("HLQuantBot v4 Stopped")

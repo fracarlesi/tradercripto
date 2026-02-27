@@ -314,21 +314,18 @@ class ExecutionEngineService(BaseService):
         bus: MessageBus,
         config: Config,
         client: HyperliquidClient,
-        db: Optional[Any] = None,
     ) -> None:
         """
         Initialize execution engine service.
-        
+
         Args:
             bus: MessageBus instance for pub/sub
             config: Bot configuration
             client: HyperliquidClient for API calls
-            db: Optional database connection
         """
         super().__init__(
             name="execution_engine",
             bus=bus,
-            db=db,
             loop_interval_seconds=5.0,  # Position monitoring interval
         )
         
@@ -2292,17 +2289,15 @@ def create_execution_engine(
     bus: MessageBus,
     config: Config,
     client: HyperliquidClient,
-    db: Optional[Any] = None,
 ) -> ExecutionEngineService:
     """
     Create and configure an ExecutionEngineService.
-    
+
     Args:
         bus: MessageBus instance
         config: Bot configuration
         client: Connected HyperliquidClient
-        db: Optional database connection
-        
+
     Returns:
         Configured ExecutionEngineService
     """
@@ -2310,5 +2305,4 @@ def create_execution_engine(
         bus=bus,
         config=config,
         client=client,
-        db=db,
     )

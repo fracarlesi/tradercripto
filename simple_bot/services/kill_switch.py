@@ -97,7 +97,6 @@ class KillSwitchService(BaseService):
         self,
         name: str = "kill_switch",
         bus: Optional[MessageBus] = None,
-        db: Optional[Any] = None,
         config: Optional[KillSwitchConfig] = None,
     ) -> None:
         """Initialize KillSwitchService."""
@@ -106,7 +105,6 @@ class KillSwitchService(BaseService):
         super().__init__(
             name=name,
             bus=bus,
-            db=db,
             loop_interval_seconds=self._ks_config.check_interval_seconds,
         )
 
@@ -489,13 +487,11 @@ class KillSwitchService(BaseService):
 
 def create_kill_switch(
     bus: Optional[MessageBus] = None,
-    db: Optional[Any] = None,
     config: Optional[KillSwitchConfig] = None,
 ) -> KillSwitchService:
     """Factory function to create KillSwitchService."""
     return KillSwitchService(
         name="kill_switch",
         bus=bus,
-        db=db,
         config=config,
     )

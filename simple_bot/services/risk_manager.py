@@ -20,7 +20,6 @@ Author: Francesco Carlesi
 import asyncio
 import logging
 from dataclasses import dataclass
-import json
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
@@ -105,7 +104,6 @@ class RiskManagerService(BaseService):
         self,
         name: str = "risk_manager",
         bus: Optional[MessageBus] = None,
-        db: Optional[Any] = None,
         config: Optional[RiskConfig] = None,
         client: Optional[Any] = None,
         telegram: Optional[Any] = None,
@@ -114,7 +112,6 @@ class RiskManagerService(BaseService):
         super().__init__(
             name=name,
             bus=bus,
-            db=db,
             loop_interval_seconds=60,  # Check every minute
         )
 
@@ -172,7 +169,7 @@ class RiskManagerService(BaseService):
             "Synced %d positions from exchange", len(self._open_positions)
         )
 
-        # Load any active cooldown from database
+        # Load any active cooldown (no-op, in-memory only)
         await self.load_active_cooldown()
 
     async def _on_stop(self) -> None:
@@ -796,7 +793,7 @@ class RiskManagerService(BaseService):
         duration_hours: int,
         details: dict
     ) -> CooldownState:
-        """Trigger cooldown and persist to database."""
+        """Trigger cooldown (in-memory only)."""
         now = datetime.now(timezone.utc)
         cooldown_until = now + timedelta(hours=duration_hours)
 
@@ -807,22 +804,6 @@ class RiskManagerService(BaseService):
             cooldown_until=cooldown_until,
             trigger_details=details
         )
-
-        # Persist to database
-        if self.db:
-            try:
-                await self.db.fetch(
-                    """
-                    INSERT INTO cooldowns (reason, triggered_at, cooldown_until, details)
-                    VALUES ($1, $2, $3, $4)
-                    """,
-                    reason.value,
-                    now,
-                    cooldown_until,
-                    json.dumps(details)
-                )
-            except Exception as e:
-                self._logger.error("Failed to persist cooldown to DB: %s", e)
 
         # Send Telegram alert
         if self._telegram:
@@ -868,36 +849,8 @@ class RiskManagerService(BaseService):
         self._cooldown_state = None
 
     async def load_active_cooldown(self) -> None:
-        """Load any active cooldown from database on startup."""
-        if not self.db:
-            return
-
-        try:
-            row = await self.db.fetchrow(
-                """
-                SELECT reason, triggered_at, cooldown_until, details
-                FROM cooldowns
-                WHERE cooldown_until > NOW()
-                ORDER BY triggered_at DESC
-                LIMIT 1
-                """
-            )
-
-            if row:
-                self._cooldown_state = CooldownState(
-                    active=True,
-                    reason=CooldownReason(row["reason"]),
-                    triggered_at=row["triggered_at"],
-                    cooldown_until=row["cooldown_until"],
-                    trigger_details=json.loads(row["details"]) if row["details"] else {}
-                )
-                self._logger.warning(
-                    "Loaded active cooldown: %s until %s",
-                    self._cooldown_state.reason.value,
-                    self._cooldown_state.cooldown_until
-                )
-        except Exception as e:
-            self._logger.warning("Failed to load active cooldown: %s", e)
+        """Load any active cooldown on startup (no-op, cooldowns are in-memory only)."""
+        pass
 
     def get_cooldown_state(self) -> Optional[CooldownState]:
         """Get current cooldown state."""
@@ -938,7 +891,6 @@ class RiskManagerService(BaseService):
 
 def create_risk_manager(
     bus: Optional[MessageBus] = None,
-    db: Optional[Any] = None,
     config: Optional[RiskConfig] = None,
     client: Optional[Any] = None,
     telegram: Optional[Any] = None,
@@ -947,7 +899,6 @@ def create_risk_manager(
     return RiskManagerService(
         name="risk_manager",
         bus=bus,
-        db=db,
         config=config,
         client=client,
         telegram=telegram,

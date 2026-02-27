@@ -159,42 +159,6 @@ class HyperliquidConfig(BaseConfig):
     )
 
 
-class DatabaseConfig(BaseConfig):
-    """Database connection configuration."""
-    
-    host: str = Field(default="localhost", description="Database host")
-    port: int = Field(default=5432, ge=1, le=65535, description="Database port")
-    name: str = Field(default="trading_db", description="Database name")
-    user: str = Field(default="trader", description="Database user")
-    password: str = Field(default="trader_password", description="Database password")
-    pool_min: int = Field(
-        default=2,
-        ge=1,
-        le=10,
-        description="Minimum connection pool size"
-    )
-    pool_max: int = Field(
-        default=10,
-        ge=2,
-        le=50,
-        description="Maximum connection pool size"
-    )
-    
-    @model_validator(mode="after")
-    def validate_pool_sizes(self) -> "DatabaseConfig":
-        if self.pool_min > self.pool_max:
-            raise ValueError(
-                f"pool_min ({self.pool_min}) cannot be greater than "
-                f"pool_max ({self.pool_max})"
-            )
-        return self
-    
-    @property
-    def dsn(self) -> str:
-        """Generate PostgreSQL connection string."""
-        return f"postgresql://{self.user}:{self.password}@{self.host}:{self.port}/{self.name}"
-
-
 # =============================================================================
 # Service Configurations
 # =============================================================================
@@ -515,7 +479,6 @@ class Config(BaseConfig):
 
     system: SystemConfig = Field(default_factory=SystemConfig)
     hyperliquid: HyperliquidConfig = Field(default_factory=HyperliquidConfig)
-    database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     services: ServicesConfig = Field(default_factory=ServicesConfig)
     risk: RiskConfig = Field(default_factory=RiskConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)

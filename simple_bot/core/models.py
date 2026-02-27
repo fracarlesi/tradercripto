@@ -111,6 +111,10 @@ class MarketState(BaseModel):
     bb_lower: Optional[Decimal] = Field(None, ge=0, description="Bollinger lower band")
     bb_mid: Optional[Decimal] = Field(None, ge=0, description="Bollinger middle band")
 
+    # Exchange data (live only — not used in ML yet, logged for future training)
+    funding_rate: Optional[Decimal] = Field(None, description="Current funding rate for symbol")
+    open_interest: Optional[Decimal] = Field(None, description="Current open interest in USD")
+
     # Derived
     regime: Regime = Field(..., description="Detected market regime")
     trend_direction: Direction = Field(..., description="Current trend direction")

@@ -9,7 +9,6 @@ Features:
 - Health checking with customizable logic
 - Integrated logging with service context
 - Message bus integration for pub/sub
-- Database connection management
 - Configuration loading and hot-reload support
 - Error handling with exponential backoff retry
 - Graceful shutdown with cleanup hooks
@@ -33,7 +32,7 @@ Usage:
             # Custom health check
             return True
     
-    service = MyService(name="my_service", bus=bus, db=db)
+    service = MyService(name="my_service", bus=bus)
     await service.start()
 
 Author: Francesco Carlesi
@@ -54,17 +53,6 @@ import yaml
 
 # Local imports
 from .message_bus import MessageBus, Topic
-
-# Try to import Database, make it optional
-try:
-    import sys
-    sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-    from database.db import Database
-    DB_AVAILABLE = True
-except ImportError:
-    Database = None  # type: ignore
-    DB_AVAILABLE = False
-
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +131,6 @@ class BaseService(ABC):
     - Health checking
     - Logging with service context
     - Message bus integration
-    - Database access
     - Configuration management
     - Error handling with retry
     
@@ -158,7 +145,6 @@ class BaseService(ABC):
         self,
         name: str,
         bus: Optional[MessageBus] = None,
-        db: Optional["Database"] = None,
         config: Optional[Dict[str, Any]] = None,
         config_path: Optional[str] = None,
         retry_config: Optional[RetryConfig] = None,
@@ -166,11 +152,10 @@ class BaseService(ABC):
     ) -> None:
         """
         Initialize base service.
-        
+
         Args:
             name: Unique service name for logging and identification
             bus: MessageBus instance for pub/sub communication
-            db: Database instance for persistence
             config: Configuration dictionary
             config_path: Path to YAML config file (alternative to config dict)
             retry_config: Configuration for retry behavior
@@ -178,7 +163,6 @@ class BaseService(ABC):
         """
         self.name = name
         self.bus = bus
-        self.db = db
         self.retry_config = retry_config or RetryConfig()
         self.loop_interval_seconds = loop_interval_seconds
         
@@ -438,12 +422,6 @@ class BaseService(ABC):
                 "iteration_count": self._iteration_count,
                 "error_count": self._error_count,
             }
-            
-            # Check database if available
-            if self.db:
-                db_healthy = await self.db.health_check()
-                details["database"] = db_healthy
-                healthy = healthy and db_healthy
             
             # Check message bus if available
             if self.bus:

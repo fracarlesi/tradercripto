@@ -146,7 +146,6 @@ def execution_engine(mock_bus, mock_config, mock_client):
         bus=mock_bus,
         config=mock_config,
         client=mock_client,
-        db=None,
     )
     return engine
 
@@ -158,7 +157,6 @@ def execution_engine_no_roi(mock_bus, empty_roi_config, mock_client):
         bus=mock_bus,
         config=empty_roi_config,
         client=mock_client,
-        db=None,
     )
     return engine
 

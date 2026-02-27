@@ -83,14 +83,12 @@ class LLMVetoService(BaseService):
         self,
         name: str = "llm_veto",
         bus: Optional[MessageBus] = None,
-        db: Optional[Any] = None,
         config: Optional[LLMVetoConfig] = None,
     ) -> None:
         """Initialize LLMVetoService."""
         super().__init__(
             name=name,
             bus=bus,
-            db=db,
             loop_interval_seconds=60,
         )
 
@@ -667,13 +665,11 @@ Response format (EXACT JSON, nothing else):
 
 def create_llm_veto(
     bus: Optional[MessageBus] = None,
-    db: Optional[Any] = None,
     config: Optional[LLMVetoConfig] = None,
 ) -> LLMVetoService:
     """Factory function to create LLMVetoService."""
     return LLMVetoService(
         name="llm_veto",
         bus=bus,
-        db=db,
         config=config,
     )

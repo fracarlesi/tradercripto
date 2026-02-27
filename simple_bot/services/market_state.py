@@ -293,7 +293,6 @@ class MarketStateService(BaseService):
         self,
         name: str = "market_state",
         bus: Optional[MessageBus] = None,
-        db: Optional[Any] = None,
         config: Optional[MarketStateConfig] = None,
         testnet: bool = True,
     ) -> None:
@@ -303,7 +302,6 @@ class MarketStateService(BaseService):
         super().__init__(
             name=name,
             bus=bus,
-            db=db,
             loop_interval_seconds=self._state_config.interval_seconds,
         )
 
@@ -403,9 +401,13 @@ class MarketStateService(BaseService):
 
     async def _fetch_all_states(self) -> None:
         """Fetch market state for all configured assets."""
+        # Fetch funding rates and open interest once per scan cycle
+        asset_ctx_data = await self._fetch_asset_ctx_data()
+
         for symbol in self._state_config.assets:
             try:
-                state = await self._fetch_market_state(symbol)
+                ctx = asset_ctx_data.get(symbol, {})
+                state = await self._fetch_market_state(symbol, ctx)
                 if state:
                     self._market_states[symbol] = state
                     await self._publish_state(state)
@@ -416,7 +418,41 @@ class MarketStateService(BaseService):
             except Exception as e:
                 self._logger.error("Failed to fetch state for %s: %s", symbol, e)
 
-    async def _fetch_market_state(self, symbol: str) -> Optional[MarketState]:
+    async def _fetch_asset_ctx_data(self) -> Dict[str, Dict[str, float]]:
+        """Fetch funding rates and open interest for all assets in one API call.
+
+        Returns dict mapping symbol to {funding, openInterest}.
+        Data is logged for future ML training but NOT used in ML features yet.
+        """
+        if self._info is None:
+            return {}
+
+        try:
+            loop = asyncio.get_event_loop()
+            ctx = await loop.run_in_executor(
+                None, lambda: self._info.meta_and_asset_ctxs()
+            )
+
+            result: Dict[str, Dict[str, float]] = {}
+            meta = ctx[0] if len(ctx) > 0 else {}
+            assets = ctx[1] if len(ctx) > 1 else []
+            universe = meta.get("universe", [])
+
+            for i, asset_ctx in enumerate(assets):
+                if i < len(universe):
+                    sym = universe[i].get("name", "")
+                    result[sym] = {
+                        "funding": float(asset_ctx.get("funding", 0)),
+                        "openInterest": float(asset_ctx.get("openInterest", 0)),
+                    }
+
+            return result
+
+        except Exception as e:
+            self._logger.warning("Failed to fetch asset context data: %s", e)
+            return {}
+
+    async def _fetch_market_state(self, symbol: str, asset_ctx: Optional[Dict[str, float]] = None) -> Optional[MarketState]:
         """Fetch and calculate market state for a single symbol."""
         if self._info is None:
             return None
@@ -558,10 +594,21 @@ class MarketStateService(BaseService):
                 bb_lower=Decimal(str(bb_lower[-1])),
                 bb_mid=Decimal(str(bb_mid[-1])),
                 bb_upper=Decimal(str(bb_upper[-1])),
+                funding_rate=Decimal(str(asset_ctx.get("funding", 0))) if asset_ctx else None,
+                open_interest=Decimal(str(asset_ctx.get("openInterest", 0))) if asset_ctx else None,
                 regime=regime,
                 trend_direction=trend_direction,
                 bars_count=len(close),
             )
+
+            # Log funding/OI for future ML training data accumulation
+            if asset_ctx:
+                self._logger.debug(
+                    "%s: funding=%.6f, OI=%.0f",
+                    symbol,
+                    asset_ctx.get("funding", 0),
+                    asset_ctx.get("openInterest", 0),
+                )
 
             self._logger.info(
                 "%s: price=%.2f, regime=%s, ADX=%.1f, RSI=%.1f, ATR%%=%.2f",
@@ -847,7 +894,6 @@ class MarketStateService(BaseService):
 
 def create_market_state_service(
     bus: Optional[MessageBus] = None,
-    db: Optional[Any] = None,
     config: Optional[MarketStateConfig] = None,
     testnet: bool = True,
 ) -> MarketStateService:
@@ -855,7 +901,6 @@ def create_market_state_service(
     return MarketStateService(
         name="market_state",
         bus=bus,
-        db=db,
         config=config,
         testnet=testnet,
     )

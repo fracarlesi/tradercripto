@@ -101,13 +101,12 @@ class TestImports:
             reload_config,
             SystemConfig,
             HyperliquidConfig,
-            DatabaseConfig,
             ServicesConfig,
             RiskConfig,
             LLMConfig,
             StrategiesConfig,
         )
-        
+
         assert Config is not None
         assert ConfigLoader is not None
         assert load_config is not None
@@ -337,32 +336,6 @@ class TestConfiguration:
         )
         
         assert config.log_level == "DEBUG"
-    
-    def test_database_config_dsn(self):
-        """Test database DSN generation."""
-        from simple_bot.config.loader import DatabaseConfig
-        
-        config = DatabaseConfig(
-            host="localhost",
-            port=5432,
-            name="test_db",
-            user="test_user",
-            password="test_pass",
-        )
-        
-        expected = "postgresql://test_user:test_pass@localhost:5432/test_db"
-        assert config.dsn == expected
-    
-    def test_database_pool_validation(self):
-        """Test database pool size validation."""
-        from simple_bot.config.loader import DatabaseConfig
-        from pydantic import ValidationError
-        
-        with pytest.raises(ValidationError):
-            DatabaseConfig(
-                pool_min=10,
-                pool_max=5,  # Invalid: min > max
-            )
     
     def test_risk_config_validation(self):
         """Test risk config validation."""
@@ -647,13 +620,6 @@ class TestFactoryFunctions:
         return MessageBus()
     
     @pytest.fixture
-    def mock_db(self):
-        """Create mock database."""
-        db = MagicMock()
-        db.health_check = AsyncMock(return_value=True)
-        return db
-    
-    @pytest.fixture
     def mock_exchange(self):
         """Create mock exchange client."""
         exchange = MagicMock()
@@ -674,26 +640,25 @@ class TestFactoryFunctions:
         llm.remaining_requests = 100
         return llm
     
-    def test_create_execution_engine(self, mock_bus, mock_db, mock_exchange):
+    def test_create_execution_engine(self, mock_bus, mock_exchange):
         """Test execution engine factory."""
         from simple_bot.services import ExecutionEngineService
         from simple_bot.config.loader import Config
-        
+
         # Create full config with default values
         config = Config()
-        
+
         # Need a real client mock with is_connected attribute
         mock_exchange.is_connected = True
         mock_exchange.get_positions = AsyncMock(return_value=[])
         mock_exchange.get_fills = AsyncMock(return_value=[])
-        
+
         engine = ExecutionEngineService(
             bus=mock_bus,
             config=config,
             client=mock_exchange,
-            db=mock_db,
         )
-        
+
         assert engine is not None
         assert engine.name == "execution_engine"
     

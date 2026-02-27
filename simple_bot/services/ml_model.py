@@ -36,6 +36,7 @@ class MLTradeModel:
         "ema21_slope",
         "close_vs_ema200",
         "regime_encoded",   # TREND=2.0, CHAOS=1.0, RANGE=0.0
+        "hour_of_day",      # UTC hour / 24.0 — intraday session pattern
     ]
 
     _DEFAULT_PARAMS: dict = {
@@ -208,8 +209,8 @@ class MLTradeModel:
                     best_fbeta = fbeta
                     best_threshold = float(thresholds[i])
 
-            # Clamp to [0.50, 0.70]
-            best_threshold = max(0.50, min(0.70, best_threshold))
+            # Clamp to [0.50, 0.65]
+            best_threshold = max(0.50, min(0.65, best_threshold))
 
             logger.info(
                 "Threshold calibration: %.4f (F0.5=%.4f)",
@@ -288,6 +289,9 @@ class MLTradeModel:
         # Close vs EMA200 as percentage
         close_vs_ema200 = (close - ema200) / ema200 * 100 if ema200 != 0 else 0.0
 
+        # Hour of day (UTC), normalized to [0, 1)
+        hour_of_day = state.timestamp.hour / 24.0
+
         return {
             "adx": float(state.adx),
             "rsi": float(state.rsi),
@@ -299,6 +303,7 @@ class MLTradeModel:
             "ema21_slope": float(state.ema21_slope),
             "close_vs_ema200": close_vs_ema200,
             "regime_encoded": regime_encoded,
+            "hour_of_day": hour_of_day,
         }
 
     # ------------------------------------------------------------------

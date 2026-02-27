@@ -32,7 +32,6 @@ mcp__plugin_serena_serena__activate_project(project="trader_bitcoin")
 | **Max Positions** | 3 concurrent |
 | **LLM Veto** | Enabled (DeepSeek, max 20 calls/day) |
 | **Mode** | **LIVE mainnet** (`dry_run: false`) |
-| **Database** | Solo cooldowns + protections (analytics DB rimosso) |
 | **Dashboard** | Rimossa (commit 3afca98) |
 
 ### Key Files
@@ -69,11 +68,8 @@ simple_bot/
 ├── core/             # models.py (MarketState, Regime, Direction)
 ├── services/         # risk_manager, execution_engine, market_state, llm_veto, kill_switch
 ├── strategies/       # momentum_scalper (active), trend_follow (disabled)
-├── tests/            # pytest test suite (236 tests)
+├── tests/            # pytest test suite
 └── main.py           # Entry point
-database/
-├── db.py             # Solo cooldowns + protections (analytics rimosso)
-└── schema.sql        # Schema minimale
 ```
 
 ---
@@ -117,7 +113,6 @@ cd simple_bot && python3 main.py    # Bot (live)
 |----------|-------|
 | **Core** | Python 3.11+, asyncio, Pydantic |
 | **Exchange** | Hyperliquid SDK |
-| **Database** | PostgreSQL (solo cooldowns/protections) |
 | **AI/ML** | DeepSeek LLM veto, regime detection (ADX) |
 | **Notifications** | ntfy.sh push notifications |
 | **Quality** | Pyright, Ruff, Black, pytest |
@@ -156,7 +151,6 @@ cd simple_bot && python3 main.py    # Bot (live)
 
 Required in `.env`:
 ```
-DATABASE_URL=postgresql://...
 HYPERLIQUID_WALLET_ADDRESS=...
 HYPERLIQUID_PRIVATE_KEY=...
 DEEPSEEK_API_KEY=...

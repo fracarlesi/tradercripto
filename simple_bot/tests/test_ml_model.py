@@ -19,7 +19,7 @@ from simple_bot.core.models import MarketState, Regime, Direction
 
 @pytest.fixture
 def mock_dataset() -> pd.DataFrame:
-    """Create a synthetic dataset for testing (10 features, no spread_pct)."""
+    """Create a synthetic dataset for testing (11 features)."""
     np.random.seed(42)
     n = 200
     data = {
@@ -33,6 +33,7 @@ def mock_dataset() -> pd.DataFrame:
         "ema21_slope": np.random.uniform(-0.01, 0.01, n),
         "close_vs_ema200": np.random.uniform(-5, 5, n),
         "regime_encoded": np.random.choice([0.0, 1.0, 2.0], n),
+        "hour_of_day": np.random.uniform(0, 1, n),
         "label": np.random.randint(0, 2, n),
     }
     return pd.DataFrame(data)
@@ -124,10 +125,11 @@ class TestMLTraining:
         assert 0.0 <= metrics["auc"] <= 1.0
         assert 0.0 <= metrics["cv_auc_mean"] <= 1.0
 
-    def test_feature_count_is_10(self) -> None:
-        """FEATURES should have exactly 10 entries (spread_pct removed)."""
-        assert len(MLTradeModel.FEATURES) == 10
+    def test_feature_count_is_11(self) -> None:
+        """FEATURES should have exactly 11 entries (10 original + hour_of_day)."""
+        assert len(MLTradeModel.FEATURES) == 11
         assert "spread_pct" not in MLTradeModel.FEATURES
+        assert "hour_of_day" in MLTradeModel.FEATURES
 
     def test_train_uses_early_stopping(self, mock_dataset: pd.DataFrame) -> None:
         """Final model should use early stopping (n_estimators may be < 100)."""
@@ -148,7 +150,7 @@ class TestMLPrediction:
             "ema_spread_pct": 0.5, "volume_ratio": 1.2,
             "bb_position": 0.6, "ema9_slope": 0.002,
             "ema21_slope": 0.001, "close_vs_ema200": 2.0,
-            "regime_encoded": 2.0,
+            "regime_encoded": 2.0, "hour_of_day": 0.5,
         }
         prob, explanation = trained_model.predict(features)
 
@@ -178,7 +180,7 @@ class TestFeatureExtraction:
         """Verify removed overfitting features are not present."""
         features = trained_model.extract_features(sample_market_state)
         assert "direction_encoded" not in features
-        assert "hour_utc" not in features
+        assert "hour_utc" not in features   # hour_of_day is the normalized version
         assert "day_of_week" not in features
         assert "spread_pct" not in features
 
@@ -257,6 +259,22 @@ class TestFeatureExtraction:
         features = trained_model.extract_features(sample_market_state)
         assert features["regime_encoded"] == 0.0
 
+    def test_extract_features_hour_of_day(
+        self, trained_model: MLTradeModel, sample_market_state: MarketState
+    ) -> None:
+        """hour_of_day should be timestamp.hour / 24.0."""
+        # sample_market_state timestamp is 14:30 UTC
+        features = trained_model.extract_features(sample_market_state)
+        assert features["hour_of_day"] == pytest.approx(14 / 24.0)
+
+    def test_extract_features_hour_of_day_midnight(
+        self, trained_model: MLTradeModel, sample_market_state: MarketState
+    ) -> None:
+        """hour_of_day should be 0.0 at midnight UTC."""
+        sample_market_state.timestamp = datetime(2026, 2, 24, 0, 0, tzinfo=timezone.utc)
+        features = trained_model.extract_features(sample_market_state)
+        assert features["hour_of_day"] == 0.0
+
     def test_extract_features_accepts_legacy_spread_pct_kwarg(
         self, trained_model: MLTradeModel, sample_market_state: MarketState
     ) -> None:
@@ -281,7 +299,7 @@ class TestOptimalThreshold:
         assert model.optimal_threshold is None
         model.train(mock_dataset)
         assert model.optimal_threshold is not None
-        assert 0.50 <= model.optimal_threshold <= 0.70
+        assert 0.50 <= model.optimal_threshold <= 0.65
 
     def test_optimal_threshold_in_metrics(
         self, mock_dataset: pd.DataFrame
@@ -325,8 +343,8 @@ class TestOptimalThreshold:
         # effective must be >= both floor and optimal
         assert effective >= config_floor
         assert effective >= optimal
-        # And optimal is within calibrated range [0.50, 0.70]
-        assert 0.50 <= optimal <= 0.70
+        # And optimal is within calibrated range [0.50, 0.65]
+        assert 0.50 <= optimal <= 0.65
 
     def test_optimal_threshold_none_falls_back_to_floor(self) -> None:
         """When optimal_threshold is None (no model loaded), the effective
@@ -374,7 +392,7 @@ class TestEMASlopeComputation:
     def _make_service(self) -> "MarketStateService":
         """Create a minimal MarketStateService for testing slopes."""
         from simple_bot.services.market_state import MarketStateService
-        return MarketStateService(name="test_market_state", bus=None, db=None)
+        return MarketStateService(name="test_market_state", bus=None)
 
     def test_slopes_zero_with_fewer_than_5_bars(self) -> None:
         """Slopes should be 0 until we have 5 data points (4-bar lookback)."""
@@ -456,7 +474,7 @@ class TestMLPersistence:
             "ema_spread_pct": 0.5, "volume_ratio": 1.2,
             "bb_position": 0.6, "ema9_slope": 0.002,
             "ema21_slope": 0.001, "close_vs_ema200": 2.0,
-            "regime_encoded": 2.0,
+            "regime_encoded": 2.0, "hour_of_day": 0.5,
         }
         prob_before, _ = trained_model.predict(features)
 
