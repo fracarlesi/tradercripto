@@ -240,6 +240,16 @@ class MLTradeModel:
             raise RuntimeError("Model not loaded. Call load() or train() first.")
 
         row = pd.DataFrame([features])[self.FEATURES].astype(float)
+
+        # Backward compat: if model was trained with fewer features, use only
+        # the features the model knows about (e.g. 10-feature model + 11 FEATURES)
+        n_model_features = getattr(self._model, "n_features_in_", row.shape[1])
+        if row.shape[1] > n_model_features:
+            booster = self._model.get_booster()
+            model_feature_names = booster.feature_names if booster else None
+            if model_feature_names:
+                row = row[[f for f in model_feature_names if f in row.columns]]
+
         proba = float(self._model.predict_proba(row)[:, 1][0])
 
         # Build explanation from top 3 feature importances

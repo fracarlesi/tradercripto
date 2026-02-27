@@ -428,7 +428,7 @@ class MarketStateService(BaseService):
             return {}
 
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             ctx = await loop.run_in_executor(
                 None, lambda: self._info.meta_and_asset_ctxs()
             )
