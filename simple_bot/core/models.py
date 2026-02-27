@@ -36,6 +36,7 @@ class SetupType(str, Enum):
     TREND_BREAKOUT = "trend_breakout"      # Breakout in trend regime
     MEAN_REVERSION = "mean_reversion"      # Bounce in range regime
     MOMENTUM = "momentum"                   # Momentum continuation
+    VOLUME_BREAKOUT = "volume_breakout"    # Volume spike + price momentum
 
 
 class KillSwitchStatus(str, Enum):

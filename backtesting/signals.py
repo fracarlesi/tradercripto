@@ -129,6 +129,80 @@ def signal_ema_crossover_entry(ind: dict, idx: int) -> int:
     return 0
 
 
+def signal_volume_breakout_entry(ind: dict, idx: int,
+                                 min_volume_ratio: float = 2.0,
+                                 min_candle_body_pct: float = 0.3,
+                                 min_atr_pct: float = 0.15,
+                                 rsi_min: float = 25.0,
+                                 rsi_max: float = 80.0) -> int:
+    """Volume breakout signal: fires when volume spike + price momentum align.
+
+    Detects pump/dump starts from anomalous volume with directional conviction.
+    Designed to work in CHAOS regime (low ADX) where EMA crossover is too slow.
+
+    Conditions (all must be true on the same bar):
+    - volume_ratio >= min_volume_ratio (volume spike vs SMA20)
+    - |close - open| / open >= min_candle_body_pct% (volume moved the price)
+    - atr_pct >= min_atr_pct% (market is alive)
+    - rsi_min <= RSI <= rsi_max (not in extremes)
+
+    Direction (price momentum, NOT EMA):
+    - LONG: close > open AND close > prev_close
+    - SHORT: close < open AND close < prev_close
+
+    Returns: 1=LONG breakout, -1=SHORT breakout, 0=no signal
+    """
+    if idx < 1:
+        return 0
+
+    # Required arrays
+    for key in ("closes", "opens", "volumes", "vol_sma20", "rsi", "atr_pct"):
+        if key not in ind:
+            return 0
+
+    close = ind["closes"][idx]
+    open_price = ind["opens"][idx]
+    prev_close = ind["closes"][idx - 1]
+    volume = ind["volumes"][idx]
+    vol_sma = ind["vol_sma20"][idx]
+    rsi = ind["rsi"][idx]
+    atr_pct = ind["atr_pct"][idx]
+
+    # NaN checks
+    if any(np.isnan(v) for v in [close, open_price, prev_close, rsi, atr_pct]):
+        return 0
+    if np.isnan(vol_sma) or vol_sma <= 0:
+        return 0
+    if open_price <= 0:
+        return 0
+
+    # Condition 1: Volume spike
+    volume_ratio = volume / vol_sma
+    if volume_ratio < min_volume_ratio:
+        return 0
+
+    # Condition 2: Candle body (price moved meaningfully)
+    candle_body_pct = abs(close - open_price) / open_price * 100
+    if candle_body_pct < min_candle_body_pct:
+        return 0
+
+    # Condition 3: Minimum volatility
+    if atr_pct < min_atr_pct:
+        return 0
+
+    # Condition 4: RSI not in extremes
+    if not (rsi_min <= rsi <= rsi_max):
+        return 0
+
+    # Direction: price momentum
+    if close > open_price and close > prev_close:
+        return 1   # LONG breakout
+    if close < open_price and close < prev_close:
+        return -1  # SHORT breakout
+
+    return 0
+
+
 def signal_mean_reversion(ind: dict, idx: int, cfg: BacktestConfig) -> int:
     """RSI < 25 + below BB lower for LONG, RSI > 75 + above BB upper for SHORT."""
     if "bb_upper" not in ind or "bb_lower" not in ind:

@@ -18,10 +18,9 @@ from backtesting.api import get_candles
 from backtesting.config import BacktestConfig, load_config
 from backtesting.indicators import (
     calc_bollinger,
-    calc_sma,
     compute_indicators,
 )
-from backtesting.signals import signal_ema_crossover_entry
+from backtesting.signals import signal_ema_crossover_entry, signal_volume_breakout_entry
 
 __all__ = ["generate_dataset"]
 
@@ -90,9 +89,11 @@ def _extract_features(
     vol_sma20: np.ndarray,
     bb_upper: np.ndarray,
     bb_lower: np.ndarray,
+    signal_type: float = 0.0,
 ) -> dict:
     """Extract feature dict for a single signal bar."""
     close = candles[idx]["c"]
+    open_price = candles[idx]["o"]
     ema9 = ind["ema9"][idx]
     ema21 = ind["ema21"][idx]
     ema200 = ind["ema200"][idx]
@@ -145,6 +146,9 @@ def _extract_features(
     ts_ms = candles[idx]["t"]
     hour_of_day = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).hour / 24.0
 
+    # Candle body percentage
+    candle_body_pct = abs(close - open_price) / open_price * 100 if open_price > 0 else 0.0
+
     return {
         "adx": ind["adx"][idx],
         "rsi": ind["rsi"][idx],
@@ -157,6 +161,8 @@ def _extract_features(
         "close_vs_ema200": close_vs_ema200,
         "regime_encoded": regime_encoded,
         "hour_of_day": hour_of_day,
+        "signal_type": signal_type,
+        "candle_body_pct": candle_body_pct,
     }
 
 
@@ -205,17 +211,20 @@ def generate_dataset(
             )
             continue
 
-        # Compute standard indicators
+        # Compute standard indicators (now includes opens, volumes, vol_sma20)
         ind = compute_indicators(candles, cfg)
 
         # Additional indicators for features
         closes = ind["closes"]
-        volumes = np.array([c["v"] for c in candles])
-        vol_sma20 = calc_sma(volumes, 20)
+        volumes = ind["volumes"]
+        vol_sma20 = ind["vol_sma20"]
         _, bb_upper, bb_lower = calc_bollinger(closes)
 
-        # Scan for signals and label them
-        signal_count = 0
+        # Dedup: track (symbol, bar_idx) to avoid duplicate labels from both signals
+        seen: set[int] = set()
+
+        # --- PATH 1: EMA crossover signals (signal_type=0.0) ---
+        crossover_count = 0
         for idx in range(cfg.warmup_bars, len(candles)):
             sig = signal_ema_crossover_entry(ind, idx)
             if sig == 0:
@@ -228,16 +237,44 @@ def generate_dataset(
             features = _extract_features(
                 candles, ind, idx, sig,
                 volumes, vol_sma20, bb_upper, bb_lower,
+                signal_type=0.0,
             )
             features["label"] = label
             features["symbol"] = symbol
             features["timestamp"] = candles[idx]["t"]
             all_rows.append(features)
-            signal_count += 1
+            seen.add(idx)
+            crossover_count += 1
+
+        # --- PATH 2: Volume breakout signals (signal_type=1.0) ---
+        breakout_count = 0
+        for idx in range(cfg.warmup_bars, len(candles)):
+            if idx in seen:
+                continue  # Already labeled by crossover on this bar
+
+            sig = signal_volume_breakout_entry(ind, idx)
+            if sig == 0:
+                continue
+
+            label = _label_signal(candles, idx, sig, cfg.tp_pct, cfg.sl_pct)
+            if label is None:
+                continue
+
+            features = _extract_features(
+                candles, ind, idx, sig,
+                volumes, vol_sma20, bb_upper, bb_lower,
+                signal_type=1.0,
+            )
+            features["label"] = label
+            features["symbol"] = symbol
+            features["timestamp"] = candles[idx]["t"]
+            all_rows.append(features)
+            breakout_count += 1
 
         logger.info(
-            "%s: %d labeled signals from %d candles",
-            symbol, signal_count, len(candles),
+            "%s: %d crossover + %d breakout = %d labeled signals from %d candles",
+            symbol, crossover_count, breakout_count,
+            crossover_count + breakout_count, len(candles),
         )
 
     df = pd.DataFrame(all_rows)

@@ -173,6 +173,15 @@ class ConservativeConfig:
     max_slippage_pct: float
     max_spread_pct: float
 
+    # Volume Breakout
+    volume_breakout_enabled: bool
+    volume_breakout_min_volume_ratio: float
+    volume_breakout_min_candle_body_pct: float
+    volume_breakout_min_atr_pct: float
+    volume_breakout_rsi_min: float
+    volume_breakout_rsi_max: float
+    volume_breakout_allowed_regimes: List[str]
+
     # Environment
     testnet: bool
     dry_run: bool
@@ -194,6 +203,7 @@ class ConservativeConfig:
         regime = get_section("regime")
         execution = get_section("execution")
         ml = get_section("ml_model")
+        vb = get_section("volume_breakout")
 
         # Parse universe mode and assets
         universe_mode = universe.get("mode", "manual")
@@ -245,6 +255,13 @@ class ConservativeConfig:
             prefer_limit=execution.get("prefer_limit", True),
             max_slippage_pct=execution.get("max_slippage_pct", 0.1),
             max_spread_pct=execution.get("max_spread_pct", 0.10),
+            volume_breakout_enabled=vb.get("enabled", True),
+            volume_breakout_min_volume_ratio=vb.get("min_volume_ratio", 2.0),
+            volume_breakout_min_candle_body_pct=vb.get("min_candle_body_pct", 0.3),
+            volume_breakout_min_atr_pct=vb.get("min_atr_pct", 0.15),
+            volume_breakout_rsi_min=vb.get("rsi_min", 25.0),
+            volume_breakout_rsi_max=vb.get("rsi_max", 80.0),
+            volume_breakout_allowed_regimes=vb.get("allowed_regimes", ["chaos", "trend"]),
             testnet=env.lower() == "testnet",
             dry_run=data.get("dry_run", False),
         )
@@ -628,35 +645,70 @@ class ConservativeBot:
             self._ml_model.optimal_threshold or self.config.ml_min_probability,
         )
 
+        # Guard: volume breakout requires 13-feature model
+        n_model_features = getattr(self._ml_model._model, "n_features_in_", 0)
+        vb_enabled = (
+            self.config.volume_breakout_enabled
+            and n_model_features >= 13
+        )
+        if self.config.volume_breakout_enabled and not vb_enabled:
+            logger.debug(
+                "Volume breakout disabled: model has %d features (need 13). Retrain required.",
+                n_model_features,
+            )
+
+        vb_allowed_regimes = {r.lower() for r in self.config.volume_breakout_allowed_regimes}
+
         regime_skipped: int = 0
+        breakout_evaluated: int = 0
         for symbol, state in states.items():
             if symbol in symbols_with_positions:
                 continue
 
-            # Regime gate: only trade TREND assets (core strategy)
-            if state.regime != Regime.TREND:
-                regime_skipped += 1
+            best_prob = -1.0
+            best_direction: Direction = Direction.FLAT
+            best_reason = ""
+            best_setup_type = SetupType.MOMENTUM
+            best_signal_type = 0.0
+
+            # --- PATH 1 (existing): TREND only → EMA direction → ML(signal_type=0.0) ---
+            if state.regime == Regime.TREND:
+                direction = state.trend_direction
+                if direction != Direction.FLAT:
+                    features = self._ml_model.extract_features(state, signal_type=0.0)
+                    prob, reason = self._ml_model.predict(features)
+                    all_scores.append((f"{symbol}/ema", prob))
+                    if prob >= threshold and prob > best_prob:
+                        best_prob = prob
+                        best_direction = direction
+                        best_reason = reason
+                        best_setup_type = SetupType.MOMENTUM
+                        best_signal_type = 0.0
+
+            # --- PATH 2 (new): CHAOS+TREND → volume check → price direction → ML(signal_type=1.0) ---
+            if vb_enabled and state.regime.value.lower() in vb_allowed_regimes:
+                vb_direction = self._breakout_direction(state)
+                if vb_direction != Direction.FLAT and self._is_volume_breakout(state):
+                    breakout_evaluated += 1
+                    features = self._ml_model.extract_features(state, signal_type=1.0)
+                    prob, reason = self._ml_model.predict(features)
+                    all_scores.append((f"{symbol}/vb", prob))
+                    if prob >= threshold and prob > best_prob:
+                        best_prob = prob
+                        best_direction = vb_direction
+                        best_reason = reason
+                        best_setup_type = SetupType.VOLUME_BREAKOUT
+                        best_signal_type = 1.0
+
+            # Neither path fired above threshold
+            if best_prob < threshold:
+                if state.regime != Regime.TREND and not (
+                    vb_enabled and state.regime.value.lower() in vb_allowed_regimes
+                ):
+                    regime_skipped += 1
+                elif state.trend_direction == Direction.FLAT and state.regime == Regime.TREND:
+                    regime_skipped += 1
                 continue
-
-            # Direction from EMA crossover (trend_direction in MarketState)
-            direction = state.trend_direction
-            if direction == Direction.FLAT:
-                regime_skipped += 1
-                continue
-
-            # Predict P(TP) for this market setup
-            features = self._ml_model.extract_features(state, spread_pct=0.0)
-            prob, reason = self._ml_model.predict(features)
-
-            # Diagnostic: collect ALL scores before threshold filter
-            all_scores.append((symbol, prob))
-
-            if prob < threshold:
-                continue
-
-            best_prob = prob
-            best_direction = direction
-            best_reason = reason
 
             # Create Setup
             sl_pct = Decimal(str(self.config.stop_loss_pct))
@@ -670,7 +722,7 @@ class ConservativeBot:
                 id=f"ml_{uuid.uuid4().hex[:8]}",
                 symbol=symbol,
                 timestamp=datetime.now(timezone.utc),
-                setup_type=SetupType.MOMENTUM,
+                setup_type=best_setup_type,
                 direction=best_direction,
                 regime=state.regime,
                 entry_price=entry_price,
@@ -684,9 +736,12 @@ class ConservativeBot:
                 confidence=Decimal(str(round(best_prob, 4))),
             )
 
+            signal_label = "VOL_BREAKOUT" if best_signal_type == 1.0 else "ML_SELECT"
             logger.info(
-                "ML_SELECT | %s %s | P(TP)=%.1f%% | %s",
-                best_direction.value.upper(), symbol, best_prob * 100, best_reason,
+                "%s | %s %s | P(TP)=%.1f%% | regime=%s | %s",
+                signal_label,
+                best_direction.value.upper(), symbol, best_prob * 100,
+                state.regime.value.upper(), best_reason,
             )
             candidates.append((symbol, setup, best_prob, best_reason))
 
@@ -705,12 +760,13 @@ class ConservativeBot:
                 below_far, len(all_scores),
             )
 
-        # Count assets evaluated (after regime gate + position filter)
-        trend_evaluated = len(states) - regime_skipped - len(symbols_with_positions)
+        # Count assets evaluated
+        total_evaluated = len(all_scores)
         logger.info(
-            "Scan: %d assets, %d TREND evaluated, %d skipped (non-TREND/FLAT), %d candidates (threshold=%.2f)",
-            len(states), max(0, trend_evaluated), regime_skipped, len(candidates),
-            threshold,
+            "Scan: %d assets, %d scored (%d breakout-eligible), %d skipped, %d candidates (threshold=%.2f, vb=%s)",
+            len(states), total_evaluated, breakout_evaluated,
+            regime_skipped, len(candidates), threshold,
+            "ON" if vb_enabled else "OFF",
         )
 
         # --- Sort by P(TP) desc, execute top N ---
@@ -748,6 +804,54 @@ class ConservativeBot:
                     break
             if await self._execute_setup(setup):
                 executed += 1
+
+    def _is_volume_breakout(self, state: MarketState) -> bool:
+        """Check if current candle qualifies as a volume breakout.
+
+        Conditions:
+        - volume_ratio >= config threshold (volume spike vs SMA20)
+        - candle body >= config threshold (volume moved the price)
+        - atr_pct >= config threshold (market is alive)
+        - RSI within config bounds (not in extremes)
+        """
+        cfg = self.config
+        vol_ratio = float(state.volume_ratio) if state.volume_ratio is not None else 0.0
+        if vol_ratio < cfg.volume_breakout_min_volume_ratio:
+            return False
+
+        close = float(state.close)
+        open_price = float(state.open)
+        if open_price <= 0:
+            return False
+        candle_body_pct = abs(close - open_price) / open_price * 100
+        if candle_body_pct < cfg.volume_breakout_min_candle_body_pct:
+            return False
+
+        if float(state.atr_pct) < cfg.volume_breakout_min_atr_pct:
+            return False
+
+        rsi = float(state.rsi)
+        if not (cfg.volume_breakout_rsi_min <= rsi <= cfg.volume_breakout_rsi_max):
+            return False
+
+        return True
+
+    @staticmethod
+    def _breakout_direction(state: MarketState) -> Direction:
+        """Determine breakout direction from price momentum (NOT EMA).
+
+        LONG: close > open AND close > prev_close
+        SHORT: close < open AND close < prev_close
+        """
+        close = float(state.close)
+        open_price = float(state.open)
+        prev_close = float(state.prev_close) if state.prev_close is not None else close
+
+        if close > open_price and close > prev_close:
+            return Direction.LONG
+        if close < open_price and close < prev_close:
+            return Direction.SHORT
+        return Direction.FLAT
 
     async def _execute_setup(self, setup: Setup) -> bool:
         """Execute a setup: check spread and tick size, then publish to risk manager.

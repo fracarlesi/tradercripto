@@ -162,6 +162,20 @@ strategies:
     enabled: false  # Replaced by ML-primary pipeline
 
 # -----------------------------------------------------------------------------
+# Volume Breakout Signal
+# -----------------------------------------------------------------------------
+volume_breakout:
+  enabled: true
+  min_volume_ratio: 2.0       # Volume 2x above SMA20
+  min_candle_body_pct: 0.3    # |close-open|/open * 100
+  min_atr_pct: 0.15           # Minimum volatility
+  rsi_min: 25                 # RSI floor
+  rsi_max: 80                 # RSI ceiling
+  allowed_regimes:            # Can fire in CHAOS (key advantage!)
+    - "chaos"
+    - "trend"
+
+# -----------------------------------------------------------------------------
 # LLM Veto - DeepSeek confirmation/veto
 # -----------------------------------------------------------------------------
 llm:

@@ -37,6 +37,8 @@ class MLTradeModel:
         "close_vs_ema200",
         "regime_encoded",   # TREND=2.0, CHAOS=1.0, RANGE=0.0
         "hour_of_day",      # UTC hour / 24.0 — intraday session pattern
+        "signal_type",      # 0.0=EMA crossover, 1.0=volume breakout
+        "candle_body_pct",  # |close-open|/open * 100 — price conviction
     ]
 
     _DEFAULT_PARAMS: dict = {
@@ -265,11 +267,12 @@ class MLTradeModel:
     # Feature extraction
     # ------------------------------------------------------------------
 
-    def extract_features(self, state: MarketState, **kwargs: float) -> dict:
+    def extract_features(self, state: MarketState, signal_type: float = 0.0, **kwargs: float) -> dict:
         """Extract features from a live MarketState for prediction.
 
         Args:
             state: MarketState with all indicators
+            signal_type: 0.0 for EMA crossover, 1.0 for volume breakout
             **kwargs: Ignored. Accepts (but discards) legacy kwargs like
                 spread_pct for backward compatibility.
 
@@ -282,6 +285,7 @@ class MLTradeModel:
         regime_encoded = _REGIME_MAP.get(state.regime, 1.0)
 
         close = float(state.close)
+        open_price = float(state.open)
         ema9 = float(state.ema9) if state.ema9 is not None else close
         ema21 = float(state.ema21) if state.ema21 is not None else close
         ema200 = float(state.ema200)
@@ -302,6 +306,9 @@ class MLTradeModel:
         # Hour of day (UTC), normalized to [0, 1)
         hour_of_day = state.timestamp.hour / 24.0
 
+        # Candle body percentage
+        candle_body_pct = abs(close - open_price) / open_price * 100 if open_price > 0 else 0.0
+
         return {
             "adx": float(state.adx),
             "rsi": float(state.rsi),
@@ -314,6 +321,8 @@ class MLTradeModel:
             "close_vs_ema200": close_vs_ema200,
             "regime_encoded": regime_encoded,
             "hour_of_day": hour_of_day,
+            "signal_type": signal_type,
+            "candle_body_pct": candle_body_pct,
         }
 
     # ------------------------------------------------------------------

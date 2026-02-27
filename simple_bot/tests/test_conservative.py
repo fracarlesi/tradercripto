@@ -513,6 +513,18 @@ class TestRegimeGate:
         bot._ml_model.optimal_threshold = 0.60
         bot._ml_model.extract_features = MagicMock(return_value={"feat": 1.0})
         bot._ml_model.predict = MagicMock(return_value=(0.75, "mock reason"))
+        # n_features_in_ determines if volume breakout path is active
+        bot._ml_model._model = MagicMock()
+        bot._ml_model._model.n_features_in_ = 13
+
+        # Volume breakout config
+        bot._config.volume_breakout_enabled = True
+        bot._config.volume_breakout_min_volume_ratio = 2.0
+        bot._config.volume_breakout_min_candle_body_pct = 0.3
+        bot._config.volume_breakout_min_atr_pct = 0.15
+        bot._config.volume_breakout_rsi_min = 25.0
+        bot._config.volume_breakout_rsi_max = 80.0
+        bot._config.volume_breakout_allowed_regimes = ["chaos", "trend"]
 
         # Services: no kill switch, no cooldown, no protections
         bot._services = {}
@@ -653,6 +665,18 @@ class TestMLThresholdSelection:
         bot._ml_model.optimal_threshold = optimal_threshold
         bot._ml_model.extract_features = MagicMock(return_value={"feat": 1.0})
         bot._ml_model.predict = MagicMock(return_value=(predict_prob, "mock reason"))
+        # n_features_in_ determines if volume breakout path is active
+        bot._ml_model._model = MagicMock()
+        bot._ml_model._model.n_features_in_ = 13
+
+        # Volume breakout config
+        bot._config.volume_breakout_enabled = True
+        bot._config.volume_breakout_min_volume_ratio = 2.0
+        bot._config.volume_breakout_min_candle_body_pct = 0.3
+        bot._config.volume_breakout_min_atr_pct = 0.15
+        bot._config.volume_breakout_rsi_min = 25.0
+        bot._config.volume_breakout_rsi_max = 80.0
+        bot._config.volume_breakout_allowed_regimes = ["chaos", "trend"]
 
         bot._services = {}
         return bot

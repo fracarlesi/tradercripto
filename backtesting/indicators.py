@@ -236,6 +236,8 @@ def compute_indicators(candles: list[dict], cfg: BacktestConfig,
     closes = np.array([c["c"] for c in candles])
     highs = np.array([c["h"] for c in candles])
     lows = np.array([c["l"] for c in candles])
+    opens = np.array([c["o"] for c in candles])
+    volumes = np.array([c["v"] for c in candles])
 
     s = timeframe_scale
     ema9 = calc_ema(closes, 9 * s)
@@ -260,10 +262,14 @@ def compute_indicators(candles: list[dict], cfg: BacktestConfig,
     # Regime with hysteresis
     is_trend = compute_regime_series(adx, ema200_slope, cfg)
 
+    # Volume SMA20 (for volume breakout signal)
+    vol_sma20 = calc_sma(volumes, 20)
+
     return {
         "ema9": ema9, "ema21": ema21, "ema200": ema200,
         "ema200_slope": ema200_slope,
         "rsi": rsi, "adx": adx, "atr": atr, "atr_pct": atr_pct,
         "is_trend": is_trend,
         "closes": closes, "highs": highs, "lows": lows,
+        "opens": opens, "volumes": volumes, "vol_sma20": vol_sma20,
     }

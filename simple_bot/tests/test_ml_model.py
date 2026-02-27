@@ -19,7 +19,7 @@ from simple_bot.core.models import MarketState, Regime, Direction
 
 @pytest.fixture
 def mock_dataset() -> pd.DataFrame:
-    """Create a synthetic dataset for testing (11 features)."""
+    """Create a synthetic dataset for testing (13 features)."""
     np.random.seed(42)
     n = 200
     data = {
@@ -34,6 +34,8 @@ def mock_dataset() -> pd.DataFrame:
         "close_vs_ema200": np.random.uniform(-5, 5, n),
         "regime_encoded": np.random.choice([0.0, 1.0, 2.0], n),
         "hour_of_day": np.random.uniform(0, 1, n),
+        "signal_type": np.random.choice([0.0, 1.0], n),
+        "candle_body_pct": np.random.uniform(0, 3.0, n),
         "label": np.random.randint(0, 2, n),
     }
     return pd.DataFrame(data)
@@ -125,11 +127,13 @@ class TestMLTraining:
         assert 0.0 <= metrics["auc"] <= 1.0
         assert 0.0 <= metrics["cv_auc_mean"] <= 1.0
 
-    def test_feature_count_is_11(self) -> None:
-        """FEATURES should have exactly 11 entries (10 original + hour_of_day)."""
-        assert len(MLTradeModel.FEATURES) == 11
+    def test_feature_count_is_13(self) -> None:
+        """FEATURES should have exactly 13 entries (11 + signal_type + candle_body_pct)."""
+        assert len(MLTradeModel.FEATURES) == 13
         assert "spread_pct" not in MLTradeModel.FEATURES
         assert "hour_of_day" in MLTradeModel.FEATURES
+        assert "signal_type" in MLTradeModel.FEATURES
+        assert "candle_body_pct" in MLTradeModel.FEATURES
 
     def test_train_uses_early_stopping(self, mock_dataset: pd.DataFrame) -> None:
         """Final model should use early stopping (n_estimators may be < 100)."""
@@ -151,6 +155,7 @@ class TestMLPrediction:
             "bb_position": 0.6, "ema9_slope": 0.002,
             "ema21_slope": 0.001, "close_vs_ema200": 2.0,
             "regime_encoded": 2.0, "hour_of_day": 0.5,
+            "signal_type": 0.0, "candle_body_pct": 0.5,
         }
         prob, explanation = trained_model.predict(features)
 
@@ -274,6 +279,38 @@ class TestFeatureExtraction:
         sample_market_state.timestamp = datetime(2026, 2, 24, 0, 0, tzinfo=timezone.utc)
         features = trained_model.extract_features(sample_market_state)
         assert features["hour_of_day"] == 0.0
+
+    def test_extract_features_signal_type_default(
+        self, trained_model: MLTradeModel, sample_market_state: MarketState
+    ) -> None:
+        """signal_type defaults to 0.0 (EMA crossover)."""
+        features = trained_model.extract_features(sample_market_state)
+        assert features["signal_type"] == 0.0
+
+    def test_extract_features_signal_type_breakout(
+        self, trained_model: MLTradeModel, sample_market_state: MarketState
+    ) -> None:
+        """signal_type=1.0 for volume breakout."""
+        features = trained_model.extract_features(sample_market_state, signal_type=1.0)
+        assert features["signal_type"] == 1.0
+
+    def test_extract_features_candle_body_pct(
+        self, trained_model: MLTradeModel, sample_market_state: MarketState
+    ) -> None:
+        """candle_body_pct = |close - open| / open * 100."""
+        features = trained_model.extract_features(sample_market_state)
+        # open=50000, close=50200 → |200|/50000 * 100 = 0.4%
+        expected = abs(50200 - 50000) / 50000 * 100
+        assert features["candle_body_pct"] == pytest.approx(expected)
+
+    def test_extract_features_candle_body_pct_negative(
+        self, trained_model: MLTradeModel, sample_market_state: MarketState
+    ) -> None:
+        """candle_body_pct uses absolute value (bearish candle same as bullish)."""
+        sample_market_state.close = Decimal("49800")  # close < open
+        features = trained_model.extract_features(sample_market_state)
+        expected = abs(49800 - 50000) / 50000 * 100  # 0.4%
+        assert features["candle_body_pct"] == pytest.approx(expected)
 
     def test_extract_features_accepts_legacy_spread_pct_kwarg(
         self, trained_model: MLTradeModel, sample_market_state: MarketState
@@ -475,6 +512,7 @@ class TestMLPersistence:
             "bb_position": 0.6, "ema9_slope": 0.002,
             "ema21_slope": 0.001, "close_vs_ema200": 2.0,
             "regime_encoded": 2.0, "hour_of_day": 0.5,
+            "signal_type": 0.0, "candle_body_pct": 0.5,
         }
         prob_before, _ = trained_model.predict(features)
 
