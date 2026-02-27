@@ -40,6 +40,10 @@ def build_parser() -> argparse.ArgumentParser:
                            help="Compare 5m/15m/1h timeframes")
     add_common(sp_tf)
 
+    sp_thresh = sub.add_parser("threshold",
+                               help="Compare P&L at each ML threshold level")
+    add_common(sp_thresh)
+
     return parser
 
 
@@ -55,6 +59,8 @@ def main(argv: list[str] | None = None) -> None:
         from backtesting.modes.regime import run
     elif args.mode == "timeframes":
         from backtesting.modes.timeframes import run
+    elif args.mode == "threshold":
+        from backtesting.modes.threshold import run
     else:
         parser.print_help()
         sys.exit(1)
