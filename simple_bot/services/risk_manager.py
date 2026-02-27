@@ -131,6 +131,10 @@ class RiskManagerService(BaseService):
         self._last_trade_time: Dict[str, datetime] = {}
         self._cooldown_minutes: int = 3  # Minimum minutes between trades on same symbol
 
+        # Extended cooldown for structural rejections (e.g. OI cap reached)
+        self._rejection_cooldowns: Dict[str, datetime] = {}  # symbol -> cooldown_until
+        self._rejection_cooldown_minutes: int = 30
+
         # In-memory daily trade counter (resets at UTC midnight)
         self._trades_today: int = 0
         self._last_trade_day: Optional[datetime] = None
@@ -333,6 +337,21 @@ class RiskManagerService(BaseService):
             if event in ("order_error", "order_cancelled", "slippage_rejected"):
                 self.clear_pending_intent(symbol)
                 self.decrement_trade_count()
+
+                # Apply extended cooldown for structural rejections
+                error_msg = payload.get("error", "")
+                if "open interest is at cap" in error_msg.lower():
+                    cooldown_until = datetime.now(timezone.utc) + timedelta(
+                        minutes=self._rejection_cooldown_minutes
+                    )
+                    self._rejection_cooldowns[symbol] = cooldown_until
+                    self._logger.warning(
+                        "OI cap rejection for %s — cooldown %dmin until %s",
+                        symbol,
+                        self._rejection_cooldown_minutes,
+                        cooldown_until.strftime("%H:%M UTC"),
+                    )
+
                 self._logger.info(
                     "Cleared pending intent for %s on %s event", symbol, event
                 )
@@ -417,6 +436,16 @@ class RiskManagerService(BaseService):
 
         if setup.symbol in self._pending_intents:
             return _reject(f"Already pending intent: {setup.symbol}")
+
+        # Extended rejection cooldown (e.g. OI cap reached — no point retrying)
+        if setup.symbol in self._rejection_cooldowns:
+            cooldown_until = self._rejection_cooldowns[setup.symbol]
+            now = datetime.now(timezone.utc)
+            if now < cooldown_until:
+                remaining = (cooldown_until - now).total_seconds() / 60
+                return _reject(f"Rejection cooldown: {remaining:.0f}min remaining for {setup.symbol}")
+            else:
+                del self._rejection_cooldowns[setup.symbol]
 
         # Per-symbol cooldown check
         if setup.symbol in self._last_trade_time:
