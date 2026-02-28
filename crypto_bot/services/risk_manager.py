@@ -302,6 +302,14 @@ class RiskManagerService(BaseService):
                     setup.id,
                     risk_params.rejection_reason,
                 )
+                # Publish rejection for counterfactual logger
+                await self.publish(Topic.ORDERS, {
+                    "event": "setup_rejected",
+                    "symbol": setup.symbol,
+                    "direction": setup.direction.value,
+                    "entry_price": float(setup.entry_price),
+                    "reason": risk_params.rejection_reason,
+                })
                 return
 
             # Create TradeIntent

@@ -306,7 +306,9 @@ class ConservativeBot:
         "risk_manager",    # Sizing
         "execution",       # Order placement
         "telegram",        # Notifications (non-critical)
-        "whatsapp",        # Notifications (non-critical)
+        "whatsapp",              # Notifications (non-critical)
+        "performance_monitor",   # Trade performance tracking
+        "counterfactual_logger", # Rejected trade analysis
     ]
 
     def __init__(
@@ -542,6 +544,21 @@ class ConservativeBot:
             config=self._raw_config, telegram=telegram_service,
         )
 
+        # Performance Monitor
+        whatsapp_svc = self._services.get("whatsapp")
+
+        from .services.performance_monitor import PerformanceMonitorService
+        self._services["performance_monitor"] = PerformanceMonitorService(
+            bus=self._bus, config=self._raw_config, whatsapp=whatsapp_svc,
+        )
+
+        # Counterfactual Logger
+        from .services.counterfactual_logger import CounterfactualLoggerService
+        self._services["counterfactual_logger"] = CounterfactualLoggerService(
+            bus=self._bus, config=self._raw_config, whatsapp=whatsapp_svc,
+            take_profit_pct=cfg.take_profit_pct, stop_loss_pct=cfg.stop_loss_pct,
+        )
+
         # ML Model - required
         model_loaded = self._ml_model.load(cfg.ml_model_path)
         if model_loaded:
@@ -638,6 +655,11 @@ class ConservativeBot:
         if not states:
             logger.warning("No market states available")
             return
+
+        # --- Update counterfactual logger with fresh market states ---
+        cf_logger = self._services.get("counterfactual_logger")
+        if cf_logger and states:
+            cf_logger.update_market_states(states)
 
         # --- ML model gate ---
         if not self._ml_model.is_loaded:
@@ -740,6 +762,18 @@ class ConservativeBot:
 
             # No path fired above threshold
             if best_prob < threshold:
+                # Counterfactual: log near-miss ML rejections (prob within 0.10 of threshold)
+                if (cf_logger and best_prob > 0
+                        and best_prob >= threshold - 0.10
+                        and best_direction != Direction.FLAT):
+                    cf_logger.log_rejection(
+                        symbol=symbol,
+                        direction=best_direction.value,
+                        entry_price=float(state.close),
+                        reason="ml_threshold",
+                        ml_probability=best_prob,
+                    )
+
                 regime_in_any = (
                     state.regime == Regime.TREND
                     or (vb_enabled and state.regime.value.lower() in vb_allowed_regimes)
@@ -968,6 +1002,15 @@ class ConservativeBot:
                     "SKIP %s: bid-ask spread %.3f%% > max %.2f%% (illiquid)",
                     setup.symbol, spread_pct, self.config.max_spread_pct,
                 )
+                cf_logger = self._services.get("counterfactual_logger")
+                if cf_logger:
+                    cf_logger.log_rejection(
+                        symbol=setup.symbol,
+                        direction=setup.direction.value,
+                        entry_price=float(setup.entry_price),
+                        reason="spread",
+                        ml_probability=float(getattr(setup, "confidence", 0) or 0),
+                    )
                 return False
 
         # Check tick size vs TP/SL — skip if rounding would collapse stops
@@ -983,6 +1026,15 @@ class ConservativeBot:
                     "SKIP %s: price $%.6f too low for TP/SL (tick=%.6f, SL_dist=%.6f)",
                     setup.symbol, price, min_tick, tp_distance,
                 )
+                cf_logger = self._services.get("counterfactual_logger")
+                if cf_logger:
+                    cf_logger.log_rejection(
+                        symbol=setup.symbol,
+                        direction=setup.direction.value,
+                        entry_price=price,
+                        reason="tick_size",
+                        ml_probability=float(getattr(setup, "confidence", 0) or 0),
+                    )
                 return False
 
         # Publish setup for risk manager
