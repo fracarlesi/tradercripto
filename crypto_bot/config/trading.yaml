@@ -214,8 +214,8 @@ execution:
   prefer_limit: true
   limit_timeout_seconds: 60
 
-  max_slippage_pct: 0.25       # Relaxed for altcoins — ML handles spread economics
-  max_spread_pct: 0.35         # Relaxed — sweep confirms profitability with 0.05% slippage
+  max_slippage_pct: 0.30       # Aligned with spread — was 0.25% causing instant position closes
+  max_spread_pct: 0.30         # Tightened from 0.35% — aligned with slippage to avoid open+close waste
 
   max_retries: 3
   retry_delay_seconds: 5

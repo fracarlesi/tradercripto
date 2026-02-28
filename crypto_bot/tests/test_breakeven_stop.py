@@ -2,7 +2,7 @@
 Tests for Breakeven Stop Feature
 =================================
 
-When a position's unrealized P&L reaches +0.6%, the stop-loss trigger
+When a position's unrealized P&L reaches +1.2%, the stop-loss trigger
 is moved slightly above (LONG) or below (SHORT) the entry price
 (breakeven + fee offset), making the trade risk-free.
 
@@ -75,12 +75,12 @@ class TestBreakevenLong:
 
     @pytest.mark.asyncio
     async def test_activates_at_threshold(self) -> None:
-        """Breakeven triggers when long P&L reaches exactly +0.6%."""
+        """Breakeven triggers when long P&L reaches exactly +1.2%."""
         engine = _make_engine()
-        # +0.6% on a 100_000 entry = 100_600
+        # +1.2% on a 100_000 entry = 101_200
         pos = _make_position(
             entry_price=100_000.0,
-            current_price=100_600.0,
+            current_price=101_200.0,
             side="long",
         )
         engine.active_positions["BTC"] = pos
@@ -104,11 +104,11 @@ class TestBreakevenLong:
 
     @pytest.mark.asyncio
     async def test_activates_above_threshold(self) -> None:
-        """Breakeven triggers when P&L exceeds +0.3% (e.g. +1%)."""
+        """Breakeven triggers when P&L exceeds +1.2% (e.g. +1.5%)."""
         engine = _make_engine()
         pos = _make_position(
             entry_price=100_000.0,
-            current_price=101_000.0,  # +1%
+            current_price=101_500.0,  # +1.5%
             side="long",
         )
         engine.active_positions["BTC"] = pos
@@ -163,12 +163,12 @@ class TestBreakevenShort:
 
     @pytest.mark.asyncio
     async def test_activates_at_threshold(self) -> None:
-        """Breakeven triggers when short P&L reaches +0.6% (price drops 0.6%)."""
+        """Breakeven triggers when short P&L reaches +1.2% (price drops 1.2%)."""
         engine = _make_engine()
-        # SHORT: profit when price goes DOWN.  entry=100k, current=99_400 => +0.6%
+        # SHORT: profit when price goes DOWN.  entry=100k, current=98_800 => +1.2%
         pos = _make_position(
             entry_price=100_000.0,
-            current_price=99_400.0,
+            current_price=98_800.0,
             side="short",
             sl_price=100_800.0,
         )
@@ -308,7 +308,7 @@ class TestBreakevenOrderLifecycle:
         engine = _make_engine()
         pos = _make_position(
             entry_price=100_000.0,
-            current_price=100_700.0,
+            current_price=101_300.0,  # +1.3% > 1.2% threshold
             side="long",
             sl_order_id=None,
             sl_price=None,
@@ -328,7 +328,7 @@ class TestBreakevenOrderLifecycle:
         engine.client.cancel_order.side_effect = Exception("Order not found")
         pos = _make_position(
             entry_price=100_000.0,
-            current_price=100_700.0,
+            current_price=101_300.0,  # +1.3% > 1.2% threshold
             side="long",
         )
         engine.active_positions["BTC"] = pos
@@ -350,7 +350,7 @@ class TestBreakevenOrderLifecycle:
         )
         pos = _make_position(
             entry_price=100_000.0,
-            current_price=100_700.0,
+            current_price=101_300.0,  # +1.3% > 1.2% threshold
             side="long",
         )
         engine.active_positions["BTC"] = pos
@@ -371,7 +371,7 @@ class TestBreakevenOrderLifecycle:
         pos_btc = _make_position(
             symbol="BTC",
             entry_price=100_000.0,
-            current_price=100_600.0,  # +0.6%
+            current_price=101_200.0,  # +1.2%
             side="long",
             sl_order_id="111",
         )
@@ -379,7 +379,7 @@ class TestBreakevenOrderLifecycle:
         pos_eth = _make_position(
             symbol="ETH",
             entry_price=3_000.0,
-            current_price=3_005.0,  # +0.17% (below 0.6%)
+            current_price=3_005.0,  # +0.17% (below 1.2%)
             side="long",
             sl_order_id="222",
         )
@@ -433,7 +433,7 @@ class TestBreakevenConstant:
     """Verify the BREAKEVEN_THRESHOLD_PCT and BREAKEVEN_OFFSET_PCT constants."""
 
     def test_threshold_value(self) -> None:
-        assert BREAKEVEN_THRESHOLD_PCT == 0.6
+        assert BREAKEVEN_THRESHOLD_PCT == 1.2
 
     def test_offset_value(self) -> None:
         assert BREAKEVEN_OFFSET_PCT == 0.15
