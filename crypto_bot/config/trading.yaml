@@ -3,7 +3,7 @@
 # =============================================================================
 # Strategy: EMA9/EMA21 crossover on 15m with RSI filter
 # Target: Aggressive growth on small account ($86 USDC)
-# Risk: Fixed TP/SL (1.6%/0.8%), 10x leverage, LONG+SHORT
+# Risk: Fixed TP/SL (1.6%/1.0%), 10x leverage, LONG+SHORT
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -125,8 +125,8 @@ kill_switch:
 # Stops - Fixed TP/SL
 # -----------------------------------------------------------------------------
 stops:
-  stop_loss_pct: 0.8
-  take_profit_pct: 1.6
+  stop_loss_pct: 1.0       # Was 0.8 — sweep showed wider SL avoids premature stop-outs (+11pp win rate)
+  take_profit_pct: 1.6     # Confirmed optimal by sweep (R:R 1.6:1)
   use_server_side: true
 
   # ATR-based trailing (for reference, not primary)
@@ -290,7 +290,7 @@ metrics:
 ml_model:
   enabled: true
   model_path: "models/trade_model.joblib"
-  min_probability: 0.50        # P(TP) minima per tradare
+  min_probability: 0.55        # Sweep optimal — was 0.50, sweet spot at 0.55
   retrain_days: 30             # Giorni di dati per training
   retrain_interval_days: 3     # Ogni quanto ri-addestrare
 
