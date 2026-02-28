@@ -19,7 +19,11 @@ import pandas as pd
 from backtesting.api import fetch_all_candles, get_all_assets
 from backtesting.config import load_config
 from backtesting.indicators import calc_bollinger, compute_indicators
-from backtesting.signals import signal_ema_crossover_entry, signal_volume_breakout_entry
+from backtesting.signals import (
+    signal_ema_crossover_entry,
+    signal_momentum_burst_entry,
+    signal_volume_breakout_entry,
+)
 from backtesting.simulator import PortfolioSimulator
 from backtesting.stats import (
     BacktestResult,
@@ -103,6 +107,9 @@ def _extract_features(
     # Candle body pct
     candle_body_pct = abs(close - open_price) / open_price * 100 if open_price > 0 else 0.0
 
+    # RSI slope (2-bar lookback)
+    rsi_slope = float(rsi_val - ind["rsi"][idx - 2]) if idx >= 2 and not np.isnan(ind["rsi"][idx - 2]) else 0.0
+
     return {
         "adx": float(adx_val),
         "rsi": float(rsi_val),
@@ -117,6 +124,7 @@ def _extract_features(
         "hour_of_day": hour_of_day,
         "signal_type": signal_type,
         "candle_body_pct": candle_body_pct,
+        "rsi_slope": rsi_slope,
     }
 
 
@@ -216,7 +224,7 @@ def run(args: argparse.Namespace) -> None:
     print("Scoring all signals with ML model...")
     # Each entry: (timestamp, asset, direction, probability, signal_label)
     scored_signals: list[tuple[int, str, int, float, str]] = []
-    n_crossover = n_breakout = 0
+    n_crossover = n_breakout = n_momentum_burst = 0
 
     for asset in asset_candles:
         candles = asset_candles[asset]
@@ -256,8 +264,22 @@ def run(args: argparse.Namespace) -> None:
                         scored_signals.append((ts, asset, sig_vb, proba, "vb"))
                         n_breakout += 1
 
+            # PATH 3: Momentum burst (CHAOS + TREND)
+            if _is_chaos_or_trend(ind, bar_idx):
+                sig_mb = signal_momentum_burst_entry(ind, bar_idx)
+                if sig_mb != 0:
+                    features = _extract_features(
+                        candles, ind, bar_idx, bb_upper, bb_lower,
+                        signal_type=2.0,
+                    )
+                    if features is not None:
+                        proba = _predict(model, features, feature_names)
+                        scored_signals.append((ts, asset, sig_mb, proba, "mb"))
+                        n_momentum_burst += 1
+
     print(f"Scored {len(scored_signals)} signals "
-          f"({n_crossover} crossover + {n_breakout} breakout)")
+          f"({n_crossover} crossover + {n_breakout} breakout + "
+          f"{n_momentum_burst} momentum burst)")
     print()
 
     if not scored_signals:
@@ -278,7 +300,8 @@ def run(args: argparse.Namespace) -> None:
 
     # Run simulation for each threshold
     results: list[BacktestResult] = []
-    signal_counts: dict[str, tuple[int, int]] = {}  # threshold → (ema_count, vb_count)
+    # threshold → (ema_count, vb_count, mb_count)
+    signal_counts: dict[str, tuple[int, int, int]] = {}
 
     for threshold in THRESHOLDS:
         label = f"T={threshold:.2f}"
@@ -286,7 +309,7 @@ def run(args: argparse.Namespace) -> None:
             label += " (calibrated)"
 
         sim = PortfolioSimulator(cfg, label=label)
-        ema_count = vb_count = 0
+        ema_count = vb_count = mb_count = 0
 
         for ts in timeline:
             # Check exits first
@@ -303,29 +326,32 @@ def run(args: argparse.Namespace) -> None:
                         if sim.try_open(asset, direction, entry_price, ts):
                             if sig_label == "ema":
                                 ema_count += 1
-                            else:
+                            elif sig_label == "vb":
                                 vb_count += 1
+                            else:
+                                mb_count += 1
 
         sim.force_close_all(asset_candles)
         results.append(BacktestResult.from_simulator(sim, label))
-        signal_counts[label] = (ema_count, vb_count)
+        signal_counts[label] = (ema_count, vb_count, mb_count)
 
     # Output
     if args.json:
         print_results_json(results)
     else:
         # Extended table with signal breakdown
-        print("=" * 120)
-        print(f"{'Threshold':<22} {'Trades':>6} {'EMA':>5} {'VB':>5} {'Wins':>5} {'Win%':>6} "
+        print("=" * 130)
+        print(f"{'Threshold':<22} {'Trades':>6} {'EMA':>5} {'VB':>5} {'MB':>5} {'Wins':>5} {'Win%':>6} "
               f"{'Net P&L':>9} {'MaxDD':>8} {'Fees':>8} {'PF':>6} {'Sharpe':>7} {'Assets':>6}")
-        print("-" * 120)
+        print("-" * 130)
         for r in results:
-            ema_c, vb_c = signal_counts.get(r.label, (0, 0))
+            counts = signal_counts.get(r.label, (0, 0, 0))
+            ema_c, vb_c, mb_c = counts[0], counts[1], counts[2]
             marker = " ◀" if "calibrated" in r.label else ""
-            print(f"{r.label:<22} {r.count:>6} {ema_c:>5} {vb_c:>5} {r.wins:>5} {r.win_rate:>5.1f}% "
+            print(f"{r.label:<22} {r.count:>6} {ema_c:>5} {vb_c:>5} {mb_c:>5} {r.wins:>5} {r.win_rate:>5.1f}% "
                   f"${r.net_pnl:>+7.2f} ${r.max_drawdown:>6.2f} "
                   f"${r.total_fees:>6.2f} {r.profit_factor:>6.2f} {r.sharpe:>7.2f} {r.unique_assets:>5}{marker}")
-        print("=" * 120)
+        print("=" * 130)
 
         # Find sweet spot
         profitable = [r for r in results if r.net_pnl > 0]

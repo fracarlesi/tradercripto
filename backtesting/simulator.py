@@ -36,16 +36,21 @@ class PortfolioSimulator:
         d = pos["direction"]
         exit_price = exit_reason = None
 
-        if d == 1:  # LONG
+        slip = self.cfg.slippage_pct
+        if d == 1:  # LONG — exit = sell → slippage hurts (lower fill)
             if candle["l"] <= pos["sl"]:
-                exit_price, exit_reason = pos["sl"], "SL"
+                exit_price = pos["sl"] * (1 - slip)
+                exit_reason = "SL"
             elif candle["h"] >= pos["tp"]:
-                exit_price, exit_reason = pos["tp"], "TP"
-        else:  # SHORT
+                exit_price = pos["tp"] * (1 - slip)
+                exit_reason = "TP"
+        else:  # SHORT — exit = buy to cover → slippage hurts (higher fill)
             if candle["h"] >= pos["sl"]:
-                exit_price, exit_reason = pos["sl"], "SL"
+                exit_price = pos["sl"] * (1 + slip)
+                exit_reason = "SL"
             elif candle["l"] <= pos["tp"]:
-                exit_price, exit_reason = pos["tp"], "TP"
+                exit_price = pos["tp"] * (1 + slip)
+                exit_reason = "TP"
 
         if exit_price is not None:
             self._close(symbol, exit_price, exit_reason, candle["t"])
@@ -63,6 +68,13 @@ class PortfolioSimulator:
         notional = self.equity * self._pct * self._lev
         if notional <= 0 or entry_price <= 0:
             return False
+
+        # Adverse slippage on entry
+        slip = self.cfg.slippage_pct
+        if direction == 1:  # LONG — fill higher
+            entry_price *= (1 + slip)
+        else:  # SHORT — fill lower
+            entry_price *= (1 - slip)
 
         tp_pct = self.cfg.tp_pct
         sl_pct = self.cfg.sl_pct

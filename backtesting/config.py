@@ -27,6 +27,8 @@ class BacktestConfig:
     # Account
     account_size: float = 86.0
     fee_pct: float = 0.0007  # 0.07% per side (Hyperliquid constant)
+    slippage_pct: float = 0.0005  # 0.05% adverse slippage on entry/exit
+    spread_filter_pct: float = 0.30  # Max spread % (pre-trade filter)
 
     # From stops.*
     tp_pct: float = 0.008  # 0.8%

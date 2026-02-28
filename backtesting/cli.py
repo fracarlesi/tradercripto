@@ -44,6 +44,10 @@ def build_parser() -> argparse.ArgumentParser:
                                help="Compare P&L at each ML threshold level")
     add_common(sp_thresh)
 
+    sp_sweep = sub.add_parser("sweep",
+                              help="Grid-search TP/SL/threshold/slippage")
+    add_common(sp_sweep)
+
     return parser
 
 
@@ -61,6 +65,8 @@ def main(argv: list[str] | None = None) -> None:
         from backtesting.modes.timeframes import run
     elif args.mode == "threshold":
         from backtesting.modes.threshold import run
+    elif args.mode == "sweep":
+        from backtesting.modes.sweep import run
     else:
         parser.print_help()
         sys.exit(1)
