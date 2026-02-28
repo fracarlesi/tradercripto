@@ -339,6 +339,15 @@ class ExecutionEngineService(BaseService):
         self._tp_sl_confirmed: Set[str] = set()  # Positions with TP/SL confirmed (retry on each sync until success)
         self._closing_positions: Set[str] = set()  # Positions with close order already sent (prevent SL/TP spam)
         self._settling_symbols: Set[str] = set()  # Symbols mid-open/close/rejection — sync loop must skip
+
+        # Partial fill tracking: order_id -> (first_seen_time, last_seen_size)
+        # Used to give partial fills a grace period before processing as complete.
+        self._partial_fill_first_seen: Dict[str, tuple[datetime, float]] = {}
+
+        # Size at which TP/SL were last placed for each symbol.
+        # Used by _sync_positions_from_exchange to detect when the position
+        # grows (additional fills) and TP/SL need to be re-placed.
+        self._tp_sl_placed_size: Dict[str, float] = {}
         
         # Metrics
         self.metrics = ExecutionMetrics()
@@ -1102,7 +1111,10 @@ class ExecutionEngineService(BaseService):
 
         # Set TP/SL orders
         await self._set_tp_sl(signal, order, position)
-    
+
+        # Record the size for which TP/SL were placed (for partial fill detection)
+        self._tp_sl_placed_size[symbol] = float(size)
+
     async def _ensure_tp_sl_for_position(self, position: ExecutionPosition) -> None:
         """
         Ensure a position has TP and SL orders set.
@@ -1242,6 +1254,9 @@ class ExecutionEngineService(BaseService):
             self._logger.info("SL trigger order placed for %s: %s @ %.4f", symbol, position.sl_order_id, sl_price)
         except Exception as e:
             self._logger.error("Failed to place SL order for %s after retries: %s", symbol, e)
+
+        # Record size for partial fill detection
+        self._tp_sl_placed_size[symbol] = float(size)
 
     def _validate_stop_distance(
         self,
@@ -1461,10 +1476,111 @@ class ExecutionEngineService(BaseService):
         except Exception as e:
             self._logger.error("Failed to place SL trigger order after retries: %s", e)
     
+    async def _update_tp_sl_for_size_change(
+        self, position: ExecutionPosition
+    ) -> None:
+        """Cancel existing TP/SL and re-place them for the updated position size.
+
+        Called when ``_sync_positions_from_exchange`` detects that the exchange
+        position size has grown (additional fills arrived after TP/SL were
+        already placed for a smaller partial fill).
+
+        The new TP/SL are placed at the **same price levels** as before
+        (the entry price may have changed slightly due to average fill, but
+        the percentage distances remain the same).  Only the **size** on the
+        trigger orders is updated.
+
+        Args:
+            position: The active position whose size has changed.
+        """
+        symbol = position.symbol
+        is_long = position.side == "long"
+        new_size = position.size
+
+        # 1) Cancel old TP trigger
+        if position.tp_order_id:
+            try:
+                await self.client.cancel_order(symbol, int(position.tp_order_id))
+                self._logger.info(
+                    "Cancelled old TP %s for %s (size change)",
+                    position.tp_order_id, symbol,
+                )
+            except Exception as e:
+                self._logger.warning(
+                    "Failed to cancel old TP %s for %s: %s",
+                    position.tp_order_id, symbol, e,
+                )
+
+        # 2) Cancel old SL trigger
+        if position.sl_order_id:
+            try:
+                await self.client.cancel_order(symbol, int(position.sl_order_id))
+                self._logger.info(
+                    "Cancelled old SL %s for %s (size change)",
+                    position.sl_order_id, symbol,
+                )
+            except Exception as e:
+                self._logger.warning(
+                    "Failed to cancel old SL %s for %s: %s",
+                    position.sl_order_id, symbol, e,
+                )
+
+        # 3) Re-place TP at the same price, new size
+        if position.tp_price:
+            try:
+                tp_result = await self._place_trigger_with_retry(
+                    symbol=symbol,
+                    is_buy=not is_long,
+                    size=new_size,
+                    trigger_price=position.tp_price,
+                    tpsl="tp",
+                )
+                position.tp_order_id = tp_result.get("orderId")
+                self._logger.info(
+                    "TP re-placed for %s: size %.4f @ %.4f (order %s)",
+                    symbol, new_size, position.tp_price, position.tp_order_id,
+                )
+            except Exception as e:
+                self._logger.error(
+                    "Failed to re-place TP for %s after size change: %s",
+                    symbol, e,
+                )
+
+        # 4) Re-place SL at the same price, new size
+        if position.sl_price:
+            try:
+                sl_result = await self._place_trigger_with_retry(
+                    symbol=symbol,
+                    is_buy=not is_long,
+                    size=new_size,
+                    trigger_price=position.sl_price,
+                    tpsl="sl",
+                )
+                position.sl_order_id = sl_result.get("orderId")
+                self._logger.info(
+                    "SL re-placed for %s: size %.4f @ %.4f (order %s)",
+                    symbol, new_size, position.sl_price, position.sl_order_id,
+                )
+            except Exception as e:
+                self._logger.error(
+                    "Failed to re-place SL for %s after size change: %s",
+                    symbol, e,
+                )
+
+        # 5) Update tracking
+        self._tp_sl_placed_size[symbol] = new_size
+
+        tp_str = f"{position.tp_price:.4f}" if position.tp_price else "N/A"
+        sl_str = f"{position.sl_price:.4f}" if position.sl_price else "N/A"
+        await self._send_alert(
+            f"TP/SL updated for {symbol}: size grew to {new_size:.4f} "
+            f"(TP={tp_str}, SL={sl_str})"
+        )
+
     # =========================================================================
     # Position Monitoring
     # =========================================================================
-    
+
     async def _cancel_stale_orders(self) -> None:
         """Cancel pending limit orders that exceeded the timeout.
 
@@ -1510,6 +1626,7 @@ class ExecutionEngineService(BaseService):
                 )
             finally:
                 self.pending_orders.pop(order_id, None)
+                self._partial_fill_first_seen.pop(order_id, None)
                 # Notify risk manager so it clears its pending intent
                 await self.publish(Topic.ORDERS, {
                     "event": "order_cancelled",
@@ -1525,7 +1642,19 @@ class ExecutionEngineService(BaseService):
         indicating they were either filled or cancelled externally.
         If a position exists for the symbol, treats it as a fill and
         triggers SL/TP placement.
+
+        Partial fill handling:
+        When an order is filled in multiple tranches, the exchange may
+        report a partial position size before all fills arrive.  To avoid
+        placing TP/SL on the wrong size, we wait up to
+        ``PARTIAL_FILL_GRACE_SECONDS`` (10 s) after the order leaves the
+        open-orders list.  During that grace window we keep polling: if
+        the position size grows, we reset the timer.  Only when the size
+        stabilises (or the grace period expires) do we treat the order as
+        fully filled and place TP/SL.
         """
+        PARTIAL_FILL_GRACE_SECONDS = 10
+
         if not self.pending_orders:
             return
 
@@ -1536,9 +1665,13 @@ class ExecutionEngineService(BaseService):
             self._logger.warning("Failed to poll open orders: %s", e)
             return
 
+        now = datetime.now(timezone.utc)
+
         for order_id, order in list(self.pending_orders.items()):
             if str(order_id) in open_order_ids:
-                continue  # Still open, nothing to do
+                # Order still open — clear any stale partial-fill tracking
+                self._partial_fill_first_seen.pop(order_id, None)
+                continue
 
             # Skip symbols mid-open/close to avoid racing with _handle_signal
             if order.symbol in self._settling_symbols:
@@ -1557,14 +1690,77 @@ class ExecutionEngineService(BaseService):
                 )
 
                 if pos:
-                    # Order was filled — process as fill
+                    exchange_size = abs(pos.get("size", 0))
+                    expected_size = order.size  # Original intended size
+
+                    # --- Partial fill grace period ---
+                    # If exchange size is significantly less than expected,
+                    # wait for remaining fills to arrive.
+                    size_ratio = exchange_size / expected_size if expected_size > 0 else 1.0
+                    is_partial = size_ratio < 0.95  # <95% of expected = partial
+
+                    if is_partial:
+                        if order_id not in self._partial_fill_first_seen:
+                            # First time seeing this partial fill
+                            self._partial_fill_first_seen[order_id] = (now, exchange_size)
+                            self._logger.info(
+                                "Partial fill detected for %s %s: "
+                                "%.4f/%.4f (%.0f%%) — waiting for remaining fills "
+                                "(grace: %ds)",
+                                order_id, order.symbol,
+                                exchange_size, expected_size,
+                                size_ratio * 100,
+                                PARTIAL_FILL_GRACE_SECONDS,
+                            )
+                            continue
+                        else:
+                            first_seen_time, last_size = self._partial_fill_first_seen[order_id]
+                            elapsed = (now - first_seen_time).total_seconds()
+
+                            if exchange_size > last_size:
+                                # Size grew — additional fill arrived, reset timer
+                                self._partial_fill_first_seen[order_id] = (now, exchange_size)
+                                self._logger.info(
+                                    "Additional fill for %s %s: "
+                                    "%.4f -> %.4f (%.0f%%) — resetting grace timer",
+                                    order_id, order.symbol,
+                                    last_size, exchange_size,
+                                    (exchange_size / expected_size * 100) if expected_size > 0 else 100,
+                                )
+                                continue
+
+                            if elapsed < PARTIAL_FILL_GRACE_SECONDS:
+                                # Still within grace period, keep waiting
+                                self._logger.debug(
+                                    "Partial fill %s %s: %.4f/%.4f — "
+                                    "%.1fs / %ds grace remaining",
+                                    order_id, order.symbol,
+                                    exchange_size, expected_size,
+                                    elapsed, PARTIAL_FILL_GRACE_SECONDS,
+                                )
+                                continue
+
+                            # Grace period expired with partial fill
+                            self._logger.warning(
+                                "Partial fill grace expired for %s %s: "
+                                "%.4f/%.4f (%.0f%%) — proceeding with actual size",
+                                order_id, order.symbol,
+                                exchange_size, expected_size,
+                                size_ratio * 100,
+                            )
+
+                    # --- Fill confirmed (full or grace-expired partial) ---
+                    self._partial_fill_first_seen.pop(order_id, None)
+
                     self._logger.info(
-                        "Pending order %s for %s detected as FILLED via polling",
+                        "Pending order %s for %s detected as FILLED via polling "
+                        "(size: %.4f, expected: %.4f)",
                         order_id, order.symbol,
+                        exchange_size, expected_size,
                     )
                     order.status = OrderStatus.FILLED
                     order.avg_price = pos.get("entryPrice", 0)
-                    order.filled_size = abs(pos.get("size", 0))
+                    order.filled_size = exchange_size
                     order.filled_at = datetime.now(timezone.utc)
 
                     signal = order.original_signal or {
@@ -1579,6 +1775,7 @@ class ExecutionEngineService(BaseService):
                     self.metrics.orders_filled += 1
                 else:
                     # No position -> order was cancelled externally
+                    self._partial_fill_first_seen.pop(order_id, None)
                     self._logger.info(
                         "Pending order %s for %s cancelled externally",
                         order_id, order.symbol,
@@ -1658,7 +1855,31 @@ class ExecutionEngineService(BaseService):
                     local_pos = self.active_positions[symbol]
                     local_pos.current_price = pos.get("markPrice", local_pos.entry_price)
                     local_pos.unrealized_pnl = pos.get("unrealizedPnl", 0)
-                    local_pos.size = abs(size)
+
+                    # --- Detect position size growth (additional fills) ---
+                    old_size = local_pos.size
+                    new_size = abs(size)
+                    local_pos.size = new_size
+
+                    # Also update entry price from exchange (avg after multiple fills)
+                    if pos.get("entryPrice", 0) > 0:
+                        local_pos.entry_price = pos.get("entryPrice", 0)
+
+                    tp_sl_size = self._tp_sl_placed_size.get(symbol, 0)
+                    if (
+                        new_size > old_size
+                        and tp_sl_size > 0
+                        and new_size > tp_sl_size * 1.02  # >2% growth = real fill, not float noise
+                        and local_pos.status == PositionStatus.OPEN
+                        and symbol not in self._settling_symbols
+                    ):
+                        self._logger.warning(
+                            "Position size grew for %s: %.4f -> %.4f "
+                            "(TP/SL were placed for %.4f) — re-placing TP/SL",
+                            symbol, old_size, new_size, tp_sl_size,
+                        )
+                        await self._update_tp_sl_for_size_change(local_pos)
+
                 else:
                     # New position (opened externally or before service start)
                     # Retry TP/SL on each sync until confirmed
@@ -2171,6 +2392,7 @@ class ExecutionEngineService(BaseService):
         self._tp_sl_confirmed.discard(symbol)
         self._closing_positions.discard(symbol)
         self._settling_symbols.discard(symbol)  # Defensive: should already be cleared by _handle_signal finally
+        self._tp_sl_placed_size.pop(symbol, None)
 
         # Clean up - remove from active after a delay
         # to allow fill processing
