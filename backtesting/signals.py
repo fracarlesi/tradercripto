@@ -203,6 +203,83 @@ def signal_volume_breakout_entry(ind: dict, idx: int,
     return 0
 
 
+def signal_momentum_burst_entry(ind: dict, idx: int,
+                                 min_rsi_slope: float = 8.0,
+                                 min_candle_body_pct: float = 0.3,
+                                 max_rsi_entry: float = 75.0,
+                                 min_volume_ratio: float = 1.2) -> int:
+    """Momentum burst signal: fires when RSI accelerates before overbought.
+
+    Captures the inflection point where price is accelerating but hasn't
+    gone parabolic yet. Designed for CHAOS+TREND regimes.
+
+    Conditions (all must be true):
+    - RSI slope (RSI[i] - RSI[i-2]) >= min_rsi_slope (RSI accelerating)
+    - Price > EMA9 (above fast moving average)
+    - |close - open| / open >= min_candle_body_pct% (conviction candle)
+    - RSI <= max_rsi_entry for LONG (enter BEFORE overbought)
+    - RSI >= (100 - max_rsi_entry) for SHORT (enter BEFORE oversold)
+    - volume_ratio >= min_volume_ratio (some volume confirmation)
+
+    Direction:
+    - LONG: RSI rising + close > open (bullish candle)
+    - SHORT: RSI falling + close < open (bearish candle)
+
+    Returns: 1=LONG burst, -1=SHORT burst, 0=no signal
+    """
+    if idx < 2:
+        return 0
+
+    # Required arrays
+    for key in ("closes", "opens", "rsi", "ema9", "volumes", "vol_sma20"):
+        if key not in ind:
+            return 0
+
+    close = ind["closes"][idx]
+    open_price = ind["opens"][idx]
+    rsi_curr = ind["rsi"][idx]
+    rsi_2ago = ind["rsi"][idx - 2]
+    ema9 = ind["ema9"][idx]
+
+    # NaN checks
+    if any(np.isnan(v) for v in [close, open_price, rsi_curr, rsi_2ago, ema9]):
+        return 0
+    if open_price <= 0:
+        return 0
+
+    # RSI slope
+    rsi_slope = rsi_curr - rsi_2ago
+
+    # Volume ratio
+    vol_sma = ind["vol_sma20"][idx]
+    if np.isnan(vol_sma) or vol_sma <= 0:
+        return 0
+    volume_ratio = ind["volumes"][idx] / vol_sma
+    if volume_ratio < min_volume_ratio:
+        return 0
+
+    # Candle body
+    candle_body_pct = abs(close - open_price) / open_price * 100
+    if candle_body_pct < min_candle_body_pct:
+        return 0
+
+    # LONG: RSI accelerating up, price above EMA9, bullish candle, not overbought
+    if (rsi_slope >= min_rsi_slope
+            and close > ema9
+            and close > open_price
+            and rsi_curr <= max_rsi_entry):
+        return 1
+
+    # SHORT: RSI accelerating down, price below EMA9, bearish candle, not oversold
+    if (rsi_slope <= -min_rsi_slope
+            and close < ema9
+            and close < open_price
+            and rsi_curr >= (100 - max_rsi_entry)):
+        return -1
+
+    return 0
+
+
 def signal_mean_reversion(ind: dict, idx: int, cfg: BacktestConfig) -> int:
     """RSI < 25 + below BB lower for LONG, RSI > 75 + above BB upper for SHORT."""
     if "bb_upper" not in ind or "bb_lower" not in ind:

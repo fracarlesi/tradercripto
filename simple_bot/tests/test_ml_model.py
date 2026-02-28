@@ -19,7 +19,7 @@ from simple_bot.core.models import MarketState, Regime, Direction
 
 @pytest.fixture
 def mock_dataset() -> pd.DataFrame:
-    """Create a synthetic dataset for testing (13 features)."""
+    """Create a synthetic dataset for testing (14 features)."""
     np.random.seed(42)
     n = 200
     data = {
@@ -34,8 +34,9 @@ def mock_dataset() -> pd.DataFrame:
         "close_vs_ema200": np.random.uniform(-5, 5, n),
         "regime_encoded": np.random.choice([0.0, 1.0, 2.0], n),
         "hour_of_day": np.random.uniform(0, 1, n),
-        "signal_type": np.random.choice([0.0, 1.0], n),
+        "signal_type": np.random.choice([0.0, 1.0, 2.0], n),
         "candle_body_pct": np.random.uniform(0, 3.0, n),
+        "rsi_slope": np.random.uniform(-15, 15, n),
         "label": np.random.randint(0, 2, n),
     }
     return pd.DataFrame(data)
@@ -74,6 +75,7 @@ def sample_market_state() -> MarketState:
         ema21=Decimal("49900"),
         ema9_slope=Decimal("0.003"),
         ema21_slope=Decimal("0.0015"),
+        rsi_slope=Decimal("5.0"),
         prev_open=Decimal("49900"),
         prev_high=Decimal("50300"),
         prev_low=Decimal("49700"),
@@ -129,7 +131,7 @@ class TestMLTraining:
 
     def test_feature_count_is_13(self) -> None:
         """FEATURES should have exactly 13 entries (11 + signal_type + candle_body_pct)."""
-        assert len(MLTradeModel.FEATURES) == 13
+        assert len(MLTradeModel.FEATURES) == 14
         assert "spread_pct" not in MLTradeModel.FEATURES
         assert "hour_of_day" in MLTradeModel.FEATURES
         assert "signal_type" in MLTradeModel.FEATURES
@@ -156,6 +158,7 @@ class TestMLPrediction:
             "ema21_slope": 0.001, "close_vs_ema200": 2.0,
             "regime_encoded": 2.0, "hour_of_day": 0.5,
             "signal_type": 0.0, "candle_body_pct": 0.5,
+            "rsi_slope": 3.0,
         }
         prob, explanation = trained_model.predict(features)
 
@@ -381,7 +384,7 @@ class TestOptimalThreshold:
         assert effective >= config_floor
         assert effective >= optimal
         # And optimal is within calibrated range [0.50, 0.65]
-        assert 0.50 <= optimal <= 0.65
+        assert 0.50 <= optimal <= 0.58
 
     def test_optimal_threshold_none_falls_back_to_floor(self) -> None:
         """When optimal_threshold is None (no model loaded), the effective
@@ -513,6 +516,7 @@ class TestMLPersistence:
             "ema21_slope": 0.001, "close_vs_ema200": 2.0,
             "regime_encoded": 2.0, "hour_of_day": 0.5,
             "signal_type": 0.0, "candle_body_pct": 0.5,
+            "rsi_slope": 3.0,
         }
         prob_before, _ = trained_model.predict(features)
 

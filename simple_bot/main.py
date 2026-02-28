@@ -182,6 +182,14 @@ class ConservativeConfig:
     volume_breakout_rsi_max: float
     volume_breakout_allowed_regimes: List[str]
 
+    # Momentum Burst
+    momentum_burst_enabled: bool
+    momentum_burst_min_rsi_slope: float
+    momentum_burst_min_candle_body_pct: float
+    momentum_burst_max_rsi_entry: float
+    momentum_burst_min_volume_ratio: float
+    momentum_burst_allowed_regimes: List[str]
+
     # Environment
     testnet: bool
     dry_run: bool
@@ -204,6 +212,7 @@ class ConservativeConfig:
         execution = get_section("execution")
         ml = get_section("ml_model")
         vb = get_section("volume_breakout")
+        mb = get_section("momentum_burst")
 
         # Parse universe mode and assets
         universe_mode = universe.get("mode", "manual")
@@ -262,6 +271,12 @@ class ConservativeConfig:
             volume_breakout_rsi_min=vb.get("rsi_min", 25.0),
             volume_breakout_rsi_max=vb.get("rsi_max", 80.0),
             volume_breakout_allowed_regimes=vb.get("allowed_regimes", ["chaos", "trend"]),
+            momentum_burst_enabled=mb.get("enabled", True),
+            momentum_burst_min_rsi_slope=mb.get("min_rsi_slope", 8.0),
+            momentum_burst_min_candle_body_pct=mb.get("min_candle_body_pct", 0.3),
+            momentum_burst_max_rsi_entry=mb.get("max_rsi_entry", 75.0),
+            momentum_burst_min_volume_ratio=mb.get("min_volume_ratio", 1.2),
+            momentum_burst_allowed_regimes=mb.get("allowed_regimes", ["chaos", "trend"]),
             testnet=env.lower() == "testnet",
             dry_run=data.get("dry_run", False),
         )
@@ -657,10 +672,23 @@ class ConservativeBot:
                 n_model_features,
             )
 
+        # Guard: momentum burst requires 14-feature model
+        mb_enabled = (
+            self.config.momentum_burst_enabled
+            and n_model_features >= 14
+        )
+        if self.config.momentum_burst_enabled and not mb_enabled:
+            logger.debug(
+                "Momentum burst disabled: model has %d features (need 14). Retrain required.",
+                n_model_features,
+            )
+
         vb_allowed_regimes = {r.lower() for r in self.config.volume_breakout_allowed_regimes}
+        mb_allowed_regimes = {r.lower() for r in self.config.momentum_burst_allowed_regimes}
 
         regime_skipped: int = 0
         breakout_evaluated: int = 0
+        burst_evaluated: int = 0
         for symbol, state in states.items():
             if symbol in symbols_with_positions:
                 continue
@@ -685,7 +713,7 @@ class ConservativeBot:
                         best_setup_type = SetupType.MOMENTUM
                         best_signal_type = 0.0
 
-            # --- PATH 2 (new): CHAOS+TREND → volume check → price direction → ML(signal_type=1.0) ---
+            # --- PATH 2: CHAOS+TREND → volume check → price direction → ML(signal_type=1.0) ---
             if vb_enabled and state.regime.value.lower() in vb_allowed_regimes:
                 vb_direction = self._breakout_direction(state)
                 if vb_direction != Direction.FLAT and self._is_volume_breakout(state):
@@ -700,11 +728,30 @@ class ConservativeBot:
                         best_setup_type = SetupType.VOLUME_BREAKOUT
                         best_signal_type = 1.0
 
-            # Neither path fired above threshold
+            # --- PATH 3: CHAOS+TREND → RSI acceleration → ML(signal_type=2.0) ---
+            if mb_enabled and state.regime.value.lower() in mb_allowed_regimes:
+                if self._is_momentum_burst(state):
+                    mb_direction = self._momentum_burst_direction(state)
+                    if mb_direction != Direction.FLAT:
+                        burst_evaluated += 1
+                        features = self._ml_model.extract_features(state, signal_type=2.0)
+                        prob, reason = self._ml_model.predict(features)
+                        all_scores.append((f"{symbol}/mb", prob))
+                        if prob >= threshold and prob > best_prob:
+                            best_prob = prob
+                            best_direction = mb_direction
+                            best_reason = reason
+                            best_setup_type = SetupType.MOMENTUM_BURST
+                            best_signal_type = 2.0
+
+            # No path fired above threshold
             if best_prob < threshold:
-                if state.regime != Regime.TREND and not (
-                    vb_enabled and state.regime.value.lower() in vb_allowed_regimes
-                ):
+                regime_in_any = (
+                    state.regime == Regime.TREND
+                    or (vb_enabled and state.regime.value.lower() in vb_allowed_regimes)
+                    or (mb_enabled and state.regime.value.lower() in mb_allowed_regimes)
+                )
+                if not regime_in_any:
                     regime_skipped += 1
                 elif state.trend_direction == Direction.FLAT and state.regime == Regime.TREND:
                     regime_skipped += 1
@@ -736,7 +783,8 @@ class ConservativeBot:
                 confidence=Decimal(str(round(best_prob, 4))),
             )
 
-            signal_label = "VOL_BREAKOUT" if best_signal_type == 1.0 else "ML_SELECT"
+            signal_labels = {0.0: "ML_SELECT", 1.0: "VOL_BREAKOUT", 2.0: "MOM_BURST"}
+            signal_label = signal_labels.get(best_signal_type, "ML_SELECT")
             logger.info(
                 "%s | %s %s | P(TP)=%.1f%% | regime=%s | %s",
                 signal_label,
@@ -763,10 +811,11 @@ class ConservativeBot:
         # Count assets evaluated
         total_evaluated = len(all_scores)
         logger.info(
-            "Scan: %d assets, %d scored (%d breakout-eligible), %d skipped, %d candidates (threshold=%.2f, vb=%s)",
-            len(states), total_evaluated, breakout_evaluated,
+            "Scan: %d assets, %d scored (%d breakout, %d burst), %d skipped, %d candidates (threshold=%.2f, vb=%s, mb=%s)",
+            len(states), total_evaluated, breakout_evaluated, burst_evaluated,
             regime_skipped, len(candidates), threshold,
             "ON" if vb_enabled else "OFF",
+            "ON" if mb_enabled else "OFF",
         )
 
         # --- Sort by P(TP) desc, execute top N ---
@@ -851,6 +900,65 @@ class ConservativeBot:
             return Direction.LONG
         if close < open_price and close < prev_close:
             return Direction.SHORT
+        return Direction.FLAT
+
+    def _is_momentum_burst(self, state: MarketState) -> bool:
+        """Check if current bar qualifies as a momentum burst.
+
+        Conditions:
+        - RSI slope (rsi_slope from MarketState) >= config threshold
+        - Price > EMA9 for LONG (close < EMA9 for SHORT)
+        - Candle body >= config threshold
+        - RSI <= max_rsi_entry for LONG (>= 100-max for SHORT)
+        - Volume ratio >= config threshold
+        """
+        cfg = self.config
+        rsi_slope = float(state.rsi_slope)
+
+        # Need significant RSI movement in either direction
+        if abs(rsi_slope) < cfg.momentum_burst_min_rsi_slope:
+            return False
+
+        close = float(state.close)
+        open_price = float(state.open)
+        if open_price <= 0:
+            return False
+
+        candle_body_pct = abs(close - open_price) / open_price * 100
+        if candle_body_pct < cfg.momentum_burst_min_candle_body_pct:
+            return False
+
+        vol_ratio = float(state.volume_ratio) if state.volume_ratio is not None else 0.0
+        if vol_ratio < cfg.momentum_burst_min_volume_ratio:
+            return False
+
+        return True
+
+    def _momentum_burst_direction(self, state: MarketState) -> Direction:
+        """Determine momentum burst direction from RSI slope + price action.
+
+        LONG: RSI rising + close > open + close > EMA9 + RSI <= max_entry
+        SHORT: RSI falling + close < open + close < EMA9 + RSI >= (100-max_entry)
+        """
+        cfg = self.config
+        rsi_slope = float(state.rsi_slope)
+        close = float(state.close)
+        open_price = float(state.open)
+        ema9 = float(state.ema9) if state.ema9 is not None else close
+        rsi = float(state.rsi)
+
+        if (rsi_slope >= cfg.momentum_burst_min_rsi_slope
+                and close > ema9
+                and close > open_price
+                and rsi <= cfg.momentum_burst_max_rsi_entry):
+            return Direction.LONG
+
+        if (rsi_slope <= -cfg.momentum_burst_min_rsi_slope
+                and close < ema9
+                and close < open_price
+                and rsi >= (100 - cfg.momentum_burst_max_rsi_entry)):
+            return Direction.SHORT
+
         return Direction.FLAT
 
     async def _execute_setup(self, setup: Setup) -> bool:

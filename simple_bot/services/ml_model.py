@@ -37,8 +37,9 @@ class MLTradeModel:
         "close_vs_ema200",
         "regime_encoded",   # TREND=2.0, CHAOS=1.0, RANGE=0.0
         "hour_of_day",      # UTC hour / 24.0 — intraday session pattern
-        "signal_type",      # 0.0=EMA crossover, 1.0=volume breakout
+        "signal_type",      # 0.0=EMA crossover, 1.0=volume breakout, 2.0=momentum burst
         "candle_body_pct",  # |close-open|/open * 100 — price conviction
+        "rsi_slope",        # RSI[i] - RSI[i-2] — RSI acceleration
     ]
 
     _DEFAULT_PARAMS: dict = {
@@ -211,8 +212,8 @@ class MLTradeModel:
                     best_fbeta = fbeta
                     best_threshold = float(thresholds[i])
 
-            # Clamp to [0.50, 0.65]
-            best_threshold = max(0.50, min(0.65, best_threshold))
+            # Clamp to [0.50, 0.58]
+            best_threshold = max(0.50, min(0.58, best_threshold))
 
             logger.info(
                 "Threshold calibration: %.4f (F0.5=%.4f)",
@@ -323,6 +324,7 @@ class MLTradeModel:
             "hour_of_day": hour_of_day,
             "signal_type": signal_type,
             "candle_body_pct": candle_body_pct,
+            "rsi_slope": float(state.rsi_slope),
         }
 
     # ------------------------------------------------------------------

@@ -526,6 +526,14 @@ class TestRegimeGate:
         bot._config.volume_breakout_rsi_max = 80.0
         bot._config.volume_breakout_allowed_regimes = ["chaos", "trend"]
 
+        # Momentum burst config
+        bot._config.momentum_burst_enabled = True
+        bot._config.momentum_burst_min_rsi_slope = 8.0
+        bot._config.momentum_burst_min_candle_body_pct = 0.3
+        bot._config.momentum_burst_max_rsi_entry = 75.0
+        bot._config.momentum_burst_min_volume_ratio = 1.2
+        bot._config.momentum_burst_allowed_regimes = ["chaos", "trend"]
+
         # Services: no kill switch, no cooldown, no protections
         bot._services = {}
 
@@ -677,6 +685,14 @@ class TestMLThresholdSelection:
         bot._config.volume_breakout_rsi_min = 25.0
         bot._config.volume_breakout_rsi_max = 80.0
         bot._config.volume_breakout_allowed_regimes = ["chaos", "trend"]
+
+        # Momentum burst config
+        bot._config.momentum_burst_enabled = True
+        bot._config.momentum_burst_min_rsi_slope = 8.0
+        bot._config.momentum_burst_min_candle_body_pct = 0.3
+        bot._config.momentum_burst_max_rsi_entry = 75.0
+        bot._config.momentum_burst_min_volume_ratio = 1.2
+        bot._config.momentum_burst_allowed_regimes = ["chaos", "trend"]
 
         bot._services = {}
         return bot

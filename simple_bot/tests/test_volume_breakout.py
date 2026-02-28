@@ -284,6 +284,12 @@ def _make_config():
         volume_breakout_rsi_min=25.0,
         volume_breakout_rsi_max=80.0,
         volume_breakout_allowed_regimes=["chaos", "trend"],
+        momentum_burst_enabled=True,
+        momentum_burst_min_rsi_slope=8.0,
+        momentum_burst_min_candle_body_pct=0.3,
+        momentum_burst_max_rsi_entry=75.0,
+        momentum_burst_min_volume_ratio=1.2,
+        momentum_burst_allowed_regimes=["chaos", "trend"],
         testnet=True,
         dry_run=True,
     )

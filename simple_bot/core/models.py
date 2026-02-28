@@ -37,6 +37,7 @@ class SetupType(str, Enum):
     MEAN_REVERSION = "mean_reversion"      # Bounce in range regime
     MOMENTUM = "momentum"                   # Momentum continuation
     VOLUME_BREAKOUT = "volume_breakout"    # Volume spike + price momentum
+    MOMENTUM_BURST = "momentum_burst"      # RSI acceleration + price momentum
 
 
 class KillSwitchStatus(str, Enum):
@@ -111,6 +112,9 @@ class MarketState(BaseModel):
     bb_upper: Optional[Decimal] = Field(None, ge=0, description="Bollinger upper band")
     bb_lower: Optional[Decimal] = Field(None, ge=0, description="Bollinger lower band")
     bb_mid: Optional[Decimal] = Field(None, ge=0, description="Bollinger middle band")
+
+    # RSI slope (2-bar lookback: RSI[current] - RSI[2 bars ago])
+    rsi_slope: Decimal = Field(default=Decimal("0"), description="RSI slope: RSI[i] - RSI[i-2]")
 
     # Exchange data (live only — not used in ML yet, logged for future training)
     funding_rate: Optional[Decimal] = Field(None, description="Current funding rate for symbol")

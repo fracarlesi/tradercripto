@@ -150,7 +150,7 @@ regime:
   trend_adx_exit_min: 22      # Lenient exit: allow trend to weaken before closing
   range_adx_max: 20
   choppiness_range_min: 60
-  confirmation_bars: 3         # 15 min minimum (was 10 min with 2 bars)
+  confirmation_bars: 2         # 30 min (2 bars × 15m) — faster regime transitions
 
 # -----------------------------------------------------------------------------
 # Strategies
@@ -166,12 +166,25 @@ strategies:
 # -----------------------------------------------------------------------------
 volume_breakout:
   enabled: true
-  min_volume_ratio: 2.0       # Volume 2x above SMA20
+  min_volume_ratio: 1.5       # Volume 1.5x above SMA20 (was 2.0 — catches gradual pumps)
   min_candle_body_pct: 0.3    # |close-open|/open * 100
   min_atr_pct: 0.15           # Minimum volatility
   rsi_min: 25                 # RSI floor
-  rsi_max: 80                 # RSI ceiling
+  rsi_max: 90                 # RSI ceiling (was 80 — allow entry during explosive pumps)
   allowed_regimes:            # Can fire in CHAOS (key advantage!)
+    - "chaos"
+    - "trend"
+
+# -----------------------------------------------------------------------------
+# Momentum Burst Signal
+# -----------------------------------------------------------------------------
+momentum_burst:
+  enabled: true
+  min_rsi_slope: 8.0            # RSI[i] - RSI[i-2] threshold
+  min_candle_body_pct: 0.3      # |close-open|/open * 100
+  max_rsi_entry: 75             # Enter BEFORE overbought
+  min_volume_ratio: 1.2         # Minimum volume confirmation
+  allowed_regimes:
     - "chaos"
     - "trend"
 

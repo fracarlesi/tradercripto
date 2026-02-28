@@ -20,7 +20,7 @@ from backtesting.indicators import (
     calc_bollinger,
     compute_indicators,
 )
-from backtesting.signals import signal_ema_crossover_entry, signal_volume_breakout_entry
+from backtesting.signals import signal_ema_crossover_entry, signal_volume_breakout_entry, signal_momentum_burst_entry
 
 __all__ = ["generate_dataset"]
 
@@ -149,6 +149,12 @@ def _extract_features(
     # Candle body percentage
     candle_body_pct = abs(close - open_price) / open_price * 100 if open_price > 0 else 0.0
 
+    # RSI slope (2-bar lookback)
+    if idx >= 2 and not np.isnan(ind["rsi"][idx - 2]):
+        rsi_slope = ind["rsi"][idx] - ind["rsi"][idx - 2]
+    else:
+        rsi_slope = 0.0
+
     return {
         "adx": ind["adx"][idx],
         "rsi": ind["rsi"][idx],
@@ -163,6 +169,7 @@ def _extract_features(
         "hour_of_day": hour_of_day,
         "signal_type": signal_type,
         "candle_body_pct": candle_body_pct,
+        "rsi_slope": rsi_slope,
     }
 
 
@@ -271,10 +278,36 @@ def generate_dataset(
             all_rows.append(features)
             breakout_count += 1
 
+        # --- PATH 3: Momentum burst signals (signal_type=2.0) ---
+        burst_count = 0
+        for idx in range(cfg.warmup_bars, len(candles)):
+            if idx in seen:
+                continue  # Already labeled by crossover or breakout on this bar
+
+            sig = signal_momentum_burst_entry(ind, idx)
+            if sig == 0:
+                continue
+
+            label = _label_signal(candles, idx, sig, cfg.tp_pct, cfg.sl_pct)
+            if label is None:
+                continue
+
+            features = _extract_features(
+                candles, ind, idx, sig,
+                volumes, vol_sma20, bb_upper, bb_lower,
+                signal_type=2.0,
+            )
+            features["label"] = label
+            features["symbol"] = symbol
+            features["timestamp"] = candles[idx]["t"]
+            all_rows.append(features)
+            seen.add(idx)
+            burst_count += 1
+
         logger.info(
-            "%s: %d crossover + %d breakout = %d labeled signals from %d candles",
-            symbol, crossover_count, breakout_count,
-            crossover_count + breakout_count, len(candles),
+            "%s: %d crossover + %d breakout + %d burst = %d labeled signals from %d candles",
+            symbol, crossover_count, breakout_count, burst_count,
+            crossover_count + breakout_count + burst_count, len(candles),
         )
 
     df = pd.DataFrame(all_rows)

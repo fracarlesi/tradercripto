@@ -324,6 +324,9 @@ class MarketStateService(BaseService):
         self._ema9_history: Dict[str, Deque[float]] = {}
         self._ema21_history: Dict[str, Deque[float]] = {}
 
+        # RSI history buffer (keep last 3 values to compute 2-bar lookback)
+        self._rsi_history: Dict[str, Deque[float]] = {}
+
         self._logger.info(
             "MarketStateService initialized: assets=%s, timeframe=%s, interval=%ds",
             self._state_config.assets,
@@ -373,6 +376,7 @@ class MarketStateService(BaseService):
         self._ohlcv_cache.clear()
         self._ema9_history.clear()
         self._ema21_history.clear()
+        self._rsi_history.clear()
 
     async def _run_iteration(self) -> None:
         """Fetch and publish market states."""
@@ -506,6 +510,9 @@ class MarketStateService(BaseService):
             rsi_values = calculate_rsi(close, 14)
             rsi = Decimal(str(max(0, min(100, rsi_values[-1]))))
 
+            # RSI slope (2-bar lookback)
+            rsi_slope = self._compute_rsi_slope(symbol, float(rsi))
+
             # Bollinger Bands
             bb_lower, bb_mid, bb_upper = calculate_bollinger_bands(close, 20, 2.0)
 
@@ -584,6 +591,7 @@ class MarketStateService(BaseService):
                 ema21=Decimal(str(ema21[-1])),
                 ema9_slope=ema9_slope,
                 ema21_slope=ema21_slope,
+                rsi_slope=rsi_slope,
                 prev_open=prev_open,
                 prev_high=prev_high,
                 prev_low=prev_low,
@@ -733,6 +741,28 @@ class MarketStateService(BaseService):
             ema21_slope = Decimal("0")
 
         return ema9_slope, ema21_slope
+
+    # =========================================================================
+    # RSI Slope Calculation
+    # =========================================================================
+
+    def _compute_rsi_slope(self, symbol: str, rsi_current: float) -> Decimal:
+        """Compute RSI slope using 2-bar lookback: RSI[i] - RSI[i-2].
+
+        Maintains a per-symbol deque of the last 3 RSI values.
+        Returns Decimal("0") if fewer than 3 data points are available.
+        """
+        if symbol not in self._rsi_history:
+            self._rsi_history[symbol] = deque(maxlen=3)
+
+        self._rsi_history[symbol].append(rsi_current)
+
+        buf = self._rsi_history[symbol]
+        if len(buf) < 3:
+            return Decimal("0")
+
+        # slope = RSI[current] - RSI[2 bars ago]
+        return Decimal(str(rsi_current - buf[0]))
 
     # =========================================================================
     # Regime Detection
