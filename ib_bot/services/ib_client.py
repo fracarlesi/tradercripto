@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Callable, Dict, List, Optional
 
-from ib_insync import IB, Contract, Future, MarketOrder, LimitOrder, Order, Trade
+from ib_insync import IB, Contract, Fill, Future, MarketOrder, LimitOrder, Order, Trade
 from ib_insync import util
 
 from ..config.loader import IBConnectionConfig
@@ -21,6 +21,12 @@ from ..core.contracts import CONTRACTS, FuturesSpec
 from ..core.enums import Direction
 
 logger = logging.getLogger(__name__)
+
+
+# Callback type aliases
+OrderStatusCallback = Callable[[Trade], None]
+FillCallback = Callable[[Trade, Fill], None]
+ErrorCallback = Callable[[int, str, str], None]
 
 
 def _front_month_expiry() -> str:
@@ -55,6 +61,11 @@ class IBClient:
         self._connected = False
         self._reconnect_count = 0
 
+        # External callback lists
+        self._on_order_status_callbacks: List[OrderStatusCallback] = []
+        self._on_fill_callbacks: List[FillCallback] = []
+        self._on_error_callbacks: List[ErrorCallback] = []
+
         # Register disconnect handler
         self._ib.disconnectedEvent += self._on_disconnect
 
@@ -78,6 +89,7 @@ class IBClient:
                 )
                 self._connected = True
                 self._reconnect_count = 0
+                self._subscribe_events()
                 logger.info("Connected to IB successfully")
                 return
             except Exception as e:
@@ -104,6 +116,93 @@ class IBClient:
         """Handle unexpected disconnection."""
         self._connected = False
         logger.warning("Disconnected from IB unexpectedly")
+
+    # =========================================================================
+    # Event Handling
+    # =========================================================================
+
+    def _subscribe_events(self) -> None:
+        """Subscribe to IB order/execution events. Called once after connect."""
+        self._ib.orderStatusEvent += self._on_order_status
+        self._ib.execDetailsEvent += self._on_exec_details
+        self._ib.errorEvent += self._on_error
+        logger.info("Subscribed to IB order/execution/error events")
+
+    def _on_order_status(self, trade: Trade) -> None:
+        """Handle order status changes from IB."""
+        order = trade.order
+        status = trade.orderStatus.status
+        symbol = trade.contract.symbol if trade.contract else "?"
+        logger.info(
+            "Order status: %s %s %s x%s → %s (filled=%s, remaining=%s)",
+            order.action,
+            symbol,
+            order.orderType,
+            order.totalQuantity,
+            status,
+            trade.orderStatus.filled,
+            trade.orderStatus.remaining,
+        )
+        for cb in self._on_order_status_callbacks:
+            try:
+                cb(trade)
+            except Exception as e:
+                logger.error("Order status callback error: %s", e, exc_info=True)
+
+    def _on_exec_details(self, trade: Trade, fill: Fill) -> None:
+        """Handle execution/fill details from IB."""
+        exec_info = fill.execution
+        comm_info = fill.commissionReport
+        symbol = trade.contract.symbol if trade.contract else "?"
+        commission = comm_info.commission if comm_info else 0.0
+        realized_pnl = comm_info.realizedPNL if comm_info else 0.0
+        logger.info(
+            "Fill: %s %s qty=%s @ %.2f | commission=%.2f | realizedPnL=%.2f | execId=%s",
+            exec_info.side,
+            symbol,
+            exec_info.shares,
+            exec_info.price,
+            commission,
+            realized_pnl,
+            exec_info.execId,
+        )
+        for cb in self._on_fill_callbacks:
+            try:
+                cb(trade, fill)
+            except Exception as e:
+                logger.error("Fill callback error: %s", e, exc_info=True)
+
+    def _on_error(self, reqId: int, errorCode: int, errorString: str, contract: Any) -> None:
+        """Handle errors from IB."""
+        # Codes < 2000 are warnings, 2000+ are real errors
+        symbol = contract.symbol if contract else "N/A"
+        if errorCode < 2000:
+            logger.warning(
+                "IB warning [%d] reqId=%d symbol=%s: %s",
+                errorCode, reqId, symbol, errorString,
+            )
+        else:
+            logger.error(
+                "IB error [%d] reqId=%d symbol=%s: %s",
+                errorCode, reqId, symbol, errorString,
+            )
+        for cb in self._on_error_callbacks:
+            try:
+                cb(reqId, errorCode, errorString)
+            except Exception as e:
+                logger.error("Error callback error: %s", e, exc_info=True)
+
+    def on_order_status(self, callback: OrderStatusCallback) -> None:
+        """Register a callback for order status changes."""
+        self._on_order_status_callbacks.append(callback)
+
+    def on_fill(self, callback: FillCallback) -> None:
+        """Register a callback for fill/execution events."""
+        self._on_fill_callbacks.append(callback)
+
+    def on_error(self, callback: ErrorCallback) -> None:
+        """Register a callback for IB errors."""
+        self._on_error_callbacks.append(callback)
 
     async def reconnect(self) -> None:
         """Reconnect and re-qualify contracts."""

@@ -6,6 +6,8 @@ windows for each supported futures contract.
 
 from datetime import time
 from decimal import Decimal
+from zoneinfo import ZoneInfo
+
 from pydantic import BaseModel, Field
 
 
@@ -24,6 +26,14 @@ class FuturesSpec(BaseModel):
     session_end: time = Field(..., description="Regular session end")
     or_start: time = Field(..., description="Opening range start (= session_start)")
     or_end: time = Field(..., description="Opening range end (e.g., 30 min after open)")
+
+    # Timezone for this contract's exchange
+    tz_name: str = Field(..., description="IANA timezone (e.g., America/New_York)")
+
+    @property
+    def tz(self) -> ZoneInfo:
+        """Return the ZoneInfo object for this contract's exchange."""
+        return ZoneInfo(self.tz_name)
 
     class Config:
         json_encoders = {
@@ -57,6 +67,7 @@ CONTRACTS: dict[str, FuturesSpec] = {
         session_end=_US_SESSION_END,
         or_start=_US_OR_START,
         or_end=_US_OR_END,
+        tz_name="America/New_York",
     ),
     "NQ": FuturesSpec(
         symbol="NQ",
@@ -69,6 +80,7 @@ CONTRACTS: dict[str, FuturesSpec] = {
         session_end=_US_SESSION_END,
         or_start=_US_OR_START,
         or_end=_US_OR_END,
+        tz_name="America/New_York",
     ),
     "MES": FuturesSpec(
         symbol="MES",
@@ -81,6 +93,7 @@ CONTRACTS: dict[str, FuturesSpec] = {
         session_end=_US_SESSION_END,
         or_start=_US_OR_START,
         or_end=_US_OR_END,
+        tz_name="America/New_York",
     ),
     "MNQ": FuturesSpec(
         symbol="MNQ",
@@ -93,6 +106,7 @@ CONTRACTS: dict[str, FuturesSpec] = {
         session_end=_US_SESSION_END,
         or_start=_US_OR_START,
         or_end=_US_OR_END,
+        tz_name="America/New_York",
     ),
     "DAX": FuturesSpec(
         symbol="DAX",
@@ -105,5 +119,6 @@ CONTRACTS: dict[str, FuturesSpec] = {
         session_end=_EU_SESSION_END,
         or_start=_EU_OR_START,
         or_end=_EU_OR_END,
+        tz_name="Europe/Berlin",
     ),
 }

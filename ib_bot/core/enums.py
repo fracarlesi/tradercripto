@@ -15,6 +15,7 @@ class Topic(str, Enum):
     SIGNAL = "signal"
     ORDER = "order"
     FILL = "fill"
+    ORDER_STATUS = "order_status"
     POSITION = "position"
     RISK = "risk"
     KILL_SWITCH = "kill_switch"
