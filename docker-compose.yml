@@ -7,6 +7,8 @@ services:
       - .env
     volumes:
       - ./logs:/app/logs
+      - ./models:/app/models
+      - hlquantbot_data:/root/.hlquantbot
     restart: unless-stopped
 
   ib_bot:
@@ -23,3 +25,6 @@ services:
     restart: unless-stopped
     profiles:
       - ib    # Only start with: docker compose --profile ib up
+
+volumes:
+  hlquantbot_data:
