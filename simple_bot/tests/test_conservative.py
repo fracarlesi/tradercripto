@@ -1076,8 +1076,8 @@ class TestPerSymbolCooldown:
         from datetime import timedelta
         service = self._make_service()
 
-        # Simulate an old trade 5 minutes ago (cooldown is 3 min)
-        service._last_trade_time["BTC"] = datetime.now(timezone.utc) - timedelta(minutes=5)
+        # Simulate an old trade 15 minutes ago (cooldown is 10 min)
+        service._last_trade_time["BTC"] = datetime.now(timezone.utc) - timedelta(minutes=15)
 
         setup = Setup(
             id="test_cd3",

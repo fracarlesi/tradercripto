@@ -66,11 +66,11 @@ MIN_STOP_DISTANCE_PCT = 0.001  # 0.1%
 
 # When a position reaches this unrealized P&L %, the stop-loss is moved
 # to the entry price (breakeven) so the trade becomes risk-free.
-BREAKEVEN_THRESHOLD_PCT = 0.3  # 0.3% — activates earlier to protect gains
+BREAKEVEN_THRESHOLD_PCT = 0.6  # 0.6% — gives trade room to develop before locking in
 
 # Offset above/below entry for breakeven SL to cover exchange fees.
 # For LONG: SL = entry * (1 + offset/100); for SHORT: SL = entry * (1 - offset/100).
-BREAKEVEN_OFFSET_PCT = 0.08  # 0.08% offset covers round-trip fees
+BREAKEVEN_OFFSET_PCT = 0.15  # 0.15% offset covers 2x round-trip fees + spread
 
 
 # =============================================================================

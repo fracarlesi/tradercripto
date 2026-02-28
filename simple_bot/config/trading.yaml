@@ -131,7 +131,7 @@ stops:
 
   # ATR-based trailing (for reference, not primary)
   initial_atr_mult: 2.5
-  trailing_atr_mult: 2.5
+  trailing_atr_mult: 1.5
   trailing_update_interval: 300
 
   # Graduated ROI - time-based profit targets

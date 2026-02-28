@@ -129,11 +129,17 @@ class RiskManagerService(BaseService):
 
         # In-memory per-symbol cooldown (prevent re-entry within N minutes)
         self._last_trade_time: Dict[str, datetime] = {}
-        self._cooldown_minutes: int = 3  # Minimum minutes between trades on same symbol
+        self._cooldown_minutes: int = 10  # Minimum minutes between trades on same symbol
 
         # Extended cooldown for structural rejections (e.g. OI cap reached)
         self._rejection_cooldowns: Dict[str, datetime] = {}  # symbol -> cooldown_until
         self._rejection_cooldown_minutes: int = 30
+
+        # Post-close cooldown: longer after losses, prevents churning
+        self._post_close_cooldown: Dict[str, datetime] = {}  # symbol -> cooldown_until
+        self._symbol_trades_today: Dict[str, int] = {}  # symbol -> count today
+        self._symbol_trades_date: Optional[str] = None  # "YYYY-MM-DD"
+        self._max_trades_per_symbol: int = 2  # max trades per symbol per day
 
         # In-memory daily trade counter (resets at UTC midnight)
         self._trades_today: int = 0
@@ -390,6 +396,26 @@ class RiskManagerService(BaseService):
                 self._open_positions.pop(symbol, None)
                 self.clear_pending_intent(symbol)
 
+                # Post-close cooldown: longer after losses to prevent churning
+                exit_reason = payload.get("exit_reason", "")
+                now = datetime.now(timezone.utc)
+                if exit_reason == "stop_loss":
+                    self._post_close_cooldown[symbol] = now + timedelta(minutes=30)
+                    self._logger.info(
+                        "Post-loss cooldown: %s blocked for 30min", symbol
+                    )
+                else:
+                    self._post_close_cooldown[symbol] = now + timedelta(minutes=5)
+
+                # Track per-symbol daily trades
+                today_key = now.strftime("%Y-%m-%d")
+                if self._symbol_trades_date != today_key:
+                    self._symbol_trades_today = {}
+                    self._symbol_trades_date = today_key
+                self._symbol_trades_today[symbol] = (
+                    self._symbol_trades_today.get(symbol, 0) + 1
+                )
+
         except Exception as e:
             self._logger.debug("Error handling fill event: %s", e)
 
@@ -453,6 +479,28 @@ class RiskManagerService(BaseService):
             if elapsed < self._cooldown_minutes:
                 remaining = self._cooldown_minutes - elapsed
                 return _reject(f"Cooldown: {remaining:.1f}min remaining for {setup.symbol}")
+
+        # Post-close cooldown (longer after SL hit — prevents churning)
+        if setup.symbol in self._post_close_cooldown:
+            cooldown_until = self._post_close_cooldown[setup.symbol]
+            now = datetime.now(timezone.utc)
+            if now < cooldown_until:
+                remaining = (cooldown_until - now).total_seconds() / 60
+                return _reject(
+                    f"Post-close cooldown: {remaining:.1f}min remaining for {setup.symbol}"
+                )
+            else:
+                del self._post_close_cooldown[setup.symbol]
+
+        # Per-symbol daily trade limit (prevents same asset churning)
+        today_key = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if self._symbol_trades_date == today_key:
+            sym_count = self._symbol_trades_today.get(setup.symbol, 0)
+            if sym_count >= self._max_trades_per_symbol:
+                return _reject(
+                    f"Per-symbol limit: {setup.symbol} already traded "
+                    f"{sym_count}x today (max {self._max_trades_per_symbol})"
+                )
 
         # Correlation filter: max 1 position per correlated group
         if not self._check_correlation(setup.symbol):

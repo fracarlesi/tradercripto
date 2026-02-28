@@ -2,7 +2,7 @@
 Tests for Breakeven Stop Feature
 =================================
 
-When a position's unrealized P&L reaches +0.3%, the stop-loss trigger
+When a position's unrealized P&L reaches +0.6%, the stop-loss trigger
 is moved slightly above (LONG) or below (SHORT) the entry price
 (breakeven + fee offset), making the trade risk-free.
 
@@ -75,12 +75,12 @@ class TestBreakevenLong:
 
     @pytest.mark.asyncio
     async def test_activates_at_threshold(self) -> None:
-        """Breakeven triggers when long P&L reaches exactly +0.3%."""
+        """Breakeven triggers when long P&L reaches exactly +0.6%."""
         engine = _make_engine()
-        # +0.3% on a 100_000 entry = 100_300
+        # +0.6% on a 100_000 entry = 100_600
         pos = _make_position(
             entry_price=100_000.0,
-            current_price=100_300.0,
+            current_price=100_600.0,
             side="long",
         )
         engine.active_positions["BTC"] = pos
@@ -163,12 +163,12 @@ class TestBreakevenShort:
 
     @pytest.mark.asyncio
     async def test_activates_at_threshold(self) -> None:
-        """Breakeven triggers when short P&L reaches +0.3% (price drops 0.3%)."""
+        """Breakeven triggers when short P&L reaches +0.6% (price drops 0.6%)."""
         engine = _make_engine()
-        # SHORT: profit when price goes DOWN.  entry=100k, current=99_700 => +0.3%
+        # SHORT: profit when price goes DOWN.  entry=100k, current=99_400 => +0.6%
         pos = _make_position(
             entry_price=100_000.0,
-            current_price=99_700.0,
+            current_price=99_400.0,
             side="short",
             sl_price=100_800.0,
         )
@@ -308,7 +308,7 @@ class TestBreakevenOrderLifecycle:
         engine = _make_engine()
         pos = _make_position(
             entry_price=100_000.0,
-            current_price=100_500.0,
+            current_price=100_700.0,
             side="long",
             sl_order_id=None,
             sl_price=None,
@@ -328,7 +328,7 @@ class TestBreakevenOrderLifecycle:
         engine.client.cancel_order.side_effect = Exception("Order not found")
         pos = _make_position(
             entry_price=100_000.0,
-            current_price=100_500.0,
+            current_price=100_700.0,
             side="long",
         )
         engine.active_positions["BTC"] = pos
@@ -350,7 +350,7 @@ class TestBreakevenOrderLifecycle:
         )
         pos = _make_position(
             entry_price=100_000.0,
-            current_price=100_500.0,
+            current_price=100_700.0,
             side="long",
         )
         engine.active_positions["BTC"] = pos
@@ -379,7 +379,7 @@ class TestBreakevenOrderLifecycle:
         pos_eth = _make_position(
             symbol="ETH",
             entry_price=3_000.0,
-            current_price=3_005.0,  # +0.17% (below 0.3%)
+            current_price=3_005.0,  # +0.17% (below 0.6%)
             side="long",
             sl_order_id="222",
         )
@@ -433,7 +433,7 @@ class TestBreakevenConstant:
     """Verify the BREAKEVEN_THRESHOLD_PCT and BREAKEVEN_OFFSET_PCT constants."""
 
     def test_threshold_value(self) -> None:
-        assert BREAKEVEN_THRESHOLD_PCT == 0.3
+        assert BREAKEVEN_THRESHOLD_PCT == 0.6
 
     def test_offset_value(self) -> None:
-        assert BREAKEVEN_OFFSET_PCT == 0.08
+        assert BREAKEVEN_OFFSET_PCT == 0.15
