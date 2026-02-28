@@ -1,0 +1,18 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install dependencies
+COPY requirements-ib.txt .
+RUN pip install --no-cache-dir -r requirements-ib.txt
+
+# Copy application
+COPY ib_bot/ ./ib_bot/
+# NOTE: .env NOT copied - provided via docker-compose env_file
+
+# Set Python path
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+
+# Default command
+CMD ["python", "-m", "ib_bot.main"]

@@ -1,10 +1,25 @@
 services:
-  bot:
+  crypto_bot:
     build: .
-    container_name: hlquantbot_bot
-    command: ["python", "-m", "simple_bot.main"]
+    container_name: hlquantbot_crypto
+    command: ["python", "-m", "crypto_bot.main"]
     env_file:
       - .env
     volumes:
       - ./logs:/app/logs
     restart: unless-stopped
+
+  ib_bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.ib_bot
+    container_name: hlquantbot_ib
+    command: ["python", "-m", "ib_bot.main"]
+    env_file:
+      - .env
+    volumes:
+      - ./ib_bot/logs:/app/ib_bot/logs
+    network_mode: host    # Required to reach TWS on localhost
+    restart: unless-stopped
+    profiles:
+      - ib    # Only start with: docker compose --profile ib up

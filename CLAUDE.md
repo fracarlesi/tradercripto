@@ -63,7 +63,7 @@ mcp__plugin_serena_serena__activate_project(project="trader_bitcoin")
 ## Project Structure
 
 ```
-simple_bot/
+crypto_bot/
 ├── config/           # trading.yaml (primary config)
 ├── core/             # models.py (MarketState, Regime, Direction)
 ├── services/         # risk_manager, execution_engine, market_state, llm_veto, kill_switch
@@ -78,20 +78,20 @@ simple_bot/
 
 ### Testing
 ```bash
-cd simple_bot && python3 -m pytest tests/ -v
-cd simple_bot && python3 -m pytest tests/ --cov=. --cov-report=html
+cd crypto_bot && python3 -m pytest tests/ -v
+cd crypto_bot && python3 -m pytest tests/ --cov=. --cov-report=html
 ```
 
 ### Code Quality
 ```bash
-pyright simple_bot/                 # Type checking (from project root)
-cd simple_bot && ruff check .       # Linting
-cd simple_bot && black .            # Formatting
+pyright crypto_bot/                 # Type checking (from project root)
+cd crypto_bot && ruff check .       # Linting
+cd crypto_bot && black .            # Formatting
 ```
 
 ### Running
 ```bash
-cd simple_bot && python3 main.py    # Bot (live)
+cd crypto_bot && python3 main.py    # Bot (live)
 ```
 
 ---
@@ -99,8 +99,8 @@ cd simple_bot && python3 main.py    # Bot (live)
 ## Deploy Workflow: Locale -> Hetzner
 
 1. **Sviluppo locale**: modifica codice
-2. **Test**: `cd simple_bot && python3 -m pytest tests/ -v`
-3. **Lint**: `pyright simple_bot/ && cd simple_bot && ruff check .`
+2. **Test**: `cd crypto_bot && python3 -m pytest tests/ -v`
+3. **Lint**: `pyright crypto_bot/ && cd crypto_bot && ruff check .`
 4. **Commit + push**: solo dopo che tutti i test passano
 5. **Deploy**: `./deploy.sh` (rsync + docker rebuild)
 6. **Verifica**: `ssh root@<VPS_IP_REDACTED> "cd /opt/hlquantbot && docker compose logs -f bot"`

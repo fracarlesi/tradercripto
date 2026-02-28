@@ -11,13 +11,13 @@ import yaml
 def _find_trading_yaml() -> Path:
     """Locate trading.yaml relative to this file or cwd."""
     candidates = [
-        Path(__file__).resolve().parent.parent / "simple_bot" / "config" / "trading.yaml",
-        Path.cwd() / "simple_bot" / "config" / "trading.yaml",
+        Path(__file__).resolve().parent.parent / "crypto_bot" / "config" / "trading.yaml",
+        Path.cwd() / "crypto_bot" / "config" / "trading.yaml",
     ]
     for p in candidates:
         if p.exists():
             return p
-    raise FileNotFoundError("Cannot find simple_bot/config/trading.yaml")
+    raise FileNotFoundError("Cannot find crypto_bot/config/trading.yaml")
 
 
 @dataclass

@@ -30,12 +30,12 @@ Event-driven pub/sub with async services. NO dashboard, NO analytics DB.
 
 ## Entry Point
 ```bash
-cd simple_bot && python3 main.py
+cd crypto_bot && python3 main.py
 ```
 
 ## Key Files
-- simple_bot/main.py - HLQuantBot orchestrator
-- simple_bot/strategies/momentum_scalper.py - trend_momentum strategy
-- simple_bot/services/execution_engine.py - Orders + TP/SL
-- simple_bot/services/risk_manager.py - Sizing + validation
-- simple_bot/config/trading.yaml - All configuration
+- crypto_bot/main.py - HLQuantBot orchestrator
+- crypto_bot/strategies/momentum_scalper.py - trend_momentum strategy
+- crypto_bot/services/execution_engine.py - Orders + TP/SL
+- crypto_bot/services/risk_manager.py - Sizing + validation
+- crypto_bot/config/trading.yaml - All configuration

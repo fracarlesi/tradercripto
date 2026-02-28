@@ -1,0 +1,70 @@
+# =============================================================================
+# IB Trading Bot - Configuration
+# Opening Range Breakout (ORB) strategy for futures
+# =============================================================================
+
+# IB Connection
+ib_connection:
+  host: "127.0.0.1"
+  port: 7497                    # TWS paper: 7497, TWS live: 7496, IB Gateway paper: 4002, live: 4001
+  client_id: 1
+  timeout: 30
+  readonly: false
+  reconnect_delay: 5
+  max_reconnect_attempts: 10
+
+# Contracts to trade (start with MES for paper)
+contracts:
+  - symbol: MES
+    enabled: true
+  - symbol: MNQ
+    enabled: false
+  - symbol: ES
+    enabled: false
+  - symbol: NQ
+    enabled: false
+
+# Opening Range
+opening_range:
+  or_start: "09:30"            # ET - market open
+  or_end: "09:45"              # ET - 15 min opening range
+  bar_size: "1 min"
+  min_range_ticks: 8           # Skip too-flat ranges
+  max_range_ticks: 80          # Skip too-volatile ranges
+  timezone: "US/Eastern"
+
+# Strategy
+strategy:
+  name: "orb"
+  breakout_buffer_ticks: 2     # Ticks above/below OR for entry
+  vwap_confirmation: true      # Require price above/below VWAP
+  min_atr_ticks: 4             # Minimum ATR in ticks
+  max_entry_time: "11:30"      # ET - no new entries after this
+  allow_short: true
+  no_reentry_after_stop: true  # No re-entry same direction after stop
+
+# Stop and Target
+stops:
+  stop_type: "or_midpoint"     # Stop at OR midpoint
+  stop_buffer_ticks: 2         # Buffer below stop level
+  reward_risk_ratio: "1.5"     # R:R 1:1.5
+  trailing_enabled: false
+  eod_flatten_time: "15:45"    # ET - flatten all before close
+
+# Risk Management
+risk:
+  max_risk_per_trade_usd: "500"
+  max_daily_loss_usd: "1000"
+  max_contracts_per_trade: 2
+  max_trades_per_day: 2
+  consecutive_stops_halt: 2    # Halt after N consecutive stops
+
+# Notifications
+notifications:
+  enabled: true
+  ntfy_topic: "${NTFY_TOPIC:}"
+
+# Logging
+logging:
+  level: "INFO"
+  file: "logs/ib_bot.log"
