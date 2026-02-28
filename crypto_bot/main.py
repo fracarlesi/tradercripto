@@ -715,6 +715,10 @@ class ConservativeBot:
             best_setup_type = SetupType.MOMENTUM
             best_signal_type = 0.0
 
+            # Track highest score across all paths (for counterfactual near-miss logging)
+            top_scored_prob = 0.0
+            top_scored_direction: Direction = Direction.FLAT
+
             # --- PATH 1 (existing): TREND only → EMA direction → ML(signal_type=0.0) ---
             if state.regime == Regime.TREND:
                 direction = state.trend_direction
@@ -722,6 +726,9 @@ class ConservativeBot:
                     features = self._ml_model.extract_features(state, signal_type=0.0)
                     prob, reason = self._ml_model.predict(features)
                     all_scores.append((f"{symbol}/ema", prob))
+                    if prob > top_scored_prob:
+                        top_scored_prob = prob
+                        top_scored_direction = direction
                     if prob >= threshold and prob > best_prob:
                         best_prob = prob
                         best_direction = direction
@@ -737,6 +744,9 @@ class ConservativeBot:
                     features = self._ml_model.extract_features(state, signal_type=1.0)
                     prob, reason = self._ml_model.predict(features)
                     all_scores.append((f"{symbol}/vb", prob))
+                    if prob > top_scored_prob:
+                        top_scored_prob = prob
+                        top_scored_direction = vb_direction
                     if prob >= threshold and prob > best_prob:
                         best_prob = prob
                         best_direction = vb_direction
@@ -753,6 +763,9 @@ class ConservativeBot:
                         features = self._ml_model.extract_features(state, signal_type=2.0)
                         prob, reason = self._ml_model.predict(features)
                         all_scores.append((f"{symbol}/mb", prob))
+                        if prob > top_scored_prob:
+                            top_scored_prob = prob
+                            top_scored_direction = mb_direction
                         if prob >= threshold and prob > best_prob:
                             best_prob = prob
                             best_direction = mb_direction
@@ -763,15 +776,15 @@ class ConservativeBot:
             # No path fired above threshold
             if best_prob < threshold:
                 # Counterfactual: log near-miss ML rejections (prob within 0.10 of threshold)
-                if (cf_logger and best_prob > 0
-                        and best_prob >= threshold - 0.10
-                        and best_direction != Direction.FLAT):
+                if (cf_logger and top_scored_prob > 0
+                        and top_scored_prob >= threshold - 0.10
+                        and top_scored_direction != Direction.FLAT):
                     cf_logger.log_rejection(
                         symbol=symbol,
-                        direction=best_direction.value,
+                        direction=top_scored_direction.value,
                         entry_price=float(state.close),
                         reason="ml_threshold",
-                        ml_probability=best_prob,
+                        ml_probability=top_scored_prob,
                     )
 
                 regime_in_any = (
