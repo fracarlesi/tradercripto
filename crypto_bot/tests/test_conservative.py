@@ -643,8 +643,9 @@ class TestRegimeGate:
 # =============================================================================
 
 class TestMLThresholdSelection:
-    """Test that _evaluate_all_assets uses the ML model's calibrated
-    optimal_threshold instead of just config.ml_min_probability."""
+    """Test that _evaluate_all_assets uses config.ml_min_probability
+    as the effective ML threshold (config takes precedence over the
+    model's calibrated optimal_threshold)."""
 
     def _make_bot(
         self,
@@ -728,9 +729,10 @@ class TestMLThresholdSelection:
         )
 
     @pytest.mark.asyncio
-    async def test_optimal_threshold_used_over_min_probability(self) -> None:
+    async def test_config_threshold_takes_precedence_over_optimal(self) -> None:
         """When optimal_threshold (0.70) > min_probability (0.50),
-        a signal at 0.65 should be REJECTED."""
+        config takes precedence: effective threshold is 0.50.
+        A signal at 0.65 should be ACCEPTED (0.65 > 0.50)."""
         bot = self._make_bot(
             ml_min_probability=0.50,
             optimal_threshold=0.70,
@@ -745,12 +747,12 @@ class TestMLThresholdSelection:
 
         await bot._evaluate_all_assets()
 
-        # Signal at 0.65 is below optimal_threshold 0.70 -> rejected
-        bot._execute_setup.assert_not_called()
+        # Effective threshold is config's min_probability=0.50, signal 0.65 > 0.50 -> accepted
+        bot._execute_setup.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_signal_above_optimal_threshold_accepted(self) -> None:
-        """Signal above optimal_threshold should be accepted."""
+    async def test_signal_above_both_thresholds_accepted(self) -> None:
+        """Signal above both optimal_threshold and min_probability should be accepted."""
         bot = self._make_bot(
             ml_min_probability=0.50,
             optimal_threshold=0.70,
@@ -788,9 +790,9 @@ class TestMLThresholdSelection:
         bot._execute_setup.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_min_probability_is_absolute_floor(self) -> None:
-        """min_probability acts as floor even if optimal_threshold is lower
-        (should not happen in practice, but guards against edge cases)."""
+    async def test_min_probability_is_effective_threshold(self) -> None:
+        """Config min_probability is the effective threshold regardless of
+        the model's optimal_threshold."""
         bot = self._make_bot(
             ml_min_probability=0.60,
             optimal_threshold=0.55,
@@ -805,16 +807,16 @@ class TestMLThresholdSelection:
 
         await bot._evaluate_all_assets()
 
-        # max(0.60, 0.55) = 0.60, signal 0.57 < 0.60 -> rejected
+        # Effective threshold is config's min_probability=0.60, signal 0.57 < 0.60 -> rejected
         bot._execute_setup.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_signal_exactly_at_threshold_accepted(self) -> None:
-        """Signal exactly at the effective threshold should pass (not < threshold)."""
+    async def test_signal_exactly_at_config_threshold_accepted(self) -> None:
+        """Signal exactly at the config min_probability should pass (not < threshold)."""
         bot = self._make_bot(
             ml_min_probability=0.50,
             optimal_threshold=0.70,
-            predict_prob=0.70,
+            predict_prob=0.50,
         )
         market_state_svc = MagicMock()
         market_state_svc.get_all_states.return_value = {
@@ -825,7 +827,7 @@ class TestMLThresholdSelection:
 
         await bot._evaluate_all_assets()
 
-        # 0.70 is NOT < 0.70 -> accepted
+        # Effective threshold is config's min_probability=0.50, signal 0.50 is NOT < 0.50 -> accepted
         bot._execute_setup.assert_called_once()
 
 

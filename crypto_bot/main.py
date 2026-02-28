@@ -545,12 +545,9 @@ class ConservativeBot:
         # ML Model - required
         model_loaded = self._ml_model.load(cfg.ml_model_path)
         if model_loaded:
-            effective_threshold = max(
-                cfg.ml_min_probability,
-                self._ml_model.optimal_threshold or cfg.ml_min_probability,
-            )
+            effective_threshold = cfg.ml_min_probability
             logger.info(
-                "ML model loaded: optimal_threshold=%.4f, config_floor=%.2f, effective_threshold=%.4f",
+                "ML model loaded: model_calibrated=%.4f, config_threshold=%.2f, effective=%.4f",
                 self._ml_model.optimal_threshold or 0.0,
                 cfg.ml_min_probability,
                 effective_threshold,
@@ -655,10 +652,7 @@ class ConservativeBot:
         if risk_manager:
             symbols_with_positions = set(risk_manager._open_positions.keys())
 
-        threshold = max(
-            self.config.ml_min_probability,
-            self._ml_model.optimal_threshold or self.config.ml_min_probability,
-        )
+        threshold = self.config.ml_min_probability
 
         # Guard: volume breakout requires 13-feature model
         n_model_features = getattr(self._ml_model._model, "n_features_in_", 0)
@@ -1197,10 +1191,7 @@ class ConservativeBot:
                 if self.kill_switch:
                     await self.kill_switch.update_equity(Decimal(str(equity)))
 
-            effective_threshold = max(
-                self.config.ml_min_probability,
-                self._ml_model.optimal_threshold or self.config.ml_min_probability,
-            )
+            effective_threshold = self.config.ml_min_probability
             logger.info("=" * 60)
             logger.info(
                 "HLQuantBot v4 Running (%s) | ML threshold: %.0f%%",
