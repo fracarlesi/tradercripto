@@ -266,12 +266,24 @@ class WhatsAppService(BaseService):
                 emoji = self.EMOJI["fill"]
                 pnl_sign = ""
 
+            # Daily stats summary
+            daily_wins = payload.get("daily_wins")
+            daily_trades = payload.get("daily_trades")
+            daily_pnl = payload.get("daily_pnl")
+
+            daily_line = ""
+            if daily_trades is not None and daily_trades > 0:
+                wr = (daily_wins / daily_trades) * 100
+                dp_sign = "+" if daily_pnl >= 0 else ""
+                daily_line = f"\n---\nToday: {daily_wins}W/{daily_trades - daily_wins}L ({wr:.0f}%) | {dp_sign}${daily_pnl:.2f}"
+
             text = (
                 f"{emoji} Position Closed\n"
                 f"Symbol: {symbol}\n"
                 f"Side: {side.upper()}\n"
                 f"Entry: ${entry:.2f} -> Exit: ${exit_price:.2f}\n"
                 f"P&L: {pnl_sign}${pnl:.2f} ({pnl_sign}{pnl_pct:.2f}%)"
+                f"{daily_line}"
             )
             await self._send_message(text, title=f"{emoji} Closed {symbol} {pnl_sign}${pnl:.2f}")
 

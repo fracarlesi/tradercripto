@@ -356,6 +356,10 @@ class ExecutionEngineService(BaseService):
         # Market states cache for momentum fade exit
         self._market_states: Dict[str, Any] = {}
 
+        # Daily trade tracker for notification stats
+        self._daily_closed: List[Dict[str, Any]] = []
+        self._daily_date: str = ""
+
         # Metrics
         self.metrics = ExecutionMetrics()
         
@@ -2454,6 +2458,21 @@ class ExecutionEngineService(BaseService):
             else:
                 pnl_pct = ((position.entry_price - position.current_price) / position.entry_price) * 100
 
+        # Track daily closed trades (auto-reset on date change)
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if self._daily_date != today:
+            self._daily_closed.clear()
+            self._daily_date = today
+        self._daily_closed.append({
+            "symbol": symbol,
+            "pnl": position.unrealized_pnl,
+            "pnl_pct": pnl_pct,
+            "is_win": position.unrealized_pnl > 0,
+        })
+        daily_wins = sum(1 for t in self._daily_closed if t["is_win"])
+        daily_trades = len(self._daily_closed)
+        daily_pnl = sum(t["pnl"] for t in self._daily_closed)
+
         # Publish fill/close event with flat fields for notifications
         await self.publish(Topic.FILLS, {
             "event": "position_closed",
@@ -2466,6 +2485,9 @@ class ExecutionEngineService(BaseService):
             "exit_reason": position.exit_reason,
             "position": position.to_dict(),
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            "daily_wins": daily_wins,
+            "daily_trades": daily_trades,
+            "daily_pnl": daily_pnl,
         })
         
         # Clean up tracking sets
