@@ -290,6 +290,10 @@ def _make_config():
         momentum_burst_max_rsi_entry=75.0,
         momentum_burst_min_volume_ratio=1.2,
         momentum_burst_allowed_regimes=["chaos", "trend"],
+        momentum_exit_enabled=True,
+        momentum_exit_min_age_minutes=15,
+        momentum_exit_min_profit_pct=0.1,
+        momentum_exit_rsi_slope_threshold=1.0,
         testnet=True,
         dry_run=True,
     )

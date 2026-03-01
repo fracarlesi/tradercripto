@@ -143,6 +143,13 @@ stops:
     "240": 0.005
     "360": 0.0
 
+  # Momentum Fade Exit — close when momentum dies while still in profit
+  momentum_exit:
+    enabled: true
+    min_age_minutes: 15        # Grace period: let momentum develop
+    min_profit_pct: 0.1        # Only close if we're in profit
+    rsi_slope_threshold: 1.0   # LONG faded: rsi_slope < +1.0; SHORT faded: rsi_slope > -1.0
+
 # -----------------------------------------------------------------------------
 # Regime Detection
 # -----------------------------------------------------------------------------

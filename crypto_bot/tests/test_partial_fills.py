@@ -49,6 +49,7 @@ def _make_engine() -> ExecutionEngineService:
     engine._settling_symbols = set()
     engine._partial_fill_first_seen = {}
     engine._tp_sl_placed_size = {}
+    engine._market_states = {}
     engine.metrics = MagicMock()
     engine.metrics.orders_filled = 0
     engine.metrics.orders_cancelled = 0

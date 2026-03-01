@@ -190,6 +190,12 @@ class ConservativeConfig:
     momentum_burst_min_volume_ratio: float
     momentum_burst_allowed_regimes: List[str]
 
+    # Momentum Fade Exit
+    momentum_exit_enabled: bool
+    momentum_exit_min_age_minutes: int
+    momentum_exit_min_profit_pct: float
+    momentum_exit_rsi_slope_threshold: float
+
     # Environment
     testnet: bool
     dry_run: bool
@@ -213,6 +219,7 @@ class ConservativeConfig:
         ml = get_section("ml_model")
         vb = get_section("volume_breakout")
         mb = get_section("momentum_burst")
+        me = get_section("stops").get("momentum_exit", {})
 
         # Parse universe mode and assets
         universe_mode = universe.get("mode", "manual")
@@ -277,6 +284,10 @@ class ConservativeConfig:
             momentum_burst_max_rsi_entry=mb.get("max_rsi_entry", 75.0),
             momentum_burst_min_volume_ratio=mb.get("min_volume_ratio", 1.2),
             momentum_burst_allowed_regimes=mb.get("allowed_regimes", ["chaos", "trend"]),
+            momentum_exit_enabled=me.get("enabled", True),
+            momentum_exit_min_age_minutes=me.get("min_age_minutes", 15),
+            momentum_exit_min_profit_pct=me.get("min_profit_pct", 0.1),
+            momentum_exit_rsi_slope_threshold=me.get("rsi_slope_threshold", 1.0),
             testnet=env.lower() == "testnet",
             dry_run=data.get("dry_run", False),
         )
@@ -528,11 +539,19 @@ class ConservativeBot:
             def __init__(self, exec_cfg: _ExecConfig):
                 self.execution_engine = exec_cfg
 
+        class _MomentumExitConfig:
+            def __init__(self, cfg: ConservativeConfig):
+                self.enabled = cfg.momentum_exit_enabled
+                self.min_age_minutes = cfg.momentum_exit_min_age_minutes
+                self.min_profit_pct = cfg.momentum_exit_min_profit_pct
+                self.rsi_slope_threshold = cfg.momentum_exit_rsi_slope_threshold
+
         class _ConfigAdapter:
             def __init__(self, cfg: ConservativeConfig):
                 self.services = _ServicesConfig(_ExecConfig(cfg))
                 self.risk = _RiskConfig(cfg)
                 self.stops = _StopsConfig(cfg)
+                self.momentum_exit = _MomentumExitConfig(cfg)
 
         self._services["execution"] = ExecutionEngineService(
             bus=self._bus, config=_ConfigAdapter(cfg),
@@ -660,6 +679,11 @@ class ConservativeBot:
         cf_logger = self._services.get("counterfactual_logger")
         if cf_logger and states:
             cf_logger.update_market_states(states)
+
+        # --- Update execution engine with fresh market states ---
+        exec_engine = self._services.get("execution")
+        if exec_engine and states:
+            exec_engine.update_market_states(states)
 
         # --- ML model gate ---
         if not self._ml_model.is_loaded:

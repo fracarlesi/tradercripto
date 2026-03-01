@@ -212,7 +212,9 @@ class ExecutionPosition:
     lowest_price: float = float('inf')  # Trough price for SHORT trailing stop
     entry_atr_pct: float = 0.0       # ATR% at entry time (for trailing distance)
     trailing_active: bool = False     # True when trailing stop is actively following price
-    
+    entry_rsi_slope: float = 0.0     # RSI slope at entry (for momentum fade tracking)
+    entry_ema_spread: float = 0.0    # EMA spread at entry (for momentum fade tracking)
+
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary."""
         return {
@@ -240,6 +242,8 @@ class ExecutionPosition:
             "lowest_price": self.lowest_price,
             "entry_atr_pct": self.entry_atr_pct,
             "trailing_active": self.trailing_active,
+            "entry_rsi_slope": self.entry_rsi_slope,
+            "entry_ema_spread": self.entry_ema_spread,
         }
 
 
@@ -348,7 +352,10 @@ class ExecutionEngineService(BaseService):
         # Used by _sync_positions_from_exchange to detect when the position
         # grows (additional fills) and TP/SL need to be re-placed.
         self._tp_sl_placed_size: Dict[str, float] = {}
-        
+
+        # Market states cache for momentum fade exit
+        self._market_states: Dict[str, Any] = {}
+
         # Metrics
         self.metrics = ExecutionMetrics()
         
@@ -364,10 +371,14 @@ class ExecutionEngineService(BaseService):
             self._exec_config.max_slippage_pct,
         )
     
+    def update_market_states(self, states: list) -> None:
+        """Update cached market states (called from bot orchestrator each scan)."""
+        self._market_states = {s.symbol: s for s in states} if states else {}
+
     # =========================================================================
     # Lifecycle
     # =========================================================================
-    
+
     async def _on_start(self) -> None:
         """Initialize service and subscribe to topics."""
         self._logger.info("Starting ExecutionEngine service")
@@ -1064,6 +1075,11 @@ class ExecutionEngineService(BaseService):
         entry_price = order.avg_price or signal["entry_price"]
         size = order.filled_size or signal["size"]
         
+        # Capture entry momentum metrics for fade tracking
+        _ms = self._market_states.get(symbol)
+        _entry_rsi_slope = getattr(_ms, 'rsi_slope', 0.0) if _ms else 0.0
+        _entry_ema_spread = getattr(_ms, 'ema_spread', 0.0) if _ms else 0.0
+
         # Create position
         position = ExecutionPosition(
             symbol=symbol,
@@ -1078,6 +1094,8 @@ class ExecutionEngineService(BaseService):
             entry_regime=signal.get("regime"),
             highest_price=entry_price,
             lowest_price=entry_price,
+            entry_rsi_slope=_entry_rsi_slope,
+            entry_ema_spread=_entry_ema_spread,
         )
         
         self.active_positions[symbol] = position
@@ -1800,6 +1818,9 @@ class ExecutionEngineService(BaseService):
                 # Check for ROI-based exits (time-based take profit)
                 await self._check_roi_exits()
 
+                # Check for momentum fade exits
+                await self._check_momentum_fade()
+
                 await asyncio.sleep(5)  # Check every 5 seconds
 
             except asyncio.CancelledError:
@@ -2312,10 +2333,91 @@ class ExecutionEngineService(BaseService):
                     symbol, e
                 )
     
+    async def _check_momentum_fade(self) -> None:
+        """
+        Close positions where momentum has faded while still in profit.
+
+        Logic:
+        - Position must be OPEN (not closing/settling)
+        - Age > min_age_minutes (grace period)
+        - Profit > min_profit_pct
+        - RSI slope has reversed or flattened:
+            LONG: rsi_slope < +threshold
+            SHORT: rsi_slope > -threshold
+        """
+        # Check if momentum exit is enabled
+        momentum_cfg = getattr(self._bot_config, 'momentum_exit', None)
+        if not momentum_cfg or not getattr(momentum_cfg, 'enabled', False):
+            return
+
+        min_age = momentum_cfg.min_age_minutes
+        min_profit = momentum_cfg.min_profit_pct
+        threshold = momentum_cfg.rsi_slope_threshold
+
+        now = datetime.now(timezone.utc)
+
+        for symbol, position in list(self.active_positions.items()):
+            # Guard: only OPEN positions
+            if position.status != PositionStatus.OPEN:
+                continue
+
+            # Guard: not already closing
+            if symbol in self._closing_positions:
+                continue
+
+            # Guard: not settling
+            if symbol in self._settling_symbols:
+                continue
+
+            # Guard: position age
+            if not position.opened_at:
+                continue
+            age_minutes = (now - position.opened_at).total_seconds() / 60.0
+            if age_minutes < min_age:
+                continue
+
+            # Guard: must be in profit
+            if position.entry_price <= 0:
+                continue
+            if position.side == "long":
+                profit_pct = ((position.current_price - position.entry_price) / position.entry_price) * 100
+            else:
+                profit_pct = ((position.entry_price - position.current_price) / position.entry_price) * 100
+
+            if profit_pct < min_profit:
+                continue
+
+            # Get current RSI slope from market states
+            market_state = self._market_states.get(symbol)
+            if not market_state:
+                continue
+
+            current_rsi_slope = getattr(market_state, 'rsi_slope', None)
+            if current_rsi_slope is None:
+                continue
+
+            # Check if momentum has faded
+            faded = False
+            if position.side == "long" and current_rsi_slope < threshold:
+                faded = True
+            elif position.side == "short" and current_rsi_slope > -threshold:
+                faded = True
+
+            if faded:
+                self._logger.info(
+                    "MOMENTUM FADE: %s %s | rsi_slope=%.2f (entry=%.2f) | "
+                    "P&L=%.2f%% | age=%.1f min | closing",
+                    position.side.upper(), symbol,
+                    current_rsi_slope, position.entry_rsi_slope,
+                    profit_pct, age_minutes,
+                )
+                position.exit_reason = "momentum_fade"
+                await self.close_position(symbol)
+
     async def _handle_position_closed(self, symbol: str) -> None:
         """
         Handle a position that has been closed.
-        
+
         Args:
             symbol: Symbol of closed position
         """
