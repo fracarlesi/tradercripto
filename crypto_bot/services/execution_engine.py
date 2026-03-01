@@ -557,19 +557,12 @@ class ExecutionEngineService(BaseService):
                 entry_price = order_result.avg_price or signal["entry_price"]
                 is_long = signal["direction"] == "long"
 
-                # Recalculate TP/SL from fill price (ATR-adaptive or fixed %)
-                atr_pct_raw = signal.get("atr_pct", 0)
-                if atr_pct_raw and float(atr_pct_raw) > 0:
-                    atr_pct_val = float(atr_pct_raw) / 100
-                    initial_mult = getattr(
-                        getattr(self._bot_config, "stops", None),
-                        "initial_atr_mult", 2.5
-                    )
-                    sl_pct = min(max(atr_pct_val * initial_mult, 0.005), 0.02)
-                    tp_pct = max(sl_pct * 5.0, 0.04)
-                else:
-                    sl_pct = self._bot_config.risk.stop_loss_pct / 100
-                    tp_pct = self._bot_config.risk.take_profit_pct / 100
+                # Recalculate TP/SL from fill price — always use fixed config values.
+                # ATR-adaptive branch was removed: the ATR formula produced TP=4-8%
+                # and SL=0.5-2%, far too wide for a 15m momentum scalper.
+                # Config values (TP=1.6%, SL=1.0%) are data-driven from parameter sweep.
+                sl_pct = self._bot_config.risk.stop_loss_pct / 100
+                tp_pct = self._bot_config.risk.take_profit_pct / 100
 
                 sl_price = entry_price * (1 - sl_pct) if is_long else entry_price * (1 + sl_pct)
                 tp_price = entry_price * (1 + tp_pct) if is_long else entry_price * (1 - tp_pct)
@@ -1359,12 +1352,15 @@ class ExecutionEngineService(BaseService):
         """
         Set take profit and stop loss orders using proper trigger orders.
 
-        When `atr_pct` is present in the signal, SL/TP are ATR-adaptive:
-        - SL = initial_atr_mult x ATR%, capped between 0.5% and 2.0%
-        - TP = safety-net only (5x SL or at least 4%), trailing stop handles exit
-        Otherwise falls back to fixed percentages from config.
+        TP/SL are always calculated from config fixed percentages (stop_loss_pct,
+        take_profit_pct). These values are data-driven from parameter sweep.
+        ATR-adaptive branch was removed: it produced TP=4-8% and SL=0.5-2%,
+        far too wide for a 15m momentum scalper.
 
         Both TP and SL are always calculated from the actual fill price.
+
+        ATR data (entry_atr_pct) is still stored on the position for the
+        trailing stop system, which uses it independently.
 
         Args:
             signal: Original signal with TP/SL levels
@@ -1376,32 +1372,14 @@ class ExecutionEngineService(BaseService):
         entry_price = order.avg_price or signal["entry_price"]
         size = position.size
 
-        # --- ATR-adaptive or fixed SL/TP ---
+        # --- Fixed TP/SL from config (always) ---
+        sl_pct = self._bot_config.risk.stop_loss_pct / 100
+        tp_pct = self._bot_config.risk.take_profit_pct / 100
+
+        # Store ATR on position for trailing stop calculations (if available)
         atr_pct_raw = signal.get("atr_pct", 0)
-
         if atr_pct_raw and float(atr_pct_raw) > 0:
-            atr_pct_val = float(atr_pct_raw) / 100  # e.g. 0.5% -> 0.005
-            initial_mult = getattr(
-                getattr(self._bot_config, "stops", None),
-                "initial_atr_mult", 2.5
-            )
-
-            # SL = initial_mult x ATR, capped between 0.5% and 2.0%
-            sl_pct = min(max(atr_pct_val * initial_mult, 0.005), 0.02)
-            # TP = safety-net (very wide) — trailing stop handles normal exit
-            tp_pct = max(sl_pct * 5.0, 0.04)  # at least 4%, or 5x SL
-
-            # Store ATR on position for trailing stop calculations
             position.entry_atr_pct = float(atr_pct_raw)
-
-            self._logger.info(
-                "ATR-adaptive TP/SL for %s: atr_pct=%.2f%%, SL=%.2f%%, TP=%.2f%% (safety-net)",
-                symbol, float(atr_pct_raw), sl_pct * 100, tp_pct * 100,
-            )
-        else:
-            # Fallback to fixed percentages from config
-            sl_pct = self._bot_config.risk.stop_loss_pct / 100
-            tp_pct = self._bot_config.risk.take_profit_pct / 100
 
         # Calculate prices from fill price
         if is_long:

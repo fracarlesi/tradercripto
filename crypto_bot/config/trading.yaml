@@ -129,9 +129,10 @@ stops:
   take_profit_pct: 1.6     # Confirmed optimal by sweep (R:R 1.6:1)
   use_server_side: true
 
-  # ATR-based trailing (for reference, not primary)
-  initial_atr_mult: 2.5
-  trailing_atr_mult: 1.5
+  # ATR multipliers — used ONLY by the trailing stop system (after breakeven).
+  # NOT used for initial TP/SL placement (which always uses stop_loss_pct / take_profit_pct above).
+  initial_atr_mult: 2.5           # Deprecated for initial TP/SL — kept for trailing reference only
+  trailing_atr_mult: 1.5          # Trail distance = entry_atr_pct * trailing_atr_mult
   trailing_update_interval: 300
 
   # Graduated ROI - time-based profit targets

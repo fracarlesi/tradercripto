@@ -37,14 +37,19 @@ def _make_engine(trailing_atr_mult: float = 2.5) -> ExecutionEngineService:
     engine.client.cancel_order = AsyncMock()
     engine._place_trigger_with_retry = AsyncMock(return_value={"orderId": "50001"})
 
-    # Mock config with stops.trailing_atr_mult
+    # Mock config with stops.trailing_atr_mult and risk.stop_loss_pct/take_profit_pct
     class _StopsConfig:
         def __init__(self, mult: float):
             self.trailing_atr_mult = mult
 
+    class _RiskConfig:
+        stop_loss_pct = 1.0
+        take_profit_pct = 1.6
+
     class _BotConfig:
         def __init__(self, mult: float):
             self.stops = _StopsConfig(mult)
+            self.risk = _RiskConfig()
 
     engine._bot_config = _BotConfig(trailing_atr_mult)
     return engine
@@ -353,7 +358,7 @@ class TestTrailingShort:
 
 
 class TestAtrAdaptiveTpSl:
-    """Tests for ATR-adaptive SL/TP in _set_tp_sl."""
+    """Tests that _set_tp_sl always uses config TP/SL and stores ATR for trailing."""
 
     @pytest.mark.asyncio
     async def test_atr_sets_entry_atr_pct_on_position(self) -> None:
@@ -387,8 +392,8 @@ class TestAtrAdaptiveTpSl:
         assert pos.entry_atr_pct == 0.5
 
     @pytest.mark.asyncio
-    async def test_atr_sl_capped_at_minimum(self) -> None:
-        """SL is capped at 0.5% minimum even with tiny ATR."""
+    async def test_tiny_atr_still_uses_config_sl(self) -> None:
+        """With tiny ATR, SL still uses config value (not ATR-adaptive)."""
         engine = _make_engine()
         engine._validate_stop_distance = MagicMock(return_value=True)
         engine._send_alert = AsyncMock()
@@ -410,19 +415,21 @@ class TestAtrAdaptiveTpSl:
             "direction": "long",
             "entry_price": 1.0,
             "size": 1.0,
-            "atr_pct": 0.01,  # Tiny ATR: 0.01% * 2.5 = 0.025% -> capped to 0.5%
+            "atr_pct": 0.01,  # Tiny ATR — should NOT affect TP/SL
         }
 
         await engine._set_tp_sl(signal, FakeOrder(), pos)
 
-        # SL should be 0.5% (minimum cap)
+        # SL should be config value (1.0%), not ATR-derived
         assert pos.sl_price is not None
-        expected_sl = 1.0 * (1 - 0.005)  # 0.995
+        expected_sl = 1.0 * (1 - 0.01)  # 0.99
         assert abs(pos.sl_price - expected_sl) < 0.0001
+        # ATR still stored for trailing stop
+        assert pos.entry_atr_pct == 0.01
 
     @pytest.mark.asyncio
-    async def test_atr_sl_capped_at_maximum(self) -> None:
-        """SL is capped at 2.0% maximum even with huge ATR."""
+    async def test_large_atr_still_uses_config_sl(self) -> None:
+        """With large ATR, SL still uses config value (not ATR-adaptive)."""
         engine = _make_engine()
         engine._validate_stop_distance = MagicMock(return_value=True)
         engine._send_alert = AsyncMock()
@@ -444,28 +451,23 @@ class TestAtrAdaptiveTpSl:
             "direction": "long",
             "entry_price": 100.0,
             "size": 0.01,
-            "atr_pct": 5.0,  # Huge ATR: 5% * 2.5 = 12.5% -> capped to 2.0%
+            "atr_pct": 5.0,  # Large ATR — should NOT affect TP/SL
         }
 
         await engine._set_tp_sl(signal, FakeOrder(), pos)
 
-        # SL should be 2.0% (maximum cap)
-        expected_sl = 100.0 * (1 - 0.02)  # 98.0
+        # SL should be config value (1.0%), not ATR-derived
+        expected_sl = 100.0 * (1 - 0.01)  # 99.0
         assert abs(pos.sl_price - expected_sl) < 0.01
+        # ATR still stored for trailing stop
+        assert pos.entry_atr_pct == 5.0
 
     @pytest.mark.asyncio
-    async def test_no_atr_uses_fixed_pct(self) -> None:
-        """Without atr_pct, falls back to config percentages."""
+    async def test_no_atr_uses_config_pct(self) -> None:
+        """Without atr_pct, uses config percentages and entry_atr_pct stays 0."""
         engine = _make_engine()
         engine._validate_stop_distance = MagicMock(return_value=True)
         engine._send_alert = AsyncMock()
-
-        # Add risk config for fallback
-        class _RiskConfig:
-            stop_loss_pct = 0.8
-            take_profit_pct = 1.6
-
-        engine._bot_config.risk = _RiskConfig()
 
         pos = ExecutionPosition(
             symbol="BTC", side="long", size=0.01,
@@ -489,8 +491,8 @@ class TestAtrAdaptiveTpSl:
 
         await engine._set_tp_sl(signal, FakeOrder(), pos)
 
-        # Should use fixed 0.8% SL
-        expected_sl = 100_000.0 * (1 - 0.008)
+        # Should use config 1.0% SL
+        expected_sl = 100_000.0 * (1 - 0.01)
         assert abs(pos.sl_price - expected_sl) < 0.01
         assert pos.entry_atr_pct == 0.0
 
