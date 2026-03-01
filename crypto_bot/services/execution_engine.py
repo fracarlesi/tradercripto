@@ -371,9 +371,9 @@ class ExecutionEngineService(BaseService):
             self._exec_config.max_slippage_pct,
         )
     
-    def update_market_states(self, states: list) -> None:
+    def update_market_states(self, states: Dict[str, Any]) -> None:
         """Update cached market states (called from bot orchestrator each scan)."""
-        self._market_states = {s.symbol: s for s in states} if states else {}
+        self._market_states = dict(states) if states else {}
 
     # =========================================================================
     # Lifecycle
