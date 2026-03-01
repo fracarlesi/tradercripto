@@ -95,7 +95,8 @@ def setup_logging(log_level: str = "INFO") -> logging.Logger:
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
 
-    file_handler = logging.FileHandler(log_dir / "conservative_bot.log")
+    env_suffix = "_paper" if os.getenv("ENVIRONMENT", "mainnet").lower() == "testnet" else ""
+    file_handler = logging.FileHandler(log_dir / f"bot{env_suffix}.log")
     file_handler.setLevel(level)
     file_handler.setFormatter(formatter)
 

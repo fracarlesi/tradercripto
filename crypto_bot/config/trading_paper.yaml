@@ -1,0 +1,306 @@
+# =============================================================================
+# HLQuantBot v3.0 - Paper Trading Configuration (Testnet)
+# =============================================================================
+# Identical to trading.yaml except:
+#   - environment: testnet
+#   - More aggressive risk (per_trade_pct: 20%, max_positions: 6)
+#   - Separate ML model path
+#   - Separate ntfy topic
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Universe
+# -----------------------------------------------------------------------------
+universe:
+  mode: "all"
+
+  min_volume_24h: 100000
+  min_market_cap: 0
+
+  exclude_symbols:
+    # Stablecoins
+    - "USDC"
+    - "USDT"
+    - "DAI"
+    - "USDM"
+    - "FDUSD"
+    - "TUSD"
+    # Delisted / migrated tokens (generate "Insufficient data" warnings)
+    - "MATIC"
+    - "RNDR"
+    - "FTM"
+    - "MKR"
+    - "FXS"
+    - "HPOS"
+    - "RLB"
+    - "UNIBOT"
+    - "OX"
+    - "FRIEND"
+    - "SHIA"
+    - "CYBER"
+    - "BLZ"
+    - "LOOM"
+    - "OGN"
+    - "RDNT"
+    - "BNT"
+    - "CANTO"
+    - "REQ"
+    - "ORBS"
+    - "STG"
+    - "STRAX"
+    - "BADGER"
+    - "ILV"
+    - "NFTI"
+    - "NTRN"
+    - "PANDORA"
+    - "PIXEL"
+    - "AI"
+    - "MYRO"
+    - "OMNI"
+    - "LISTA"
+    - "kDOGS"
+    - "CATI"
+    - "NEIROETH"
+    - "AI16Z"
+    - "JELLY"
+    - "LAUNCHCOIN"
+    # No candle data available
+    - "OM"
+
+  assets:
+    - symbol: "BTC"
+      enabled: true
+      min_notional: 10
+      max_notional: 50000
+    - symbol: "ETH"
+      enabled: true
+      min_notional: 10
+      max_notional: 50000
+    - symbol: "SOL"
+      enabled: true
+      min_notional: 10
+      max_notional: 50000
+
+# -----------------------------------------------------------------------------
+# Timeframes
+# -----------------------------------------------------------------------------
+timeframes:
+  primary: "15m"
+  bars_to_fetch: 200
+  scan_interval_minutes: 5
+
+# -----------------------------------------------------------------------------
+# Risk Management (more aggressive for paper trading)
+# -----------------------------------------------------------------------------
+risk:
+  per_trade_pct: 20.0
+  max_per_trade_pct: 25.0
+
+  max_positions: 6
+  max_exposure_pct: 500
+  max_position_pct: 60
+
+  leverage: 10
+  max_leverage: 20
+
+  correlation_limit: 0.7
+  max_daily_trades: 0
+
+# -----------------------------------------------------------------------------
+# Kill Switch
+# -----------------------------------------------------------------------------
+kill_switch:
+  enabled: true
+
+  daily_loss_pct: 8.0
+  daily_loss_action: "pause_until_tomorrow"
+
+  weekly_loss_pct: 15.0
+  weekly_loss_action: "pause_3_days"
+
+  max_drawdown_pct: 30.0
+  max_drawdown_action: "stop_all"
+
+  check_interval_seconds: 60
+
+# -----------------------------------------------------------------------------
+# Stops - Fixed TP/SL
+# -----------------------------------------------------------------------------
+stops:
+  stop_loss_pct: 1.0
+  take_profit_pct: 1.6
+  use_server_side: true
+
+  initial_atr_mult: 2.5
+  trailing_atr_mult: 1.5
+  trailing_update_interval: 300
+
+  # Graduated ROI - time-based profit targets
+  minimal_roi:
+    "0": 0.04
+    "60": 0.02
+    "120": 0.01
+    "240": 0.005
+    "360": 0.0
+
+  # Momentum Fade Exit
+  momentum_exit:
+    enabled: true
+    min_age_minutes: 5
+    min_profit_pct: 0.1
+    rsi_slope_threshold: 1.0
+
+# -----------------------------------------------------------------------------
+# Regime Detection
+# -----------------------------------------------------------------------------
+regime:
+  trend_adx_entry_min: 28
+  trend_adx_exit_min: 22
+  range_adx_max: 20
+  choppiness_range_min: 60
+  confirmation_bars: 2
+
+# -----------------------------------------------------------------------------
+# Strategies
+# -----------------------------------------------------------------------------
+strategies:
+  trend_follow:
+    enabled: false
+  trend_momentum:
+    enabled: false
+
+# -----------------------------------------------------------------------------
+# Volume Breakout Signal
+# -----------------------------------------------------------------------------
+volume_breakout:
+  enabled: true
+  min_volume_ratio: 1.5
+  min_candle_body_pct: 0.3
+  min_atr_pct: 0.15
+  rsi_min: 25
+  rsi_max: 90
+  allowed_regimes:
+    - "chaos"
+    - "trend"
+
+# -----------------------------------------------------------------------------
+# Momentum Burst Signal
+# -----------------------------------------------------------------------------
+momentum_burst:
+  enabled: true
+  min_rsi_slope: 8.0
+  min_candle_body_pct: 0.3
+  max_rsi_entry: 75
+  min_volume_ratio: 1.2
+  allowed_regimes:
+    - "chaos"
+    - "trend"
+
+# -----------------------------------------------------------------------------
+# LLM Veto - DeepSeek confirmation/veto
+# -----------------------------------------------------------------------------
+llm:
+  enabled: false
+  role: "veto_only"
+
+  provider: "deepseek"
+  model: "deepseek-chat"
+  api_key_env: "DEEPSEEK_API_KEY"
+
+  max_calls_per_day: 50000
+  timeout_seconds: 30
+
+  fallback_on_error: "deny"
+  fallback_on_chaos: "deny"
+
+  min_confidence: 0.6
+
+# -----------------------------------------------------------------------------
+# Execution
+# -----------------------------------------------------------------------------
+execution:
+  prefer_limit: true
+  limit_timeout_seconds: 60
+
+  max_slippage_pct: 0.30
+  max_spread_pct: 0.30
+
+  max_retries: 3
+  retry_delay_seconds: 5
+
+  place_stop_immediately: true
+
+# -----------------------------------------------------------------------------
+# Monitoring & Alerts
+# -----------------------------------------------------------------------------
+monitoring:
+  equity_snapshot_interval: 300
+
+  telegram:
+    enabled: false
+
+  whatsapp:
+    enabled: true
+    topic: ${NTFY_TOPIC_PAPER:}
+    server: "https://ntfy.sh"
+    alert_on:
+      - "trade_open"
+      - "trade_close"
+      - "kill_switch_trigger"
+      - "error"
+
+  log_level: "INFO"
+  log_trades: true
+  log_decisions: true
+
+# -----------------------------------------------------------------------------
+# Protections
+# -----------------------------------------------------------------------------
+protections:
+  - name: "StoplossGuard"
+    lookback_period_min: 60
+    stoploss_limit: 3
+    stop_duration_min: 360
+
+  - name: "MaxDrawdown"
+    lookback_period_min: 1440
+    max_drawdown_pct: 8.0
+    stop_duration_min: 720
+
+  - name: "LowPerformance"
+    min_trades: 20
+    min_win_rate: 0.25
+    stop_duration_min: 1440
+
+# -----------------------------------------------------------------------------
+# Performance Metrics
+# -----------------------------------------------------------------------------
+metrics:
+  track:
+    - "win_rate"
+    - "profit_factor"
+    - "average_r"
+    - "max_drawdown"
+    - "sharpe_ratio"
+    - "calmar_ratio"
+    - "avg_trade_duration"
+    - "slippage_avg"
+    - "fees_total"
+
+  track_by_regime: true
+
+# -----------------------------------------------------------------------------
+# ML Model - XGBoost trade selector (separate model for paper)
+# -----------------------------------------------------------------------------
+ml_model:
+  enabled: true
+  model_path: "models/trade_model_paper.joblib"
+  min_probability: 0.55
+  retrain_days: 30
+  retrain_interval_days: 3
+
+# -----------------------------------------------------------------------------
+# Environment
+# -----------------------------------------------------------------------------
+environment: "testnet"
+dry_run: false

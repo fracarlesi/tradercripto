@@ -11,6 +11,20 @@ services:
       - hlquantbot_data:/root/.hlquantbot
     restart: unless-stopped
 
+  crypto_bot_paper:
+    build: .
+    container_name: hlquantbot_paper
+    command: ["python", "-m", "crypto_bot.main", "-c", "crypto_bot/config/trading_paper.yaml"]
+    env_file:
+      - .env.paper
+    volumes:
+      - ./logs:/app/logs
+      - ./models:/app/models
+      - hlquantbot_paper_data:/root/.hlquantbot_paper
+    restart: unless-stopped
+    profiles:
+      - paper
+
   ib_bot:
     build:
       context: .
@@ -28,3 +42,4 @@ services:
 
 volumes:
   hlquantbot_data:
+  hlquantbot_paper_data:

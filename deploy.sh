@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Deploy Trading Bots to Hetzner VPS
-# Usage: ./deploy.sh [crypto|ib|all]
+# Usage: ./deploy.sh [crypto|paper|ib|all]
 
 set -e
 
@@ -23,6 +23,7 @@ rsync -avz --delete \
     --exclude='__pycache__' \
     --exclude='*.pyc' \
     --exclude='.env' \
+    --exclude='.env.paper' \
     --exclude='logs' \
     --exclude='venv' \
     --exclude='.venv' \
@@ -36,9 +37,12 @@ rsync -avz --delete \
     --exclude='firebase-debug.log' \
     ./ root@$VPS_IP:$DEPLOY_DIR/
 
-# Step 3: Copy .env file
-echo "[3/6] Copying .env file..."
+# Step 3: Copy .env file(s)
+echo "[3/6] Copying .env file(s)..."
 scp .env root@$VPS_IP:$DEPLOY_DIR/.env
+if [ -f .env.paper ]; then
+    scp .env.paper root@$VPS_IP:$DEPLOY_DIR/.env.paper
+fi
 
 # Step 4: Stop existing containers
 echo "[4/6] Stopping existing containers..."
@@ -50,14 +54,17 @@ case $MODE in
     crypto)
         ssh root@$VPS_IP "cd $DEPLOY_DIR && docker compose build crypto_bot --no-cache && docker compose up -d crypto_bot"
         ;;
+    paper)
+        ssh root@$VPS_IP "cd $DEPLOY_DIR && docker compose --profile paper build crypto_bot_paper --no-cache && docker compose --profile paper up -d crypto_bot_paper"
+        ;;
     ib)
         ssh root@$VPS_IP "cd $DEPLOY_DIR && docker compose --profile ib build ib_bot --no-cache && docker compose --profile ib up -d ib_bot"
         ;;
     all)
-        ssh root@$VPS_IP "cd $DEPLOY_DIR && docker compose --profile ib build --no-cache && docker compose --profile ib up -d"
+        ssh root@$VPS_IP "cd $DEPLOY_DIR && docker compose --profile ib --profile paper build --no-cache && docker compose --profile ib --profile paper up -d"
         ;;
     *)
-        echo "Unknown mode: $MODE. Use: crypto, ib, or all"
+        echo "Unknown mode: $MODE. Use: crypto, paper, ib, or all"
         exit 1
         ;;
 esac
@@ -71,12 +78,15 @@ echo ""
 echo "=== Deployment complete! ==="
 echo ""
 echo "Services:"
-echo "  - Crypto Bot: docker compose logs -f crypto_bot"
-echo "  - IB Bot:     docker compose --profile ib logs -f ib_bot"
+echo "  - Crypto Bot:       docker compose logs -f crypto_bot"
+echo "  - Paper Bot:        docker compose --profile paper logs -f crypto_bot_paper"
+echo "  - IB Bot:           docker compose --profile ib logs -f ib_bot"
 echo ""
 echo "Useful commands:"
 echo "  ssh root@$VPS_IP"
 echo "  cd $DEPLOY_DIR"
-echo "  docker compose ps                      # Check crypto bot status"
-echo "  docker compose --profile ib ps         # Check all bots status"
-echo "  docker compose restart crypto_bot      # Restart crypto bot"
+echo "  docker compose ps                                # Check crypto bot status"
+echo "  docker compose --profile paper ps                # Check paper bot status"
+echo "  docker compose --profile ib ps                   # Check IB bot status"
+echo "  docker compose restart crypto_bot                # Restart crypto bot"
+echo "  docker compose --profile paper restart crypto_bot_paper  # Restart paper bot"

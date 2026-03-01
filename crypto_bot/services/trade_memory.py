@@ -21,6 +21,7 @@ Author: Francesco Carlesi
 import asyncio
 import json
 import logging
+import os
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
@@ -166,7 +167,7 @@ class TradeMemory:
         """Initialize trade memory."""
         self._trades: Dict[str, TradeOutcome] = {}  # trade_id -> outcome
         self._closed_trades: List[TradeOutcome] = []  # Chronological list
-        self._data_dir = data_dir or Path.home() / ".hlquantbot"
+        self._data_dir = data_dir or Path(os.environ.get("HLQUANTBOT_DATA_DIR", str(Path.home() / ".hlquantbot")))
         self._lock = asyncio.Lock()
 
         logger.info("TradeMemory initialized (max=%d trades)", self.MAX_TRADES_IN_MEMORY)

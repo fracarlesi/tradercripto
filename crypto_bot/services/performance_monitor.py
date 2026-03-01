@@ -16,6 +16,7 @@ Author: Francesco Carlesi
 
 import json
 import logging
+import os
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -28,7 +29,7 @@ from ..core.enums import Topic
 logger = logging.getLogger(__name__)
 
 # Persistence directory
-DATA_DIR = Path.home() / ".hlquantbot"
+DATA_DIR = Path(os.environ.get("HLQUANTBOT_DATA_DIR", str(Path.home() / ".hlquantbot")))
 DATA_FILE = DATA_DIR / "performance_monitor.json"
 
 # Thresholds
