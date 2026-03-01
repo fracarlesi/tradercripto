@@ -1929,7 +1929,7 @@ class ExecutionEngineService(BaseService):
                         "Skipping close detection for settling symbol %s", symbol
                     )
                     continue
-                if self.active_positions[symbol].status == PositionStatus.OPEN:
+                if self.active_positions[symbol].status in (PositionStatus.OPEN, PositionStatus.CLOSING):
                     await self._handle_position_closed(symbol)
 
         except Exception as e:
