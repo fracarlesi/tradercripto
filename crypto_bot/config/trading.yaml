@@ -94,9 +94,9 @@ risk:
   per_trade_pct: 15.0
   max_per_trade_pct: 20.0
 
-  max_positions: 3
+  max_positions: 4          # Was 3 — exposure cap at 300% is the real safety net
   max_exposure_pct: 300
-  max_position_pct: 70
+  max_position_pct: 60      # Was 70 — smaller per-position to compensate for 4th slot
 
   leverage: 10
   max_leverage: 20
@@ -259,8 +259,6 @@ protections:
     max_drawdown_pct: 8.0
     stop_duration_min: 720
 
-  - name: "CooldownPeriod"
-    cooldown_minutes: 3
 
   - name: "LowPerformance"
     min_trades: 20
