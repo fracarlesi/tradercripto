@@ -281,10 +281,10 @@ class RiskManagerService(BaseService):
                 float(setup.entry_price),
             )
 
-            # Check daily trade limit before processing
+            # Check daily trade limit before processing (0 = unlimited)
             today_count = await self._get_today_trade_count()
             max_daily = self._config.max_daily_trades
-            if today_count >= max_daily:
+            if max_daily > 0 and today_count >= max_daily:
                 self._logger.warning(
                     "Daily trade limit reached: %d/%d trades today. Rejecting setup: %s",
                     today_count,

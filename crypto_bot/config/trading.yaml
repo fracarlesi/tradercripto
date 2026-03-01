@@ -102,7 +102,7 @@ risk:
   max_leverage: 20
 
   correlation_limit: 0.7
-  max_daily_trades: 8
+  max_daily_trades: 0   # 0 = unlimited — other protections handle risk (StoplossGuard, KillSwitch, MaxDrawdown)
 
 # -----------------------------------------------------------------------------
 # Kill Switch
