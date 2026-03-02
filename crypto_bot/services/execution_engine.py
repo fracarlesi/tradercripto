@@ -1459,6 +1459,11 @@ class ExecutionEngineService(BaseService):
 
         except Exception as e:
             self._logger.error("Failed to place TP trigger order after retries: %s", e)
+            await self._send_alert(
+                f"⚠️ CRITICAL: TP placement failed for {symbol} "
+                f"{'LONG' if is_long else 'SHORT'} @ {entry_price:.4f}. "
+                f"Position has NO take-profit protection! Error: {e}"
+            )
 
         # Place SL order with retry
         try:
@@ -1475,6 +1480,11 @@ class ExecutionEngineService(BaseService):
 
         except Exception as e:
             self._logger.error("Failed to place SL trigger order after retries: %s", e)
+            await self._send_alert(
+                f"⚠️ CRITICAL: SL placement failed for {symbol} "
+                f"{'LONG' if is_long else 'SHORT'} @ {entry_price:.4f}. "
+                f"Position has NO stop-loss protection! Error: {e}"
+            )
     
     async def _update_tp_sl_for_size_change(
         self, position: ExecutionPosition
@@ -1883,6 +1893,18 @@ class ExecutionEngineService(BaseService):
                         )
                         await self._update_tp_sl_for_size_change(local_pos)
 
+                    # Re-attempt TP/SL if initial placement failed
+                    if (
+                        (local_pos.tp_price is None or local_pos.sl_price is None)
+                        and local_pos.status == PositionStatus.OPEN
+                        and symbol not in self._settling_symbols
+                    ):
+                        self._logger.warning(
+                            "Position %s missing TP/SL protection (tp=%s, sl=%s), re-attempting...",
+                            symbol, local_pos.tp_price, local_pos.sl_price,
+                        )
+                        await self._ensure_tp_sl_for_position(local_pos)
+
                 else:
                     # New position (opened externally or before service start)
                     # Retry TP/SL on each sync until confirmed
@@ -1954,45 +1976,62 @@ class ExecutionEngineService(BaseService):
             if symbol in self._closing_positions:
                 continue
 
-            # Check if TP or SL was hit based on price
-            if not (position.tp_price and position.sl_price):
-                continue
+            # Resolve TP/SL prices, falling back to config-based values
+            # when server-side TP/SL placement failed.
+            tp_price = position.tp_price
+            sl_price = position.sl_price
+
+            if not tp_price or not sl_price:
+                if not position.entry_price:
+                    continue
+                tp_pct = self._bot_config.risk.take_profit_pct / 100
+                sl_pct = self._bot_config.risk.stop_loss_pct / 100
+                if position.side == "long":
+                    tp_price = tp_price or round(position.entry_price * (1 + tp_pct), 6)
+                    sl_price = sl_price or round(position.entry_price * (1 - sl_pct), 6)
+                else:
+                    tp_price = tp_price or round(position.entry_price * (1 - tp_pct), 6)
+                    sl_price = sl_price or round(position.entry_price * (1 + sl_pct), 6)
+                self._logger.warning(
+                    "%s TP/SL fallback: tp=%.6f sl=%.6f (from config, entry=%.6f)",
+                    symbol, tp_price, sl_price, position.entry_price,
+                )
 
             hit_reason: Optional[str] = None
 
             if position.side == "long":
-                if position.current_price >= position.tp_price:
+                if position.current_price >= tp_price:
                     hit_reason = "take_profit"
                     self._logger.info(
                         "%s TP hit: %.2f >= %.2f",
                         symbol,
                         position.current_price,
-                        position.tp_price,
+                        tp_price,
                     )
-                elif position.current_price <= position.sl_price:
+                elif position.current_price <= sl_price:
                     hit_reason = "stop_loss"
                     self._logger.info(
                         "%s SL hit: %.2f <= %.2f",
                         symbol,
                         position.current_price,
-                        position.sl_price,
+                        sl_price,
                     )
             else:
-                if position.current_price <= position.tp_price:
+                if position.current_price <= tp_price:
                     hit_reason = "take_profit"
                     self._logger.info(
                         "%s TP hit: %.2f <= %.2f",
                         symbol,
                         position.current_price,
-                        position.tp_price,
+                        tp_price,
                     )
-                elif position.current_price >= position.sl_price:
+                elif position.current_price >= sl_price:
                     hit_reason = "stop_loss"
                     self._logger.info(
                         "%s SL hit: %.2f >= %.2f",
                         symbol,
                         position.current_price,
-                        position.sl_price,
+                        sl_price,
                     )
 
             if hit_reason:
