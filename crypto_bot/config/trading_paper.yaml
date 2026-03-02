@@ -128,8 +128,9 @@ kill_switch:
 # -----------------------------------------------------------------------------
 stops:
   stop_loss_pct: 1.0
-  take_profit_pct: 1.6
-  use_server_side: true
+  take_profit_pct: 2.0
+  breakeven_threshold_pct: 0.5
+  # Note: TP/SL are always server-side trigger orders (hardcoded in execution_engine)
 
   initial_atr_mult: 2.5
   trailing_atr_mult: 1.5
@@ -147,7 +148,7 @@ stops:
   momentum_exit:
     enabled: true
     min_age_minutes: 5
-    min_profit_pct: 0.1
+    min_profit_pct: 0.5
     rsi_slope_threshold: 1.0
 
 # -----------------------------------------------------------------------------
@@ -241,7 +242,7 @@ monitoring:
 
   whatsapp:
     enabled: true
-    topic: ${NTFY_TOPIC_PAPER:}
+    topic: ${NTFY_TOPIC:}
     server: "https://ntfy.sh"
     alert_on:
       - "trade_open"
@@ -295,7 +296,7 @@ metrics:
 ml_model:
   enabled: true
   model_path: "models/trade_model_paper.joblib"
-  min_probability: 0.55
+  min_probability: 0.52
   retrain_days: 30
   retrain_interval_days: 3
 

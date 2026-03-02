@@ -127,6 +127,7 @@ kill_switch:
 stops:
   stop_loss_pct: 1.0       # Was 0.8 — sweep showed wider SL avoids premature stop-outs (+11pp win rate)
   take_profit_pct: 2.0     # Widened from 1.6 — let winners run (R:R 2:1)
+  breakeven_threshold_pct: 1.2
   # Note: TP/SL are always server-side trigger orders (hardcoded in execution_engine)
 
   # ATR multipliers — used ONLY by the trailing stop system (after breakeven).

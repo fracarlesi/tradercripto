@@ -155,6 +155,7 @@ class ConservativeConfig:
     minimal_roi: Dict[str, float]
     stop_loss_pct: float
     take_profit_pct: float
+    breakeven_threshold_pct: float
 
     # Regime (for MarketStateService indicator computation)
     trend_adx_entry_min: float
@@ -259,6 +260,7 @@ class ConservativeConfig:
             minimal_roi=stops.get("minimal_roi", {}),
             stop_loss_pct=stops.get("stop_loss_pct", 0.8),
             take_profit_pct=stops.get("take_profit_pct", 1.6),
+            breakeven_threshold_pct=stops.get("breakeven_threshold_pct", 1.2),
             trend_adx_entry_min=regime.get("trend_adx_entry_min", 28.0),
             trend_adx_exit_min=regime.get("trend_adx_exit_min", 22.0),
             range_adx_max=regime.get("range_adx_max", 20.0),
@@ -529,6 +531,7 @@ class ConservativeBot:
                 self.take_profit_pct = cfg.take_profit_pct
                 self.stop_loss_pct = cfg.stop_loss_pct
                 self.leverage = int(cfg.leverage)
+                self.breakeven_threshold_pct = cfg.breakeven_threshold_pct
 
         class _StopsConfig:
             def __init__(self, cfg: ConservativeConfig):

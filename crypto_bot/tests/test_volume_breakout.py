@@ -294,6 +294,7 @@ def _make_config():
         momentum_exit_min_age_minutes=15,
         momentum_exit_min_profit_pct=0.1,
         momentum_exit_rsi_slope_threshold=1.0,
+        breakeven_threshold_pct=1.2,
         testnet=True,
         dry_run=True,
     )

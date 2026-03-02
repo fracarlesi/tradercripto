@@ -37,6 +37,9 @@ def _make_engine() -> ExecutionEngineService:
     engine.client = AsyncMock()
     engine.client.cancel_order = AsyncMock()
     engine._place_trigger_with_retry = AsyncMock(return_value={"orderId": "new_sl_123"})
+    # Mock config for breakeven_threshold_pct (read by _check_breakeven_stops)
+    engine._bot_config = MagicMock()
+    engine._bot_config.risk.breakeven_threshold_pct = BREAKEVEN_THRESHOLD_PCT
     return engine
 
 
