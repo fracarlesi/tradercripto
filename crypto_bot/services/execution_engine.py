@@ -46,6 +46,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from .base import BaseService
 from .message_bus import Message, MessageBus, Topic
+from ..api.exceptions import OrderRejectedError
 
 # Type hints for optional imports
 try:
@@ -991,19 +992,26 @@ class ExecutionEngineService(BaseService):
             "bid" if is_buy else "ask",
         )
 
-        result = await self.client.place_order(
-            symbol=order.symbol,
-            is_buy=is_buy,
-            size=order.size,
-            price=maker_price,
-            order_type="limit",
-            reduce_only=False,
-            time_in_force="Alo",
-        )
+        try:
+            result = await self.client.place_order(
+                symbol=order.symbol,
+                is_buy=is_buy,
+                size=order.size,
+                price=maker_price,
+                order_type="limit",
+                reduce_only=False,
+                time_in_force="Alo",
+            )
+        except OrderRejectedError:
+            self._logger.warning(
+                "MAKER: ALO rejected for %s (would cross spread) — falling back to taker",
+                order.symbol,
+            )
+            return await self._place_taker_fallback(order, is_buy)
 
         if not result.get("success") and not result.get("orderId"):
             self._logger.warning(
-                "MAKER: ALO rejected for %s (would cross spread) — falling back to taker",
+                "MAKER: ALO failed for %s — falling back to taker",
                 order.symbol,
             )
             return await self._place_taker_fallback(order, is_buy)
