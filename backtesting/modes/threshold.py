@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from backtesting.api import fetch_all_candles, get_all_assets
+from backtesting.api import fetch_all_candles, get_all_assets_with_info
 from backtesting.config import load_config
 from backtesting.indicators import calc_bollinger, compute_indicators
 from backtesting.signals import (
@@ -190,7 +190,7 @@ def run(args: argparse.Namespace) -> None:
     start_ms = now_ms - (days + extra_days) * 86_400_000
     signal_cutoff_ms = now_ms - days * 86_400_000
 
-    assets = get_all_assets()
+    assets, leverage_caps = get_all_assets_with_info()
     asset_candles, _, _ = fetch_all_candles(
         assets, tf, start_ms, now_ms, cfg.exclude_symbols, warmup)
 
@@ -308,7 +308,7 @@ def run(args: argparse.Namespace) -> None:
         if abs(threshold - optimal_threshold) < 0.005:
             label += " (calibrated)"
 
-        sim = PortfolioSimulator(cfg, label=label)
+        sim = PortfolioSimulator(cfg, label=label, leverage_caps=leverage_caps)
         ema_count = vb_count = mb_count = 0
 
         for ts in timeline:

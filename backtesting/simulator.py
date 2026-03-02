@@ -19,12 +19,14 @@ class PortfolioSimulator:
     def __init__(self, cfg: BacktestConfig, label: str = "",
                  position_pct: float | None = None,
                  leverage: int | None = None,
-                 max_positions: int | None = None):
+                 max_positions: int | None = None,
+                 leverage_caps: dict[str, int] | None = None):
         self.cfg = cfg
         self.label = label
         self._pct = position_pct if position_pct is not None else cfg.position_pct
         self._lev = leverage if leverage is not None else cfg.leverage
         self._max_pos = max_positions if max_positions is not None else cfg.max_positions
+        self._leverage_caps = leverage_caps or {}
         self.equity = cfg.account_size
         self.open_positions: dict[str, dict] = {}
         self.trades: list[dict] = []
@@ -115,7 +117,8 @@ class PortfolioSimulator:
         # max_daily_trades=0 means unlimited (matches live bot behavior)
         if self.cfg.max_daily_trades > 0 and self.daily_counts.get(day, 0) >= self.cfg.max_daily_trades:
             return False
-        notional = self.equity * self._pct * self._lev
+        effective_lev = min(self._lev, self._leverage_caps.get(symbol, self._lev))
+        notional = self.equity * self._pct * effective_lev
         if notional <= 0 or entry_price <= 0:
             return False
 
@@ -168,4 +171,5 @@ class PortfolioSimulator:
             "notional": pos["notional"], "gross": gross, "fees": fees,
             "net": net, "reason": reason,
             "t_entry": pos["t_entry"], "t_exit": t_exit,
+            "effective_leverage": min(self._lev, self._leverage_caps.get(symbol, self._lev)),
         })

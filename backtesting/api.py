@@ -10,11 +10,20 @@ API_URL = "https://api.hyperliquid.xyz/info"
 RATE_LIMIT_SLEEP = 0.25
 
 
-def get_all_assets() -> list[str]:
-    """Fetch all tradeable asset symbols from Hyperliquid."""
+def get_all_assets_with_info() -> tuple[list[str], dict[str, int]]:
+    """Fetch all tradeable asset symbols and their max leverage from Hyperliquid."""
     resp = requests.post(API_URL, json={"type": "meta"}, timeout=10)
     resp.raise_for_status()
-    return [u["name"] for u in resp.json()["universe"]]
+    universe = resp.json()["universe"]
+    names = [u["name"] for u in universe]
+    leverage_caps = {u["name"]: u.get("maxLeverage", 100) for u in universe}
+    return names, leverage_caps
+
+
+def get_all_assets() -> list[str]:
+    """Fetch all tradeable asset symbols from Hyperliquid."""
+    names, _ = get_all_assets_with_info()
+    return names
 
 
 def get_candles(asset: str, interval: str, start_ms: int,

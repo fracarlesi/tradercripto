@@ -9,7 +9,7 @@ import argparse
 import time
 from datetime import datetime, timezone
 
-from backtesting.api import fetch_all_candles, get_all_assets
+from backtesting.api import fetch_all_candles, get_all_assets_with_info
 from backtesting.config import load_config
 from backtesting.indicators import compute_indicators
 from backtesting.signals import signal_trend_momentum
@@ -65,7 +65,7 @@ def run(args: argparse.Namespace) -> None:
     signal_cutoff_ms = now_ms - days * 86_400_000
 
     # Fetch
-    assets = get_all_assets()
+    assets, leverage_caps = get_all_assets_with_info()
     asset_candles, errors, skipped = fetch_all_candles(
         assets, tf, start_ms, now_ms, cfg.exclude_symbols, warmup)
 
@@ -104,6 +104,7 @@ def run(args: argparse.Namespace) -> None:
             cfg, label=sc["name"],
             position_pct=sc["pct"], leverage=sc["leverage"],
             max_positions=sc["max_pos"],
+            leverage_caps=leverage_caps,
         )
         for ts in timeline:
             for sym in list(sim.open_positions.keys()):

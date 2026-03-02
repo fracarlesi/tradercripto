@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
-from backtesting.api import fetch_all_candles, get_all_assets
+from backtesting.api import fetch_all_candles, get_all_assets_with_info
 from backtesting.config import BacktestConfig, load_config
 from backtesting.indicators import calc_bollinger, compute_indicators
 from backtesting.modes.threshold import _extract_features, _is_chaos_or_trend, _predict
@@ -131,9 +131,10 @@ def _simulate_combo(
     asset_candles: dict[str, list[dict]],
     asset_time_idx: dict[str, dict[int, int]],
     label: str,
+    leverage_caps: dict[str, int] | None = None,
 ) -> BacktestResult:
     """Run one simulation with a specific parameter combination."""
-    sim = PortfolioSimulator(cfg, label=label)
+    sim = PortfolioSimulator(cfg, label=label, leverage_caps=leverage_caps)
 
     for ts in timeline:
         # Check exits first
@@ -213,9 +214,12 @@ def run(args: argparse.Namespace) -> None:
     start_ms = now_ms - (days + extra_days) * 86_400_000
     signal_cutoff_ms = now_ms - days * 86_400_000
 
-    assets = get_all_assets()
+    assets, leverage_caps = get_all_assets_with_info()
     asset_candles, _, _ = fetch_all_candles(
         assets, tf, start_ms, now_ms, cfg.exclude_symbols, warmup)
+
+    capped = sum(1 for v in leverage_caps.values() if v < cfg.leverage)
+    print(f"Leverage caps: {capped}/{len(leverage_caps)} assets below {cfg.leverage}x")
 
     if not asset_candles:
         print("No assets with enough data.")
@@ -281,7 +285,7 @@ def run(args: argparse.Namespace) -> None:
                  f"|ME={mom_exit*100:.1f}|BE={be_thresh*100:.1f}")
         result = _simulate_combo(
             combo_cfg, thresh, deduped, timeline,
-            asset_candles, asset_time_idx, label)
+            asset_candles, asset_time_idx, label, leverage_caps)
 
         results.append((tp, sl, thresh, mom_exit, be_thresh, result))
 

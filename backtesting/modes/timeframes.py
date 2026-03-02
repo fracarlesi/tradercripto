@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 
 import numpy as np
 
-from backtesting.api import fetch_all_candles, get_all_assets
+from backtesting.api import fetch_all_candles, get_all_assets_with_info
 from backtesting.config import load_config
 from backtesting.indicators import compute_indicators
 from backtesting.signals import signal_trend_momentum
@@ -53,7 +53,7 @@ def run(args: argparse.Namespace) -> None:
     signal_cutoff_ms = now_ms - days * 86_400_000
 
     # Fetch assets once
-    all_assets = get_all_assets()
+    all_assets, leverage_caps = get_all_assets_with_info()
 
     results: list[BacktestResult] = []
 
@@ -101,7 +101,7 @@ def run(args: argparse.Namespace) -> None:
             asset_time_idx[asset] = {c["t"]: i for i, c in enumerate(candles)}
 
         # Run simulation
-        sim = PortfolioSimulator(cfg, label=tf)
+        sim = PortfolioSimulator(cfg, label=tf, leverage_caps=leverage_caps)
         for ts in timeline:
             for sym in list(sim.open_positions.keys()):
                 if ts in asset_time_idx.get(sym, {}):

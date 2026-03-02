@@ -10,7 +10,7 @@ import argparse
 import time
 from typing import Callable
 
-from backtesting.api import fetch_all_candles, get_all_assets
+from backtesting.api import fetch_all_candles, get_all_assets_with_info
 from backtesting.config import BacktestConfig, load_config
 from backtesting.indicators import (
     calc_bollinger,
@@ -65,7 +65,7 @@ def run(args: argparse.Namespace) -> None:
     start_ms = now_ms - (days + extra_days) * 86_400_000
     signal_cutoff_ms = now_ms - days * 86_400_000
 
-    assets = get_all_assets()
+    assets, leverage_caps = get_all_assets_with_info()
     asset_candles, _, _ = fetch_all_candles(
         assets, tf, start_ms, now_ms, cfg.exclude_symbols, warmup)
 
@@ -101,7 +101,7 @@ def run(args: argparse.Namespace) -> None:
     # Run each strategy
     results: list[BacktestResult] = []
     for strat_name, signal_fn, _ in STRATEGIES:
-        sim = PortfolioSimulator(cfg, label=strat_name)
+        sim = PortfolioSimulator(cfg, label=strat_name, leverage_caps=leverage_caps)
         for ts in timeline:
             for sym in list(sim.open_positions.keys()):
                 if ts in asset_time_idx.get(sym, {}):
