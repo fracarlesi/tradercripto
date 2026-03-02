@@ -55,6 +55,10 @@ class BacktestConfig:
     # From universe.*
     exclude_symbols: set[str] = field(default_factory=set)
 
+    # Exit management
+    momentum_exit_min_profit_pct: float = 0.001  # 0.1% — min profit before momentum_fade exit
+    breakeven_threshold_pct: float = 0.012        # 1.2% — profit at which SL moves to entry
+
     # CLI overridable
     timeframe: str = "15m"
     lookback_days: int = 7

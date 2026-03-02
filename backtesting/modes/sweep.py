@@ -1,4 +1,4 @@
-"""Sweep mode: grid-search TP/SL/threshold/slippage for optimal parameters.
+"""Sweep mode: grid-search TP/SL/threshold/momentum_exit/breakeven for optimal parameters.
 
 Pre-scores all signals once, then replays through every parameter combination.
 Outputs a ranked table sorted by Sharpe ratio (or profit factor).
@@ -30,11 +30,15 @@ from backtesting.stats import BacktestResult
 # ---------------------------------------------------------------------------
 
 SWEEP_GRID: dict[str, list[float]] = {
-    "tp_pct":       [0.008, 0.012, 0.016, 0.020],       # 0.8%, 1.2%, 1.6%, 2.0%
-    "sl_pct":       [0.004, 0.006, 0.008, 0.010],       # 0.4%, 0.6%, 0.8%, 1.0%
-    "threshold":    [0.50, 0.52, 0.55, 0.58],            # ML probability
-    "slippage_pct": [0.0, 0.0005, 0.001],                # 0%, 0.05%, 0.1%
+    "tp_pct":                       [0.008, 0.012, 0.016, 0.020],   # 0.8% - 2.0%
+    "sl_pct":                       [0.004, 0.006, 0.008, 0.010],   # 0.4% - 1.0%
+    "threshold":                    [0.52, 0.55],                    # ML probability (reduced)
+    "momentum_exit_min_profit_pct": [0.001, 0.002, 0.003, 0.005],   # 0.1% - 0.5%
+    "breakeven_threshold_pct":      [0.003, 0.005, 0.008, 0.012],   # 0.3% - 1.2%
 }
+
+# Fixed slippage (middle value) to keep grid manageable
+FIXED_SLIPPAGE_PCT: float = 0.0005  # 0.05%
 
 
 def _score_all_signals(
@@ -183,15 +187,22 @@ def run(args: argparse.Namespace) -> None:
     # Build sweep grid
     grid = SWEEP_GRID
     combos = list(itertools.product(
-        grid["tp_pct"], grid["sl_pct"], grid["threshold"], grid["slippage_pct"]
+        grid["tp_pct"],
+        grid["sl_pct"],
+        grid["threshold"],
+        grid["momentum_exit_min_profit_pct"],
+        grid["breakeven_threshold_pct"],
     ))
     n_combos = len(combos)
 
-    print("=" * 120)
-    print(f"PARAMETER SWEEP: {n_combos} combinations — Last {days}d — All Assets ({tf})")
-    print("=" * 120)
+    print("=" * 140)
+    print(f"PARAMETER SWEEP: {n_combos} combinations -- Last {days}d -- All Assets ({tf})")
+    print("=" * 140)
     print(f"Grid: TP% {grid['tp_pct']} | SL% {grid['sl_pct']} | "
-          f"Threshold {grid['threshold']} | Slippage {grid['slippage_pct']}")
+          f"Threshold {grid['threshold']}")
+    print(f"      MomExit {grid['momentum_exit_min_profit_pct']} | "
+          f"Breakeven {grid['breakeven_threshold_pct']} | "
+          f"Slippage fixed={FIXED_SLIPPAGE_PCT*100:.2f}%")
     print(f"Base config: {cfg.leverage}x leverage | ${cfg.account_size} | "
           f"{cfg.position_pct*100:.0f}% size")
     print()
@@ -246,42 +257,49 @@ def run(args: argparse.Namespace) -> None:
 
     # Run all combinations
     print(f"\nRunning {n_combos} parameter combinations...")
-    results: list[tuple[float, float, float, float, BacktestResult]] = []
+    results: list[tuple[float, float, float, float, float, BacktestResult]] = []
 
-    for i, (tp, sl, thresh, slip) in enumerate(combos, 1):
+    for i, (tp, sl, thresh, mom_exit, be_thresh) in enumerate(combos, 1):
         if i % 50 == 0 or i == n_combos:
             print(f"  Progress: {i}/{n_combos}")
 
         combo_cfg = BacktestConfig(
             account_size=cfg.account_size,
             fee_pct=cfg.fee_pct,
-            slippage_pct=slip,
+            slippage_pct=FIXED_SLIPPAGE_PCT,
             tp_pct=tp,
             sl_pct=sl,
             position_pct=cfg.position_pct,
             leverage=cfg.leverage,
             max_positions=cfg.max_positions,
             max_daily_trades=cfg.max_daily_trades,
+            momentum_exit_min_profit_pct=mom_exit,
+            breakeven_threshold_pct=be_thresh,
         )
 
-        label = f"TP={tp*100:.1f}|SL={sl*100:.1f}|T={thresh:.2f}|S={slip*100:.2f}%"
+        label = (f"TP={tp*100:.1f}|SL={sl*100:.1f}|T={thresh:.2f}"
+                 f"|ME={mom_exit*100:.1f}|BE={be_thresh*100:.1f}")
         result = _simulate_combo(
             combo_cfg, thresh, deduped, timeline,
             asset_candles, asset_time_idx, label)
 
-        results.append((tp, sl, thresh, slip, result))
+        results.append((tp, sl, thresh, mom_exit, be_thresh, result))
 
     # Sort by Sharpe (primary), profit factor (secondary)
-    results.sort(key=lambda x: (x[4].sharpe, x[4].profit_factor), reverse=True)
+    results.sort(key=lambda x: (x[5].sharpe, x[5].profit_factor), reverse=True)
 
     # Output
     if args.json:
         import json
         out = []
-        for tp, sl, thresh, slip, r in results:
+        for tp, sl, thresh, mom_exit, be_thresh, r in results:
             d = r.to_dict()
-            d.update({"tp_pct": tp, "sl_pct": sl, "threshold": thresh,
-                       "slippage_pct": slip})
+            d.update({
+                "tp_pct": tp, "sl_pct": sl, "threshold": thresh,
+                "slippage_pct": FIXED_SLIPPAGE_PCT,
+                "momentum_exit_min_profit_pct": mom_exit,
+                "breakeven_threshold_pct": be_thresh,
+            })
             out.append(d)
         print(json.dumps(out, indent=2))
         return
@@ -291,48 +309,54 @@ def run(args: argparse.Namespace) -> None:
     n_bottom = min(5, len(results))
 
     print()
-    print("=" * 130)
-    print(f"{'Rank':<5} {'TP%':>5} {'SL%':>5} {'Thresh':>7} {'Slip%':>6} "
-          f"{'Trades':>6} {'WinR':>5} {'Net P&L':>9} {'PF':>6} {'Sharpe':>7} {'MaxDD':>8} {'Assets':>6}")
-    print("-" * 130)
+    hdr = (f"{'Rank':<5} {'TP%':>5} {'SL%':>5} {'Thresh':>7} {'MomEx%':>7} {'BE%':>5} "
+           f"{'Trades':>6} {'WinR':>5} {'Net P&L':>9} {'PF':>6} {'Sharpe':>7} "
+           f"{'MaxDD':>8} {'Assets':>6}")
+    print("=" * len(hdr))
+    print(hdr)
+    print("-" * len(hdr))
 
-    for rank, (tp, sl, thresh, slip, r) in enumerate(results[:n_top], 1):
-        print(f"{rank:>4}  {tp*100:>4.1f}% {sl*100:>4.1f}% {thresh:>6.2f} {slip*100:>5.2f}% "
+    for rank, (tp, sl, thresh, mom_exit, be_thresh, r) in enumerate(results[:n_top], 1):
+        print(f"{rank:>4}  {tp*100:>4.1f}% {sl*100:>4.1f}% {thresh:>6.2f} "
+              f"{mom_exit*100:>6.1f}% {be_thresh*100:>4.1f}% "
               f"{r.count:>6} {r.win_rate:>4.1f}% "
               f"${r.net_pnl:>+7.2f} {r.profit_factor:>6.2f} {r.sharpe:>7.2f} "
               f"${r.max_drawdown:>6.2f} {r.unique_assets:>5}")
 
     if len(results) > n_top:
-        print(f"{'...':^130}")
+        print(f"{'...':^{len(hdr)}}")
         print(f"\nBottom {n_bottom}:")
-        print("-" * 130)
-        for rank, (tp, sl, thresh, slip, r) in enumerate(
+        print("-" * len(hdr))
+        for rank, (tp, sl, thresh, mom_exit, be_thresh, r) in enumerate(
                 results[-n_bottom:], len(results) - n_bottom + 1):
-            print(f"{rank:>4}  {tp*100:>4.1f}% {sl*100:>4.1f}% {thresh:>6.2f} {slip*100:>5.2f}% "
+            print(f"{rank:>4}  {tp*100:>4.1f}% {sl*100:>4.1f}% {thresh:>6.2f} "
+                  f"{mom_exit*100:>6.1f}% {be_thresh*100:>4.1f}% "
                   f"{r.count:>6} {r.win_rate:>4.1f}% "
                   f"${r.net_pnl:>+7.2f} {r.profit_factor:>6.2f} {r.sharpe:>7.2f} "
                   f"${r.max_drawdown:>6.2f} {r.unique_assets:>5}")
 
-    print("=" * 130)
+    print("=" * len(hdr))
 
     # Summary
-    profitable = [x for x in results if x[4].net_pnl > 0]
+    profitable = [x for x in results if x[5].net_pnl > 0]
     print(f"\nSummary: {len(profitable)}/{len(results)} profitable combinations")
 
     if profitable:
         best_sharpe = profitable[0]
-        tp, sl, thresh, slip, r = best_sharpe
+        tp, sl, thresh, mom_exit, be_thresh, r = best_sharpe
         print(f"\nBest by Sharpe: TP={tp*100:.1f}% SL={sl*100:.1f}% "
-              f"Threshold={thresh:.2f} Slippage={slip*100:.2f}%")
-        print(f"  → {r.count} trades, {r.win_rate:.1f}% win, "
+              f"Threshold={thresh:.2f} MomExit={mom_exit*100:.1f}% "
+              f"Breakeven={be_thresh*100:.1f}%")
+        print(f"  -> {r.count} trades, {r.win_rate:.1f}% win, "
               f"${r.net_pnl:+.2f} P&L, Sharpe={r.sharpe:.2f}, PF={r.profit_factor:.2f}")
 
-        best_pnl = max(profitable, key=lambda x: x[4].net_pnl)
+        best_pnl = max(profitable, key=lambda x: x[5].net_pnl)
         if best_pnl != best_sharpe:
-            tp, sl, thresh, slip, r = best_pnl
+            tp, sl, thresh, mom_exit, be_thresh, r = best_pnl
             print(f"\nBest by P&L:    TP={tp*100:.1f}% SL={sl*100:.1f}% "
-                  f"Threshold={thresh:.2f} Slippage={slip*100:.2f}%")
-            print(f"  → {r.count} trades, {r.win_rate:.1f}% win, "
+                  f"Threshold={thresh:.2f} MomExit={mom_exit*100:.1f}% "
+                  f"Breakeven={be_thresh*100:.1f}%")
+            print(f"  -> {r.count} trades, {r.win_rate:.1f}% win, "
                   f"${r.net_pnl:+.2f} P&L, Sharpe={r.sharpe:.2f}, PF={r.profit_factor:.2f}")
     else:
         print("\nNo profitable combination found in this period.")

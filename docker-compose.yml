@@ -10,6 +10,11 @@ services:
       - ./models:/app/models
       - hlquantbot_data:/root/.hlquantbot
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
 
   crypto_bot_paper:
     build: .
@@ -22,6 +27,11 @@ services:
       - ./models:/app/models
       - hlquantbot_paper_data:/root/.hlquantbot_paper
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     profiles:
       - paper
 
@@ -37,6 +47,11 @@ services:
       - ./ib_bot/logs:/app/ib_bot/logs
     network_mode: host    # Required to reach TWS on localhost
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     profiles:
       - ib    # Only start with: docker compose --profile ib up
 

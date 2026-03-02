@@ -9,6 +9,9 @@ from datetime import datetime, timezone
 
 from backtesting.config import BacktestConfig
 
+# Small fee offset added to breakeven SL to cover round-trip fees
+_BREAKEVEN_FEE_OFFSET = 0.0015  # 0.15%
+
 
 class PortfolioSimulator:
     """Simulates a portfolio with concurrent multi-symbol positions."""
@@ -29,7 +32,7 @@ class PortfolioSimulator:
         self.equity_curve: list[float] = [cfg.account_size]
 
     def check_exits(self, symbol: str, candle: dict) -> None:
-        """Check if open position on symbol hits TP or SL."""
+        """Check if open position on symbol hits TP, SL, breakeven, or momentum fade."""
         if symbol not in self.open_positions:
             return
         pos = self.open_positions[symbol]
@@ -37,14 +40,16 @@ class PortfolioSimulator:
         exit_price = exit_reason = None
 
         slip = self.cfg.slippage_pct
-        if d == 1:  # LONG — exit = sell → slippage hurts (lower fill)
+
+        # --- 1. Hard TP/SL check (intra-bar using high/low) ---
+        if d == 1:  # LONG -- exit = sell, slippage hurts (lower fill)
             if candle["l"] <= pos["sl"]:
                 exit_price = pos["sl"] * (1 - slip)
                 exit_reason = "SL"
             elif candle["h"] >= pos["tp"]:
                 exit_price = pos["tp"] * (1 - slip)
                 exit_reason = "TP"
-        else:  # SHORT — exit = buy to cover → slippage hurts (higher fill)
+        else:  # SHORT -- exit = buy to cover, slippage hurts (higher fill)
             if candle["h"] >= pos["sl"]:
                 exit_price = pos["sl"] * (1 + slip)
                 exit_reason = "SL"
@@ -54,6 +59,50 @@ class PortfolioSimulator:
 
         if exit_price is not None:
             self._close(symbol, exit_price, exit_reason, candle["t"])
+            return
+
+        # --- 2. Breakeven SL adjustment (evaluated on close) ---
+        close = candle["c"]
+        entry = pos["entry"]
+        be_thresh = self.cfg.breakeven_threshold_pct
+
+        if be_thresh > 0 and not pos.get("breakeven_hit", False):
+            if d == 1:
+                unrealized_pct = (close - entry) / entry
+            else:
+                unrealized_pct = (entry - close) / entry
+
+            if unrealized_pct >= be_thresh:
+                # Move SL to entry + small offset to cover fees
+                if d == 1:
+                    pos["sl"] = entry * (1 + _BREAKEVEN_FEE_OFFSET)
+                else:
+                    pos["sl"] = entry * (1 - _BREAKEVEN_FEE_OFFSET)
+                pos["breakeven_hit"] = True
+
+        # --- 3. Momentum fade exit (simplified: close vs prev_close) ---
+        mom_min = self.cfg.momentum_exit_min_profit_pct
+        prev_close = pos.get("prev_close")
+
+        if mom_min > 0 and prev_close is not None:
+            if d == 1:
+                unrealized_pct = (close - entry) / entry
+                fading = close < prev_close
+            else:
+                unrealized_pct = (entry - close) / entry
+                fading = close > prev_close
+
+            if unrealized_pct >= mom_min and fading:
+                # Exit at close with slippage
+                if d == 1:
+                    exit_price = close * (1 - slip)
+                else:
+                    exit_price = close * (1 + slip)
+                self._close(symbol, exit_price, "MOM_FADE", candle["t"])
+                return
+
+        # Update prev_close for next candle's momentum fade check
+        pos["prev_close"] = close
 
     def try_open(self, symbol: str, direction: int, entry_price: float,
                  bar_time: int) -> bool:
@@ -63,7 +112,8 @@ class PortfolioSimulator:
         if len(self.open_positions) >= self._max_pos:
             return False
         day = datetime.fromtimestamp(bar_time / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
-        if self.daily_counts.get(day, 0) >= self.cfg.max_daily_trades:
+        # max_daily_trades=0 means unlimited (matches live bot behavior)
+        if self.cfg.max_daily_trades > 0 and self.daily_counts.get(day, 0) >= self.cfg.max_daily_trades:
             return False
         notional = self.equity * self._pct * self._lev
         if notional <= 0 or entry_price <= 0:
@@ -71,9 +121,9 @@ class PortfolioSimulator:
 
         # Adverse slippage on entry
         slip = self.cfg.slippage_pct
-        if direction == 1:  # LONG — fill higher
+        if direction == 1:  # LONG -- fill higher
             entry_price *= (1 + slip)
-        else:  # SHORT — fill lower
+        else:  # SHORT -- fill lower
             entry_price *= (1 - slip)
 
         tp_pct = self.cfg.tp_pct
@@ -88,6 +138,7 @@ class PortfolioSimulator:
         self.open_positions[symbol] = {
             "direction": direction, "entry": entry_price,
             "tp": tp, "sl": sl, "notional": notional, "t_entry": bar_time,
+            "breakeven_hit": False, "prev_close": None,
         }
         self.daily_counts[day] = self.daily_counts.get(day, 0) + 1
         return True

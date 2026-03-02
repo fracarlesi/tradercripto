@@ -3,7 +3,7 @@
 # =============================================================================
 # Strategy: EMA9/EMA21 crossover on 15m with RSI filter
 # Target: Aggressive growth on small account ($86 USDC)
-# Risk: Fixed TP/SL (1.6%/1.0%), 10x leverage, LONG+SHORT
+# Risk: Fixed TP/SL (2.0%/1.0%), 10x leverage, LONG+SHORT
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -126,7 +126,7 @@ kill_switch:
 # -----------------------------------------------------------------------------
 stops:
   stop_loss_pct: 1.0       # Was 0.8 — sweep showed wider SL avoids premature stop-outs (+11pp win rate)
-  take_profit_pct: 1.6     # Confirmed optimal by sweep (R:R 1.6:1)
+  take_profit_pct: 2.0     # Widened from 1.6 — let winners run (R:R 2:1)
   use_server_side: true
 
   # ATR multipliers — used ONLY by the trailing stop system (after breakeven).
@@ -147,7 +147,7 @@ stops:
   momentum_exit:
     enabled: true
     min_age_minutes: 5         # 1 scan cycle — RSI slope needs at least one refresh
-    min_profit_pct: 0.1        # Only close if we're in profit
+    min_profit_pct: 0.5        # Raised from 0.1 — don't fade exits on tiny gains
     rsi_slope_threshold: 1.0   # LONG faded: rsi_slope < +1.0; SHORT faded: rsi_slope > -1.0
 
 # -----------------------------------------------------------------------------

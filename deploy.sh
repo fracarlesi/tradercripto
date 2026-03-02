@@ -69,8 +69,12 @@ case $MODE in
         ;;
 esac
 
-# Step 6: Wait and show status
-echo "[6/6] Waiting for services to start..."
+# Step 6: Clean up old Docker images and build cache
+echo "[6/6] Cleaning up old Docker images..."
+ssh root@$VPS_IP "docker image prune -af && docker builder prune -af" 2>/dev/null || true
+
+# Step 7: Wait and show status
+echo "[7/6] Waiting for services to start..."
 sleep 10
 ssh root@$VPS_IP "cd $DEPLOY_DIR && docker compose --profile ib ps"
 

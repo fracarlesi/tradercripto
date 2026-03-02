@@ -220,7 +220,7 @@ llm:
 # -----------------------------------------------------------------------------
 execution:
   prefer_limit: true
-  limit_timeout_seconds: 60
+  limit_timeout_seconds: 300
 
   max_slippage_pct: 0.30
   max_spread_pct: 0.30
