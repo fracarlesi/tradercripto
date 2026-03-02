@@ -127,7 +127,7 @@ kill_switch:
 # Stops - Fixed TP/SL
 # -----------------------------------------------------------------------------
 stops:
-  stop_loss_pct: 1.0
+  stop_loss_pct: 1.5       # Widened from 1.0 — avoids premature stop-outs on leveraged positions
   take_profit_pct: 2.0
   breakeven_threshold_pct: 0.5
   # Note: TP/SL are always server-side trigger orders (hardcoded in execution_engine)
@@ -148,7 +148,7 @@ stops:
   momentum_exit:
     enabled: true
     min_age_minutes: 5
-    min_profit_pct: 0.5
+    min_profit_pct: 0.8        # Raised from 0.5 — wider buffer before momentum fade triggers
     rsi_slope_threshold: 1.0
 
 # -----------------------------------------------------------------------------
@@ -160,6 +160,7 @@ regime:
   range_adx_max: 20
   choppiness_range_min: 60
   confirmation_bars: 2
+  regime_exit_grace_minutes: 5 # Min position age before regime-change exit allowed
 
 # -----------------------------------------------------------------------------
 # Strategies
@@ -222,6 +223,9 @@ llm:
 execution:
   prefer_limit: true
   limit_timeout_seconds: 300
+  entry_mode: "maker"
+  maker_reprice_interval_seconds: 10
+  maker_max_reprices: 6
 
   max_slippage_pct: 0.30
   max_spread_pct: 0.30
@@ -296,7 +300,7 @@ metrics:
 ml_model:
   enabled: true
   model_path: "models/trade_model_paper.joblib"
-  min_probability: 0.52
+  min_probability: 0.58        # Raised from 0.52 — fewer but higher-quality entries
   retrain_days: 30
   retrain_interval_days: 3
 

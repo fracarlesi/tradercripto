@@ -3,7 +3,7 @@
 # =============================================================================
 # Strategy: EMA9/EMA21 crossover on 15m with RSI filter
 # Target: Aggressive growth on small account ($86 USDC)
-# Risk: Fixed TP/SL (2.0%/1.0%), 10x leverage, LONG+SHORT
+# Risk: Fixed TP/SL (2.0%/1.5%), 10x leverage, LONG+SHORT
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -125,7 +125,7 @@ kill_switch:
 # Stops - Fixed TP/SL
 # -----------------------------------------------------------------------------
 stops:
-  stop_loss_pct: 1.0       # Was 0.8 — sweep showed wider SL avoids premature stop-outs (+11pp win rate)
+  stop_loss_pct: 1.5       # Widened from 1.0 — avoids premature stop-outs on leveraged positions
   take_profit_pct: 2.0     # Widened from 1.6 — let winners run (R:R 2:1)
   breakeven_threshold_pct: 1.2
   # Note: TP/SL are always server-side trigger orders (hardcoded in execution_engine)
@@ -148,7 +148,7 @@ stops:
   momentum_exit:
     enabled: true
     min_age_minutes: 5         # 1 scan cycle — RSI slope needs at least one refresh
-    min_profit_pct: 0.5        # Raised from 0.1 — don't fade exits on tiny gains
+    min_profit_pct: 0.8        # Raised from 0.5 — wider buffer before momentum fade triggers
     rsi_slope_threshold: 1.0   # LONG faded: rsi_slope < +1.0; SHORT faded: rsi_slope > -1.0
 
 # -----------------------------------------------------------------------------
@@ -160,6 +160,7 @@ regime:
   range_adx_max: 20
   choppiness_range_min: 60
   confirmation_bars: 2         # 30 min (2 bars × 15m) — faster regime transitions
+  regime_exit_grace_minutes: 5 # Min position age before regime-change exit allowed
 
 # -----------------------------------------------------------------------------
 # Strategies
@@ -221,7 +222,10 @@ llm:
 # -----------------------------------------------------------------------------
 execution:
   prefer_limit: true
-  limit_timeout_seconds: 60
+  limit_timeout_seconds: 300
+  entry_mode: "maker"
+  maker_reprice_interval_seconds: 10
+  maker_max_reprices: 6
 
   max_slippage_pct: 0.30       # Aligned with spread — was 0.25% causing instant position closes
   max_spread_pct: 0.30         # Tightened from 0.35% — aligned with slippage to avoid open+close waste
@@ -297,7 +301,7 @@ metrics:
 ml_model:
   enabled: true
   model_path: "models/trade_model.joblib"
-  min_probability: 0.52        # Leverage-aware sweep optimal — was 0.55, best Sharpe 2.33
+  min_probability: 0.58        # Raised from 0.52 — fewer but higher-quality entries
   retrain_days: 30             # Giorni di dati per training
   retrain_interval_days: 3     # Ogni quanto ri-addestrare
 

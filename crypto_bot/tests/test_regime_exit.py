@@ -23,7 +23,7 @@ from crypto_bot.services.message_bus import Message
 from crypto_bot.core.enums import Topic
 
 
-def _make_engine() -> ExecutionEngineService:
+def _make_engine(regime_exit_grace_minutes: int = 5) -> ExecutionEngineService:
     """Create an ExecutionEngineService with mocked dependencies."""
     engine = ExecutionEngineService.__new__(ExecutionEngineService)
     engine._logger = MagicMock()
@@ -31,6 +31,11 @@ def _make_engine() -> ExecutionEngineService:
     engine.client = AsyncMock()
     engine.client.cancel_order = AsyncMock()
     engine.client.close_position = AsyncMock()
+    # Provide regime config for grace period
+    regime_cfg = MagicMock()
+    regime_cfg.regime_exit_grace_minutes = regime_exit_grace_minutes
+    engine._bot_config = MagicMock()
+    engine._bot_config.regime = regime_cfg
     return engine
 
 
@@ -43,7 +48,7 @@ def _make_position(
     """Create a minimal ExecutionPosition for testing.
 
     Default opened_at is 1 hour ago to be well past the grace period
-    (REGIME_GRACE_PERIOD_MINUTES = 20).
+    (regime_exit_grace_minutes, default 5).
     """
     return ExecutionPosition(
         symbol=symbol,

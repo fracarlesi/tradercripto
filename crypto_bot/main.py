@@ -163,6 +163,7 @@ class ConservativeConfig:
     range_adx_max: float
     choppiness_range_min: float
     regime_confirmation_bars: int
+    regime_exit_grace_minutes: int
 
     # ML Model
     ml_model_path: str
@@ -174,6 +175,10 @@ class ConservativeConfig:
     prefer_limit: bool
     max_slippage_pct: float
     max_spread_pct: float
+    entry_mode: str  # "taker" (default) or "maker" (post-only)
+    limit_timeout_seconds: int
+    maker_reprice_interval_seconds: int
+    maker_max_reprices: int
 
     # Volume Breakout
     volume_breakout_enabled: bool
@@ -266,6 +271,7 @@ class ConservativeConfig:
             range_adx_max=regime.get("range_adx_max", 20.0),
             choppiness_range_min=regime.get("choppiness_range_min", 60.0),
             regime_confirmation_bars=regime.get("confirmation_bars", 3),
+            regime_exit_grace_minutes=regime.get("regime_exit_grace_minutes", 5),
             ml_model_path=ml.get("model_path", "models/trade_model.joblib"),
             ml_min_probability=ml.get("min_probability", 0.50),
             # ml_mode removed — regime gate always active (trend strategy)
@@ -274,6 +280,10 @@ class ConservativeConfig:
             prefer_limit=execution.get("prefer_limit", True),
             max_slippage_pct=execution.get("max_slippage_pct", 0.1),
             max_spread_pct=execution.get("max_spread_pct", 0.10),
+            entry_mode=execution.get("entry_mode", "taker"),
+            limit_timeout_seconds=execution.get("limit_timeout_seconds", 60),
+            maker_reprice_interval_seconds=execution.get("maker_reprice_interval_seconds", 10),
+            maker_max_reprices=execution.get("maker_max_reprices", 6),
             volume_breakout_enabled=vb.get("enabled", True),
             volume_breakout_min_volume_ratio=vb.get("min_volume_ratio", 2.0),
             volume_breakout_min_candle_body_pct=vb.get("min_candle_body_pct", 0.3),
@@ -520,11 +530,14 @@ class ConservativeBot:
             def __init__(self, cfg: ConservativeConfig):
                 self.order_type = "limit" if cfg.prefer_limit else "market"
                 self.max_slippage_pct = cfg.max_slippage_pct
-                self.limit_timeout_seconds = 60
+                self.limit_timeout_seconds = cfg.limit_timeout_seconds
                 self.retry_attempts = 3
                 self.retry_delay_seconds = 5
                 self.position_sync_interval = 30
                 self.fill_sync_interval = 10
+                self.entry_mode = cfg.entry_mode
+                self.maker_reprice_interval_seconds = cfg.maker_reprice_interval_seconds
+                self.maker_max_reprices = cfg.maker_max_reprices
 
         class _RiskConfig:
             def __init__(self, cfg: ConservativeConfig):
@@ -550,12 +563,17 @@ class ConservativeBot:
                 self.min_profit_pct = cfg.momentum_exit_min_profit_pct
                 self.rsi_slope_threshold = cfg.momentum_exit_rsi_slope_threshold
 
+        class _RegimeConfig:
+            def __init__(self, cfg: ConservativeConfig):
+                self.regime_exit_grace_minutes = cfg.regime_exit_grace_minutes
+
         class _ConfigAdapter:
             def __init__(self, cfg: ConservativeConfig):
                 self.services = _ServicesConfig(_ExecConfig(cfg))
                 self.risk = _RiskConfig(cfg)
                 self.stops = _StopsConfig(cfg)
                 self.momentum_exit = _MomentumExitConfig(cfg)
+                self.regime = _RegimeConfig(cfg)
 
         self._services["execution"] = ExecutionEngineService(
             bus=self._bus, config=_ConfigAdapter(cfg),

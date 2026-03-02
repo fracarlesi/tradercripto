@@ -143,6 +143,9 @@ class Order:
     filled_size: float = 0.0
     fee: float = 0.0
     original_signal: Optional[Dict[str, Any]] = None  # Stored for deferred fill handling
+    entry_mode: str = "taker"  # "taker" or "maker" (post-only)
+    reprice_count: int = 0
+    last_reprice_at: Optional[datetime] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary."""
@@ -162,6 +165,8 @@ class Order:
             "avg_price": self.avg_price,
             "filled_size": self.filled_size,
             "fee": self.fee,
+            "entry_mode": self.entry_mode,
+            "reprice_count": self.reprice_count,
         }
 
 
@@ -261,6 +266,12 @@ class ExecutionMetrics:
     positions_opened: int = 0
     positions_closed: int = 0
     last_execution_time: Optional[datetime] = None
+    # Maker order metrics
+    maker_orders_submitted: int = 0
+    maker_orders_filled: int = 0
+    maker_orders_repriced: int = 0
+    maker_orders_timed_out: int = 0
+    maker_avg_fill_time_seconds: float = 0.0
     
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary."""
@@ -283,9 +294,18 @@ class ExecutionMetrics:
             "positions_opened": self.positions_opened,
             "positions_closed": self.positions_closed,
             "last_execution_time": (
-                self.last_execution_time.isoformat() 
+                self.last_execution_time.isoformat()
                 if self.last_execution_time else None
             ),
+            "maker_orders_submitted": self.maker_orders_submitted,
+            "maker_orders_filled": self.maker_orders_filled,
+            "maker_orders_repriced": self.maker_orders_repriced,
+            "maker_orders_timed_out": self.maker_orders_timed_out,
+            "maker_fill_rate": (
+                self.maker_orders_filled / self.maker_orders_submitted
+                if self.maker_orders_submitted > 0 else 0.0
+            ),
+            "maker_avg_fill_time_seconds": round(self.maker_avg_fill_time_seconds, 2),
         }
 
 
@@ -612,10 +632,17 @@ class ExecutionEngineService(BaseService):
             self._settling_symbols.discard(symbol)
             self._logger.debug("Settling ended for %s", symbol)
     
-    # Minimum age (minutes) before a position can be closed by regime change.
-    # Prevents immediate regime-exit after entry when the confirmation counter
-    # is in a transient state (e.g. after service restart).
-    REGIME_GRACE_PERIOD_MINUTES: int = 20
+    # Fallback grace period (minutes) before a position can be closed by regime change.
+    # Overridden by config.regime.regime_exit_grace_minutes when available.
+    _DEFAULT_REGIME_GRACE_MINUTES: int = 5
+
+    @property
+    def _regime_exit_grace_minutes(self) -> int:
+        """Return configured regime exit grace period, falling back to default."""
+        regime_cfg = getattr(self._bot_config, "regime", None)
+        if regime_cfg is not None:
+            return getattr(regime_cfg, "regime_exit_grace_minutes", self._DEFAULT_REGIME_GRACE_MINUTES)
+        return self._DEFAULT_REGIME_GRACE_MINUTES
 
     async def _handle_regime_change(self, message: Message) -> None:
         """Close positions whose entry regime no longer matches current regime.
@@ -623,9 +650,10 @@ class ExecutionEngineService(BaseService):
         If a position was opened in TREND and regime flips to RANGE/CHAOS,
         close at market to free the slot for a better opportunity.
 
-        A grace period (REGIME_GRACE_PERIOD_MINUTES) protects recently opened
-        positions from being closed by transient regime readings, especially
-        after a service restart where the confirmation counter resets.
+        A configurable grace period (regime_exit_grace_minutes) protects
+        recently opened positions from being closed by transient regime
+        readings, especially after a service restart where the confirmation
+        counter resets.
         """
         payload = message.payload
         symbol = payload.get("symbol", "")
@@ -649,17 +677,16 @@ class ExecutionEngineService(BaseService):
             return
 
         # Grace period: skip regime-close for very new positions
+        grace_minutes = self._regime_exit_grace_minutes
         age_minutes = (
             datetime.now(timezone.utc) - position.opened_at
         ).total_seconds() / 60.0
-        if age_minutes < self.REGIME_GRACE_PERIOD_MINUTES:
+        if age_minutes < grace_minutes:
             self._logger.info(
-                "Regime change %s -> %s for %s ignored: position age %.1f min < %d min grace period",
-                position.entry_regime,
-                new_regime,
+                "Skipping regime exit for %s — position age %.1f min < grace %d min",
                 symbol,
                 age_minutes,
-                self.REGIME_GRACE_PERIOD_MINUTES,
+                grace_minutes,
             )
             return
 
@@ -914,27 +941,202 @@ class ExecutionEngineService(BaseService):
                 reduce_only=order.reduce_only,
                 slippage=slippage,
             )
+        elif self._exec_config.entry_mode == "maker" and not order.reduce_only:
+            # Maker (post-only) entry order
+            result = await self._place_maker_order(order, is_buy)
         else:
-            # Limit order with slight improvement for fill probability
-            price = order.price
-            if price:
-                if is_buy:
-                    price *= 1.001  # 0.1% above for buy
-                else:
-                    price *= 0.999  # 0.1% below for sell
-            
-            result = await self.client.place_order(
-                symbol=order.symbol,
-                is_buy=is_buy,
-                size=order.size,
-                price=price,
-                order_type="limit",
-                reduce_only=order.reduce_only,
-                time_in_force="Gtc",
-            )
-        
+            # Taker limit order (default — crosses spread for immediate fill)
+            result = await self._place_taker_fallback(order, is_buy)
+
         return result
-    
+
+    async def _place_maker_order(self, order: Order, is_buy: bool) -> Dict[str, Any]:
+        """Place a post-only (maker) order at the best bid/ask.
+
+        Uses ``time_in_force="Alo"`` which guarantees maker execution or
+        rejection.  Falls back to taker if the orderbook is empty or the
+        ALO order is rejected (would cross the spread).
+        """
+        try:
+            orderbook = await self.client.get_orderbook(order.symbol, depth=1)
+        except Exception as e:
+            self._logger.warning(
+                "MAKER: Failed to fetch orderbook for %s: %s — falling back to taker",
+                order.symbol, e,
+            )
+            return await self._place_taker_fallback(order, is_buy)
+
+        bids = orderbook.get("bids", [])
+        asks = orderbook.get("asks", [])
+
+        if not bids or not asks:
+            self._logger.warning(
+                "MAKER: Empty orderbook for %s — falling back to taker",
+                order.symbol,
+            )
+            return await self._place_taker_fallback(order, is_buy)
+
+        maker_price = bids[0][0] if is_buy else asks[0][0]
+
+        order.entry_mode = "maker"
+        order.price = maker_price
+        self.metrics.maker_orders_submitted += 1
+
+        self._logger.info(
+            "MAKER: Placing %s post-only order for %s: %.4f @ %.6f (best %s)",
+            "BUY" if is_buy else "SELL",
+            order.symbol,
+            order.size,
+            maker_price,
+            "bid" if is_buy else "ask",
+        )
+
+        result = await self.client.place_order(
+            symbol=order.symbol,
+            is_buy=is_buy,
+            size=order.size,
+            price=maker_price,
+            order_type="limit",
+            reduce_only=False,
+            time_in_force="Alo",
+        )
+
+        if not result.get("success") and not result.get("orderId"):
+            self._logger.warning(
+                "MAKER: ALO rejected for %s (would cross spread) — falling back to taker",
+                order.symbol,
+            )
+            return await self._place_taker_fallback(order, is_buy)
+
+        return result
+
+    async def _place_taker_fallback(self, order: Order, is_buy: bool) -> Dict[str, Any]:
+        """Place a taker limit order that crosses the spread for immediate fill.
+
+        This is the original limit-order behaviour extracted into a reusable
+        method so that maker orders can fall back to it.
+        """
+        price = order.price
+        if price:
+            price *= 1.001 if is_buy else 0.999  # 0.1% offset to cross spread
+        order.entry_mode = "taker"
+        return await self.client.place_order(
+            symbol=order.symbol,
+            is_buy=is_buy,
+            size=order.size,
+            price=price,
+            order_type="limit",
+            reduce_only=order.reduce_only,
+            time_in_force="Gtc",
+        )
+
+    async def _reprice_maker_orders(self) -> None:
+        """Reprice pending maker orders when the best bid/ask has moved.
+
+        Called every monitor loop cycle (5 s).  For each pending maker
+        order whose reprice interval has elapsed, fetches the current
+        orderbook and re-posts the order at the new best price if it
+        has moved by more than 0.01%.
+        """
+        if not self.pending_orders:
+            return
+
+        now = datetime.now(timezone.utc)
+        reprice_interval = timedelta(
+            seconds=self._exec_config.maker_reprice_interval_seconds
+        )
+        max_reprices = self._exec_config.maker_max_reprices
+
+        for order_id, order in list(self.pending_orders.items()):
+            if order.entry_mode != "maker":
+                continue
+
+            # Check reprice count limit
+            if order.reprice_count >= max_reprices:
+                continue
+
+            # Check interval (first reprice uses submitted_at)
+            last_action = order.last_reprice_at or order.submitted_at
+            if last_action and (now - last_action) < reprice_interval:
+                continue
+
+            is_buy = order.side == "buy"
+
+            try:
+                orderbook = await self.client.get_orderbook(order.symbol, depth=1)
+            except Exception as e:
+                self._logger.warning(
+                    "MAKER REPRICE: Failed to fetch orderbook for %s: %s",
+                    order.symbol, e,
+                )
+                continue
+
+            bids = orderbook.get("bids", [])
+            asks = orderbook.get("asks", [])
+            if not bids or not asks:
+                continue
+
+            new_price = bids[0][0] if is_buy else asks[0][0]
+
+            # Only reprice if price moved > 0.01%
+            if order.price and abs(new_price - order.price) / order.price < 0.0001:
+                continue
+
+            self._logger.info(
+                "MAKER REPRICE: %s %s price moved %.6f -> %.6f (reprice %d/%d)",
+                order.symbol,
+                "BUY" if is_buy else "SELL",
+                order.price,
+                new_price,
+                order.reprice_count + 1,
+                max_reprices,
+            )
+
+            try:
+                await self.client.cancel_order(order.symbol, int(order_id))
+            except Exception as e:
+                self._logger.warning(
+                    "MAKER REPRICE: Failed to cancel order %s: %s", order_id, e
+                )
+                continue
+
+            try:
+                result = await self.client.place_order(
+                    symbol=order.symbol,
+                    is_buy=is_buy,
+                    size=order.size,
+                    price=new_price,
+                    order_type="limit",
+                    reduce_only=False,
+                    time_in_force="Alo",
+                )
+            except Exception as e:
+                self._logger.error(
+                    "MAKER REPRICE: Failed to re-place order for %s: %s",
+                    order.symbol, e,
+                )
+                self.pending_orders.pop(order_id, None)
+                continue
+
+            new_order_id = str(result.get("orderId", ""))
+            if not new_order_id or not result.get("success"):
+                self._logger.warning(
+                    "MAKER REPRICE: ALO rejected for %s after reprice — "
+                    "removing from tracking",
+                    order.symbol,
+                )
+                self.pending_orders.pop(order_id, None)
+                continue
+
+            # Update tracking: remove old, add new order ID
+            order.price = new_price
+            order.reprice_count += 1
+            order.last_reprice_at = now
+            self.metrics.maker_orders_repriced += 1
+
+            self.pending_orders.pop(order_id, None)
+            self.pending_orders[new_order_id] = order
+
     async def _determine_order_type(self, signal: Dict[str, Any]) -> str:
         """
         Decide between limit and market order.
@@ -1627,8 +1829,11 @@ class ExecutionEngineService(BaseService):
                 await self.client.cancel_order(order.symbol, int(order_id))
                 order.status = OrderStatus.CANCELLED
                 self.metrics.orders_cancelled += 1
+                if order.entry_mode == "maker":
+                    self.metrics.maker_orders_timed_out += 1
                 self._logger.info(
-                    "Stale order %s cancelled successfully", order_id
+                    "Stale %s order %s cancelled successfully",
+                    order.entry_mode.upper(), order_id,
                 )
             except Exception as e:
                 self._logger.error(
@@ -1783,6 +1988,15 @@ class ExecutionEngineService(BaseService):
                     await self._handle_order_filled(signal, order)
                     self.pending_orders.pop(order_id, None)
                     self.metrics.orders_filled += 1
+                    if order.entry_mode == "maker":
+                        self.metrics.maker_orders_filled += 1
+                        if order.submitted_at:
+                            fill_secs = (now - order.submitted_at).total_seconds()
+                            prev = self.metrics.maker_avg_fill_time_seconds
+                            n = self.metrics.maker_orders_filled
+                            self.metrics.maker_avg_fill_time_seconds = (
+                                prev * (n - 1) + fill_secs
+                            ) / n
                 else:
                     # No position -> order was cancelled externally
                     self._partial_fill_first_seen.pop(order_id, None)
@@ -1813,6 +2027,9 @@ class ExecutionEngineService(BaseService):
             try:
                 # Poll for limit order fills (detect filled orders and set TP/SL)
                 await self._poll_pending_order_fills()
+
+                # Reprice pending maker orders if best bid/ask moved
+                await self._reprice_maker_orders()
 
                 # Cancel stale limit orders that exceeded timeout
                 await self._cancel_stale_orders()

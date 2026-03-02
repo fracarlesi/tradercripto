@@ -68,7 +68,7 @@ def _detect(svc: MarketStateService, symbol: str, adx: float,
     )
 
 
-def _make_engine() -> ExecutionEngineService:
+def _make_engine(regime_exit_grace_minutes: int = 5) -> ExecutionEngineService:
     """Create an ExecutionEngineService with mocked dependencies."""
     engine = ExecutionEngineService.__new__(ExecutionEngineService)
     engine._logger = MagicMock()
@@ -76,6 +76,11 @@ def _make_engine() -> ExecutionEngineService:
     engine.client = AsyncMock()
     engine.client.cancel_order = AsyncMock()
     engine.client.close_position = AsyncMock()
+    # Provide regime config for grace period
+    regime_cfg = MagicMock()
+    regime_cfg.regime_exit_grace_minutes = regime_exit_grace_minutes
+    engine._bot_config = MagicMock()
+    engine._bot_config.regime = regime_cfg
     return engine
 
 
@@ -359,10 +364,10 @@ class TestRegimeGracePeriod:
 
     @pytest.mark.asyncio
     async def test_new_position_regime_change_ignored(self) -> None:
-        """Position opened < 20 min ago ignores regime change."""
-        engine = _make_engine()
-        # Position opened 5 minutes ago
-        opened_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+        """Position opened < 5 min ago ignores regime change (default grace)."""
+        engine = _make_engine()  # default grace = 5 min
+        # Position opened 2 minutes ago
+        opened_at = datetime.now(timezone.utc) - timedelta(minutes=2)
         engine.active_positions["BTC"] = _make_position(
             "BTC", entry_regime="trend", opened_at=opened_at,
         )
@@ -374,10 +379,10 @@ class TestRegimeGracePeriod:
 
     @pytest.mark.asyncio
     async def test_old_position_regime_change_closes(self) -> None:
-        """Position opened > 20 min ago is closed on regime change."""
-        engine = _make_engine()
-        # Position opened 30 minutes ago
-        opened_at = datetime.now(timezone.utc) - timedelta(minutes=30)
+        """Position opened > 5 min ago is closed on regime change."""
+        engine = _make_engine()  # default grace = 5 min
+        # Position opened 10 minutes ago
+        opened_at = datetime.now(timezone.utc) - timedelta(minutes=10)
         engine.active_positions["BTC"] = _make_position(
             "BTC", entry_regime="trend", opened_at=opened_at,
         )
@@ -389,9 +394,9 @@ class TestRegimeGracePeriod:
 
     @pytest.mark.asyncio
     async def test_position_at_exact_grace_boundary(self) -> None:
-        """Position at exactly 20 min should be closed (>= boundary)."""
-        engine = _make_engine()
-        opened_at = datetime.now(timezone.utc) - timedelta(minutes=20, seconds=1)
+        """Position at exactly 5 min should be closed (>= boundary)."""
+        engine = _make_engine()  # default grace = 5 min
+        opened_at = datetime.now(timezone.utc) - timedelta(minutes=5, seconds=1)
         engine.active_positions["BTC"] = _make_position(
             "BTC", entry_regime="trend", opened_at=opened_at,
         )
