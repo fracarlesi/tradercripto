@@ -802,6 +802,20 @@ class ExecutionEngineService(BaseService):
             f"{entry_price:.2f}" if order_type == "limit" else "MARKET"
         )
 
+        # Pre-flight spread check — skip if spread > max_slippage to avoid
+        # the open→slippage-reject→close cycle that burns double fees.
+        try:
+            spread = await self._get_spread(symbol)
+            if spread > self._exec_config.max_slippage_pct:
+                self._logger.warning(
+                    "SKIPPING %s %s: spread %.2f%% exceeds max slippage %.2f%% — avoiding fee burn",
+                    side.upper(), symbol, spread, self._exec_config.max_slippage_pct,
+                )
+                self.metrics.orders_rejected += 1
+                return None
+        except Exception as e:
+            self._logger.warning("Pre-flight spread check failed for %s: %s", symbol, e)
+
         # Ensure configured leverage is set before placing the order
         configured_leverage = getattr(self._bot_config.risk, "leverage", None)
         if configured_leverage:
