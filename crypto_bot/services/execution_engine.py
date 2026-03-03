@@ -1132,6 +1132,20 @@ class ExecutionEngineService(BaseService):
                     reduce_only=False,
                     time_in_force="Alo",
                 )
+            except OrderRejectedError:
+                self._logger.warning(
+                    "MAKER REPRICE: ALO rejected for %s — falling back to taker",
+                    order.symbol,
+                )
+                self.pending_orders.pop(order_id, None)
+                try:
+                    await self._place_taker_fallback(order, is_buy)
+                except Exception as e:
+                    self._logger.error(
+                        "MAKER REPRICE: Taker fallback also failed for %s: %s",
+                        order.symbol, e,
+                    )
+                continue
             except Exception as e:
                 self._logger.error(
                     "MAKER REPRICE: Failed to re-place order for %s: %s",
@@ -1144,10 +1158,17 @@ class ExecutionEngineService(BaseService):
             if not new_order_id or not result.get("success"):
                 self._logger.warning(
                     "MAKER REPRICE: ALO rejected for %s after reprice — "
-                    "removing from tracking",
+                    "falling back to taker",
                     order.symbol,
                 )
                 self.pending_orders.pop(order_id, None)
+                try:
+                    await self._place_taker_fallback(order, is_buy)
+                except Exception as e:
+                    self._logger.error(
+                        "MAKER REPRICE: Taker fallback also failed for %s: %s",
+                        order.symbol, e,
+                    )
                 continue
 
             # Update tracking: remove old, add new order ID
@@ -1389,6 +1410,7 @@ class ExecutionEngineService(BaseService):
                     "%s has %d reduce-only orders, assuming TP/SL present",
                     symbol, len(reduce_only_orders)
                 )
+                self._tp_sl_confirmed.add(symbol)
                 return
 
         except Exception as e:
@@ -1617,6 +1639,28 @@ class ExecutionEngineService(BaseService):
         is_long = signal["direction"] == "long"
         entry_price = order.avg_price or signal["entry_price"]
         size = position.size
+
+        # --- Cancel existing reduce-only orders to avoid orphans on partial fills ---
+        try:
+            open_orders = await self.client.get_open_orders()
+            existing_reduce = [
+                o for o in open_orders
+                if o.get("symbol") == symbol and o.get("reduceOnly")
+            ]
+            for ro in existing_reduce:
+                try:
+                    await self.client.cancel_order(symbol, int(ro["orderId"]))
+                    self._logger.info(
+                        "Cancelled existing reduce-only order %s for %s before new TP/SL",
+                        ro["orderId"], symbol,
+                    )
+                except Exception as e:
+                    self._logger.warning(
+                        "Failed to cancel reduce-only order %s for %s: %s",
+                        ro["orderId"], symbol, e,
+                    )
+        except Exception as e:
+            self._logger.warning("Could not fetch open orders to clean up %s: %s", symbol, e)
 
         # --- Fixed TP/SL from config (always) ---
         sl_pct = self._bot_config.risk.stop_loss_pct / 100
