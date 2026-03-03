@@ -701,7 +701,13 @@ class ExecutionEngineService(BaseService):
         )
 
         position.exit_reason = "regime_change"
-        await self.close_position(symbol)
+        try:
+            await self.close_position(symbol)
+        except Exception as e:
+            self._logger.error(
+                "Failed to close %s on regime_change: %s", symbol, e
+            )
+            position.exit_reason = None
 
     def _validate_signal(self, signal: Dict[str, Any]) -> bool:
         """
@@ -1406,9 +1412,21 @@ class ExecutionEngineService(BaseService):
             # If there are reduce-only orders, assume TP/SL are set
             reduce_only_orders = [o for o in symbol_orders if o.get("reduceOnly")]
             if len(reduce_only_orders) >= 2:
+                # Recover TP/SL prices from exchange orders to prevent
+                # _sync_positions_from_exchange re-triggering this method
+                prices = sorted(
+                    [float(o.get("limitPx", o.get("price", 0))) for o in reduce_only_orders]
+                )
+                if position.side == "short":
+                    position.tp_price = prices[0]   # Lower price = TP for short
+                    position.sl_price = prices[-1]   # Higher price = SL for short
+                else:  # long
+                    position.tp_price = prices[-1]   # Higher price = TP for long
+                    position.sl_price = prices[0]    # Lower price = SL for long
                 self._logger.info(
-                    "%s has %d reduce-only orders, assuming TP/SL present",
-                    symbol, len(reduce_only_orders)
+                    "%s has %d reduce-only orders — recovered TP=%.6f SL=%.6f",
+                    symbol, len(reduce_only_orders),
+                    position.tp_price, position.sl_price,
                 )
                 self._tp_sl_confirmed.add(symbol)
                 return
@@ -2177,7 +2195,9 @@ class ExecutionEngineService(BaseService):
                         await self._update_tp_sl_for_size_change(local_pos)
 
                     # Re-attempt TP/SL if initial placement failed
-                    if (
+                    if symbol in self._tp_sl_confirmed:
+                        pass  # Already confirmed via exchange orders, skip re-check
+                    elif (
                         (local_pos.tp_price is None or local_pos.sl_price is None)
                         and local_pos.status == PositionStatus.OPEN
                         and symbol not in self._settling_symbols
@@ -2202,6 +2222,12 @@ class ExecutionEngineService(BaseService):
                         continue
 
                     entry_px = pos.get("entryPrice", 0)
+                    # Use a conservative past timestamp for synced positions.
+                    # The exchange API doesn't provide an open timestamp, so we
+                    # default to 1 hour ago.  This avoids blocking exits with
+                    # artificially fresh grace periods (momentum_fade min_age,
+                    # regime-change grace, etc.) after a bot restart.
+                    synced_opened_at = datetime.now(timezone.utc) - timedelta(hours=1)
                     new_pos = ExecutionPosition(
                         symbol=symbol,
                         side=pos.get("side", "long"),
@@ -2211,17 +2237,18 @@ class ExecutionEngineService(BaseService):
                         unrealized_pnl=pos.get("unrealizedPnl", 0),
                         leverage=pos.get("leverage", 1),
                         status=PositionStatus.OPEN,
-                        opened_at=datetime.now(timezone.utc),
+                        opened_at=synced_opened_at,
                         entry_regime="trend",  # We only open in TREND
                         highest_price=entry_px,
                         lowest_price=entry_px,
                     )
                     self.active_positions[symbol] = new_pos
                     self._logger.info(
-                        "Synced existing position: %s %s %.4f",
+                        "Synced existing position: %s %s %.4f (opened_at set to %s — estimated, pre-restart)",
                         new_pos.side,
                         symbol,
-                        abs(size)
+                        abs(size),
+                        synced_opened_at.isoformat(),
                     )
 
                     # Check and set SL/TP for newly discovered positions
@@ -2329,6 +2356,10 @@ class ExecutionEngineService(BaseService):
                     self._logger.error(
                         "Failed to close %s after %s: %s", symbol, hit_reason, e
                     )
+                    # CRITICAL: Remove from _closing_positions so next iteration retries
+                    self._closing_positions.discard(symbol)
+                    position.status = PositionStatus.OPEN
+                    position.exit_reason = None
 
     async def _check_breakeven_stops(self) -> None:
         """Move SL to entry price (breakeven) when unrealized P&L reaches threshold.
@@ -2650,10 +2681,16 @@ class ExecutionEngineService(BaseService):
                     
                     # Mark exit reason before closing
                     position.exit_reason = "roi_target"
-                    
+
                     # Close position
-                    await self.close_position(symbol)
-                    
+                    try:
+                        await self.close_position(symbol)
+                    except Exception as e:
+                        self._logger.error(
+                            "Failed to close %s on roi_target: %s", symbol, e
+                        )
+                        position.exit_reason = None
+
             except Exception as e:
                 self._logger.error(
                     "Error checking ROI exit for %s: %s",
@@ -2739,7 +2776,13 @@ class ExecutionEngineService(BaseService):
                     profit_pct, age_minutes,
                 )
                 position.exit_reason = "momentum_fade"
-                await self.close_position(symbol)
+                try:
+                    await self.close_position(symbol)
+                except Exception as e:
+                    self._logger.error(
+                        "Failed to close %s on momentum_fade: %s", symbol, e
+                    )
+                    position.exit_reason = None
 
     async def _handle_position_closed(self, symbol: str) -> None:
         """
