@@ -55,7 +55,7 @@ def run(args: argparse.Namespace) -> None:
     print(f"Strategy: EMA9/EMA21 + RSI + TREND regime (ADX entry>={cfg.trend_adx_entry_min}, "
           f"exit>={cfg.trend_adx_exit_min})")
     print(f"TP: {cfg.tp_pct*100:.1f}% | SL: {cfg.sl_pct*100:.1f}% | "
-          f"Fees: {cfg.fee_pct*100:.2f}%/side")
+          f"Fees: entry {cfg.entry_fee_pct*100:.3f}% + exit {cfg.exit_fee_pct*100:.3f}%/side")
     print(f"Account: ${cfg.account_size} | Max {cfg.max_daily_trades} trades/day")
     print()
 
@@ -138,6 +138,6 @@ def run(args: argparse.Namespace) -> None:
             n = cfg.account_size * sc["pct"] * sc["leverage"]
             tp_w = n * cfg.tp_pct
             sl_l = n * cfg.sl_pct
-            fees = n * cfg.fee_pct * 2
+            fees = n * (cfg.entry_fee_pct + cfg.exit_fee_pct)
             print(f"  {sc['name']:<28} ${n:>7.1f}  ${tp_w:>7.3f}  "
                   f"${sl_l:>7.3f}  ${fees:>7.3f}  ${tp_w - fees:>7.3f}")

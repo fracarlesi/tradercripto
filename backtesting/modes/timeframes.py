@@ -42,7 +42,7 @@ def run(args: argparse.Namespace) -> None:
     print(f"Strategy: EMA9/EMA21 + RSI + Regime (ADX entry>={cfg_base.trend_adx_entry_min}, "
           f"exit>={cfg_base.trend_adx_exit_min})")
     print(f"TP: {cfg_base.tp_pct*100:.1f}% | SL: {cfg_base.sl_pct*100:.1f}% | "
-          f"Fees: {cfg_base.fee_pct*100:.2f}%/side")
+          f"Fees: entry {cfg_base.entry_fee_pct*100:.3f}% + exit {cfg_base.exit_fee_pct*100:.3f}%/side")
     print(f"Account: ${cfg_base.account_size} | {cfg_base.leverage}x | "
           f"{cfg_base.position_pct*100:.0f}% size | "
           f"Max {cfg_base.max_daily_trades} trades/day")

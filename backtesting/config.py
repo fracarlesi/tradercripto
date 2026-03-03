@@ -26,7 +26,8 @@ class BacktestConfig:
 
     # Account
     account_size: float = 86.0
-    fee_pct: float = 0.00045  # 0.045% per side (Hyperliquid perps taker fee, Tier 0)
+    entry_fee_pct: float = 0.00045  # 0.045% taker default; 0.015% if entry_mode=maker
+    exit_fee_pct: float = 0.00045   # 0.045% taker always (TP/SL are server-side trigger orders)
     slippage_pct: float = 0.0005  # 0.05% adverse slippage on entry/exit
     spread_filter_pct: float = 0.30  # Max spread % (pre-trade filter)
 
@@ -64,6 +65,16 @@ class BacktestConfig:
     lookback_days: int = 7
     warmup_bars: int = 200
 
+    @property
+    def fee_pct(self) -> float:
+        """Backward-compat: returns entry_fee_pct (single-side fee for legacy code)."""
+        return self.entry_fee_pct
+
+    @property
+    def total_fee_pct(self) -> float:
+        """Round-trip fees: entry + exit."""
+        return self.entry_fee_pct + self.exit_fee_pct
+
 
 def load_config(**overrides: object) -> BacktestConfig:
     """Load config from trading.yaml, applying any CLI overrides."""
@@ -76,8 +87,16 @@ def load_config(**overrides: object) -> BacktestConfig:
     regime = raw.get("regime", {})
     strat = raw.get("strategies", {}).get("trend_momentum", {})
     universe = raw.get("universe", {})
+    execution = raw.get("execution", {})
+
+    # Determine entry fee based on execution.entry_mode
+    entry_mode = execution.get("entry_mode", "taker")
+    entry_fee = 0.00015 if entry_mode == "maker" else 0.00045  # Maker 0.015%, Taker 0.045%
+    exit_fee = 0.00045  # TP/SL are always server-side trigger orders (taker)
 
     cfg = BacktestConfig(
+        entry_fee_pct=entry_fee,
+        exit_fee_pct=exit_fee,
         tp_pct=stops.get("take_profit_pct", 0.8) / 100,
         sl_pct=stops.get("stop_loss_pct", 0.4) / 100,
         position_pct=risk.get("per_trade_pct", 10.0) / 100,

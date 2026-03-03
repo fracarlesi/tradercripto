@@ -75,20 +75,20 @@ def _run_regime_backtest(
             if in_trade:
                 if trade_dir == 1:
                     if lows[bar] <= sl_price:
-                        pnl = (sl_price / entry_price - 1) * cfg.leverage - 2 * cfg.fee_pct * cfg.leverage
+                        pnl = (sl_price / entry_price - 1) * cfg.leverage - (cfg.entry_fee_pct + cfg.exit_fee_pct) * cfg.leverage
                         all_trades.append({"symbol": symbol, "pnl_pct": pnl, "result": "SL"})
                         in_trade = False
                     elif highs[bar] >= tp_price:
-                        pnl = (tp_price / entry_price - 1) * cfg.leverage - 2 * cfg.fee_pct * cfg.leverage
+                        pnl = (tp_price / entry_price - 1) * cfg.leverage - (cfg.entry_fee_pct + cfg.exit_fee_pct) * cfg.leverage
                         all_trades.append({"symbol": symbol, "pnl_pct": pnl, "result": "TP"})
                         in_trade = False
                 else:
                     if highs[bar] >= sl_price:
-                        pnl = (1 - sl_price / entry_price) * cfg.leverage - 2 * cfg.fee_pct * cfg.leverage
+                        pnl = (1 - sl_price / entry_price) * cfg.leverage - (cfg.entry_fee_pct + cfg.exit_fee_pct) * cfg.leverage
                         all_trades.append({"symbol": symbol, "pnl_pct": pnl, "result": "SL"})
                         in_trade = False
                     elif lows[bar] <= tp_price:
-                        pnl = (1 - tp_price / entry_price) * cfg.leverage - 2 * cfg.fee_pct * cfg.leverage
+                        pnl = (1 - tp_price / entry_price) * cfg.leverage - (cfg.entry_fee_pct + cfg.exit_fee_pct) * cfg.leverage
                         all_trades.append({"symbol": symbol, "pnl_pct": pnl, "result": "TP"})
                         in_trade = False
                 continue
@@ -120,9 +120,9 @@ def _run_regime_backtest(
         # Close open trade
         if in_trade:
             if trade_dir == 1:
-                pnl = (closes[-1] / entry_price - 1) * cfg.leverage - 2 * cfg.fee_pct * cfg.leverage
+                pnl = (closes[-1] / entry_price - 1) * cfg.leverage - (cfg.entry_fee_pct + cfg.exit_fee_pct) * cfg.leverage
             else:
-                pnl = (1 - closes[-1] / entry_price) * cfg.leverage - 2 * cfg.fee_pct * cfg.leverage
+                pnl = (1 - closes[-1] / entry_price) * cfg.leverage - (cfg.entry_fee_pct + cfg.exit_fee_pct) * cfg.leverage
             all_trades.append({"symbol": symbol, "pnl_pct": pnl, "result": "OPEN"})
 
     return _aggregate(all_trades, cfg)
@@ -190,7 +190,8 @@ def run(args: argparse.Namespace) -> None:
     print("=" * 80)
     print(f"Strategy: EMA9/EMA21 crossover + RSI filter ({tf})")
     print(f"TP: {cfg.tp_pct*100:.1f}%, SL: {cfg.sl_pct*100:.1f}%, "
-          f"Fee: {cfg.fee_pct*100:.3f}%/side, Leverage: {cfg.leverage}x")
+          f"Fees: entry {cfg.entry_fee_pct*100:.3f}% + exit {cfg.exit_fee_pct*100:.3f}%/side, "
+          f"Leverage: {cfg.leverage}x")
     print(f"Account: ${cfg.account_size}, Position: {cfg.position_pct*100:.0f}%")
     print()
 

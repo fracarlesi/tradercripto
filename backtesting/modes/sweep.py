@@ -269,7 +269,8 @@ def run(args: argparse.Namespace) -> None:
 
         combo_cfg = BacktestConfig(
             account_size=cfg.account_size,
-            fee_pct=cfg.fee_pct,
+            entry_fee_pct=cfg.entry_fee_pct,
+            exit_fee_pct=cfg.exit_fee_pct,
             slippage_pct=FIXED_SLIPPAGE_PCT,
             tp_pct=tp,
             sl_pct=sl,

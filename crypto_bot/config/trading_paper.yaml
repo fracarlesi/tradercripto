@@ -127,9 +127,9 @@ kill_switch:
 # Stops - Fixed TP/SL
 # -----------------------------------------------------------------------------
 stops:
-  stop_loss_pct: 1.5       # Widened from 1.0 — avoids premature stop-outs on leveraged positions
+  stop_loss_pct: 1.0       # Sweep-optimal (Sharpe 10.32)
   take_profit_pct: 2.0
-  breakeven_threshold_pct: 0.5
+  breakeven_threshold_pct: 1.2   # Sweep-optimal — aligned with mainnet
   # Note: TP/SL are always server-side trigger orders (hardcoded in execution_engine)
 
   initial_atr_mult: 2.5
@@ -148,7 +148,7 @@ stops:
   momentum_exit:
     enabled: true
     min_age_minutes: 5
-    min_profit_pct: 0.8        # Raised from 0.5 — wider buffer before momentum fade triggers
+    min_profit_pct: 0.5        # Sweep-optimal
     rsi_slope_threshold: 1.0
 
 # -----------------------------------------------------------------------------
@@ -300,7 +300,7 @@ metrics:
 ml_model:
   enabled: true
   model_path: "models/trade_model_paper.joblib"
-  min_probability: 0.58        # Raised from 0.52 — fewer but higher-quality entries
+  min_probability: 0.52        # Sweep-optimal
   retrain_days: 30
   retrain_interval_days: 3
 

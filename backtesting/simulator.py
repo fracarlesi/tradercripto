@@ -161,7 +161,7 @@ class PortfolioSimulator:
             gross = (exit_price - pos["entry"]) * qty
         else:
             gross = (pos["entry"] - exit_price) * qty
-        fees = pos["notional"] * self.cfg.fee_pct * 2
+        fees = pos["notional"] * (self.cfg.entry_fee_pct + self.cfg.exit_fee_pct)
         net = gross - fees
         self.equity += net
         self.equity_curve.append(self.equity)
