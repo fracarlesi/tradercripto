@@ -167,7 +167,7 @@ def calc_donchian(highs: np.ndarray, lows: np.ndarray,
 
 # ── Regime detection with hysteresis ─────────────────────────────────────────
 
-def compute_regime_series(adx: np.ndarray, ema200_slope: np.ndarray,
+def compute_regime_series(adx: np.ndarray, _ema200_slope: np.ndarray,
                           cfg: BacktestConfig) -> np.ndarray:
     """Compute TREND regime per bar with level hysteresis (matches bot).
 
@@ -265,6 +265,23 @@ def compute_indicators(candles: list[dict], cfg: BacktestConfig,
     # Volume SMA20 (for volume breakout signal)
     vol_sma20 = calc_sma(volumes, 20)
 
+    n = len(closes)
+
+    # RSI slope: RSI[i] - RSI[i-2] (matches live bot momentum fade + ML feature)
+    rsi_slope = np.full(n, np.nan)
+    for i in range(2, n):
+        if not np.isnan(rsi[i]) and not np.isnan(rsi[i - 2]):
+            rsi_slope[i] = rsi[i] - rsi[i - 2]
+
+    # EMA9 slope: 4-bar lookback (matches ML feature extraction)
+    ema9_slope = np.full(n, np.nan)
+    ema21_slope = np.full(n, np.nan)
+    for i in range(slope_lookback, n):
+        if not np.isnan(ema9[i]) and not np.isnan(ema9[i - slope_lookback]) and ema9[i - slope_lookback] > 0:
+            ema9_slope[i] = (ema9[i] - ema9[i - slope_lookback]) / ema9[i - slope_lookback]
+        if not np.isnan(ema21[i]) and not np.isnan(ema21[i - slope_lookback]) and ema21[i - slope_lookback] > 0:
+            ema21_slope[i] = (ema21[i] - ema21[i - slope_lookback]) / ema21[i - slope_lookback]
+
     return {
         "ema9": ema9, "ema21": ema21, "ema200": ema200,
         "ema200_slope": ema200_slope,
@@ -272,4 +289,5 @@ def compute_indicators(candles: list[dict], cfg: BacktestConfig,
         "is_trend": is_trend,
         "closes": closes, "highs": highs, "lows": lows,
         "opens": opens, "volumes": volumes, "vol_sma20": vol_sma20,
+        "rsi_slope": rsi_slope, "ema9_slope": ema9_slope, "ema21_slope": ema21_slope,
     }

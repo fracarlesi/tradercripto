@@ -60,6 +60,26 @@ class BacktestConfig:
     momentum_exit_min_profit_pct: float = 0.001  # 0.1% — min profit before momentum_fade exit
     breakeven_threshold_pct: float = 0.012        # 1.2% — profit at which SL moves to entry
 
+    # Trailing stop (after breakeven)
+    trailing_atr_mult: float = 1.5
+
+    # Graduated ROI exits — keys are minutes as strings, values are ROI fraction
+    minimal_roi: dict[str, float] = field(default_factory=lambda: {
+        "0": 0.04, "60": 0.02, "120": 0.01, "240": 0.005, "360": 0.0
+    })
+
+    # Per-symbol cooldown
+    cooldown_minutes: int = 10
+    cooldown_after_sl_minutes: int = 30
+    max_trades_per_symbol_per_day: int = 2
+
+    # Momentum fade RSI slope threshold (matches live bot)
+    momentum_rsi_slope_threshold: float = 1.0
+    momentum_exit_min_age_bars: int = 1
+
+    # Regime exit grace period in bars
+    regime_exit_grace_bars: int = 1
+
     # CLI overridable
     timeframe: str = "15m"
     lookback_days: int = 7
@@ -88,6 +108,8 @@ def load_config(**overrides: object) -> BacktestConfig:
     strat = raw.get("strategies", {}).get("trend_momentum", {})
     universe = raw.get("universe", {})
     execution = raw.get("execution", {})
+    roi_raw = stops.get("minimal_roi", {})
+    mom_raw = stops.get("momentum_exit", {})
 
     # Determine entry fee based on execution.entry_mode
     entry_mode = execution.get("entry_mode", "taker")
@@ -112,6 +134,18 @@ def load_config(**overrides: object) -> BacktestConfig:
         rsi_short_max=strat.get("rsi_short_max", 70),
         min_atr_pct=strat.get("min_atr_pct", 0.1),
         exclude_symbols=set(universe.get("exclude_symbols", [])),
+        trailing_atr_mult=stops.get("trailing_atr_mult", 1.5),
+        minimal_roi=(
+            {str(k): float(v) for k, v in roi_raw.items()}
+            if roi_raw
+            else {"0": 0.04, "60": 0.02, "120": 0.01, "240": 0.005, "360": 0.0}
+        ),
+        cooldown_minutes=10,
+        cooldown_after_sl_minutes=30,
+        max_trades_per_symbol_per_day=2,
+        momentum_rsi_slope_threshold=mom_raw.get("rsi_slope_threshold", 1.0),
+        momentum_exit_min_age_bars=1,
+        regime_exit_grace_bars=max(1, regime.get("regime_exit_grace_minutes", 5) // 15),
     )
 
     # Apply CLI overrides

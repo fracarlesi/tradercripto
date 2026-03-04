@@ -48,6 +48,20 @@ def build_parser() -> argparse.ArgumentParser:
                               help="Grid-search TP/SL/threshold/slippage")
     add_common(sp_sweep)
 
+    sp_replay = sub.add_parser("replay",
+                               help="Replay historical data through full live-bot logic")
+    add_common(sp_replay)
+    sp_replay.add_argument("--threshold", type=float, default=0.52,
+                           help="ML probability threshold (default: 0.52)")
+    sp_replay.add_argument("--kelly", action="store_true",
+                           help="Use Kelly criterion for position sizing")
+    sp_replay.add_argument("--no-ml", action="store_true", dest="no_ml",
+                           help="Disable ML model (accept all signals)")
+    sp_replay.add_argument("--verbose", action="store_true",
+                           help="Print each open/close event")
+    sp_replay.add_argument("--bar-log", type=str, default=None, dest="bar_log",
+                           help="Write bar-level CSV log to FILE")
+
     return parser
 
 
@@ -67,6 +81,8 @@ def main(argv: list[str] | None = None) -> None:
         from backtesting.modes.threshold import run
     elif args.mode == "sweep":
         from backtesting.modes.sweep import run
+    elif args.mode == "replay":
+        from backtesting.modes.replay import run
     else:
         parser.print_help()
         sys.exit(1)
