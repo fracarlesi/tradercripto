@@ -748,6 +748,9 @@ class ConservativeBot:
         vb_allowed_regimes = {r.lower() for r in self.config.volume_breakout_allowed_regimes}
         mb_allowed_regimes = {r.lower() for r in self.config.momentum_burst_allowed_regimes}
 
+        # BTC state for ML context features (altcoins use BTC as macro indicator)
+        btc_state = states.get("BTC")
+
         regime_skipped: int = 0
         breakout_evaluated: int = 0
         burst_evaluated: int = 0
@@ -769,7 +772,11 @@ class ConservativeBot:
             if state.regime == Regime.TREND:
                 direction = state.trend_direction
                 if direction != Direction.FLAT:
-                    features = self._ml_model.extract_features(state, signal_type=0.0)
+                    dir_float = 1.0 if direction == Direction.LONG else -1.0
+                    features = self._ml_model.extract_features(
+                        state, signal_type=0.0, direction=dir_float,
+                        btc_state=btc_state,
+                    )
                     prob, reason = self._ml_model.predict(features)
                     all_scores.append((f"{symbol}/ema", prob))
                     if prob > top_scored_prob:
@@ -787,7 +794,11 @@ class ConservativeBot:
                 vb_direction = self._breakout_direction(state)
                 if vb_direction != Direction.FLAT and self._is_volume_breakout(state):
                     breakout_evaluated += 1
-                    features = self._ml_model.extract_features(state, signal_type=1.0)
+                    vb_dir_float = 1.0 if vb_direction == Direction.LONG else -1.0
+                    features = self._ml_model.extract_features(
+                        state, signal_type=1.0, direction=vb_dir_float,
+                        btc_state=btc_state,
+                    )
                     prob, reason = self._ml_model.predict(features)
                     all_scores.append((f"{symbol}/vb", prob))
                     if prob > top_scored_prob:
@@ -806,7 +817,11 @@ class ConservativeBot:
                     mb_direction = self._momentum_burst_direction(state)
                     if mb_direction != Direction.FLAT:
                         burst_evaluated += 1
-                        features = self._ml_model.extract_features(state, signal_type=2.0)
+                        mb_dir_float = 1.0 if mb_direction == Direction.LONG else -1.0
+                        features = self._ml_model.extract_features(
+                            state, signal_type=2.0, direction=mb_dir_float,
+                            btc_state=btc_state,
+                        )
                         prob, reason = self._ml_model.predict(features)
                         all_scores.append((f"{symbol}/mb", prob))
                         if prob > top_scored_prob:

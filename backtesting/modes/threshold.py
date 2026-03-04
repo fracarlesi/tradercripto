@@ -43,6 +43,10 @@ def _extract_features(
     bb_upper: np.ndarray,
     bb_lower: np.ndarray,
     signal_type: float,
+    direction: int = 1,
+    btc_ind: dict | None = None,
+    btc_time_idx: dict[int, int] | None = None,
+    ind_1h: dict | None = None,
 ) -> dict | None:
     """Extract ML feature dict from backtesting arrays.
 
@@ -60,8 +64,11 @@ def _extract_features(
     if any(np.isnan(v) for v in [ema9, ema21, ema200, adx_val, rsi_val]):
         return None
 
-    # EMA spread
+    # EMA spread (abs)
     ema_spread_pct = abs(ema9 - ema21) / ema21 * 100 if ema21 != 0 else 0.0
+
+    # Signed EMA spread
+    signed_ema_spread = (ema9 - ema21) / ema21 * 100 if ema21 != 0 else 0.0
 
     # Volume ratio
     vol_sma = ind["vol_sma20"][idx]
@@ -100,15 +107,60 @@ def _extract_features(
     else:
         regime_encoded = 1.0
 
-    # Hour of day
+    # Hour of day + day of week
     ts_ms = candles[idx]["t"]
-    hour_of_day = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).hour / 24.0
+    dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
+    hour_of_day = dt.hour / 24.0
+    day_of_week = dt.weekday() / 6.0
 
     # Candle body pct
     candle_body_pct = abs(close - open_price) / open_price * 100 if open_price > 0 else 0.0
 
     # RSI slope (2-bar lookback)
     rsi_slope = float(rsi_val - ind["rsi"][idx - 2]) if idx >= 2 and not np.isnan(ind["rsi"][idx - 2]) else 0.0
+
+    # ATR percentile: rank of current ATR in last 100 bars [0,1]
+    atr_vals = ind["atr_pct"]
+    lookback = min(100, idx + 1)
+    if lookback > 1 and not np.isnan(atr_pct_val):
+        window = atr_vals[idx - lookback + 1: idx + 1]
+        valid = window[~np.isnan(window)]
+        if len(valid) > 1:
+            atr_percentile = float(np.searchsorted(np.sort(valid), atr_pct_val)) / len(valid)
+        else:
+            atr_percentile = 0.5
+    else:
+        atr_percentile = 0.5
+
+    # --- BTC context features ---
+    btc_trend = 0.0
+    btc_rsi = 50.0
+    btc_ema9_slope = 0.0
+    if btc_ind is not None and btc_time_idx is not None:
+        btc_idx = btc_time_idx.get(ts_ms)
+        if btc_idx is not None:
+            b_ema9 = btc_ind["ema9"][btc_idx]
+            b_ema21 = btc_ind["ema21"][btc_idx]
+            if not np.isnan(b_ema9) and not np.isnan(b_ema21):
+                btc_trend = 1.0 if b_ema9 > b_ema21 else (-1.0 if b_ema9 < b_ema21 else 0.0)
+            if not np.isnan(btc_ind["rsi"][btc_idx]):
+                btc_rsi = float(btc_ind["rsi"][btc_idx])
+            if btc_idx >= 4 and not np.isnan(btc_ind["ema9"][btc_idx - 4]) and btc_ind["ema9"][btc_idx - 4] > 0:
+                btc_ema9_slope = (btc_ind["ema9"][btc_idx] - btc_ind["ema9"][btc_idx - 4]) / btc_ind["ema9"][btc_idx - 4]
+
+    # --- Multi-TF alignment features ---
+    rsi_1h = float(rsi_val)
+    adx_1h = float(adx_val)
+    tf_alignment = 0.0
+    if ind_1h is not None:
+        if not np.isnan(ind_1h["rsi"][idx]):
+            rsi_1h = float(ind_1h["rsi"][idx])
+        if not np.isnan(ind_1h["adx"][idx]):
+            adx_1h = float(ind_1h["adx"][idx])
+        if (not np.isnan(ind_1h["ema9"][idx]) and not np.isnan(ind_1h["ema21"][idx])):
+            dir_15m = 1.0 if ema9 > ema21 else -1.0
+            dir_1h = 1.0 if ind_1h["ema9"][idx] > ind_1h["ema21"][idx] else -1.0
+            tf_alignment = 1.0 if dir_15m == dir_1h else -1.0
 
     return {
         "adx": float(adx_val),
@@ -125,6 +177,19 @@ def _extract_features(
         "signal_type": signal_type,
         "candle_body_pct": candle_body_pct,
         "rsi_slope": rsi_slope,
+        # Tier 1
+        "day_of_week": day_of_week,
+        "atr_percentile": atr_percentile,
+        "signed_ema_spread": signed_ema_spread,
+        "direction": float(direction),
+        # Tier 2
+        "btc_trend": btc_trend,
+        "btc_rsi": btc_rsi,
+        "btc_ema9_slope": btc_ema9_slope,
+        "tf_alignment": tf_alignment,
+        "rsi_1h": rsi_1h,
+        "adx_1h": adx_1h,
+        "funding_rate": 0.0,
     }
 
 
@@ -201,12 +266,19 @@ def run(args: argparse.Namespace) -> None:
     # Compute indicators + Bollinger for all assets
     print("Computing indicators...")
     asset_indicators: dict[str, dict] = {}
+    asset_indicators_1h: dict[str, dict] = {}
     asset_bb: dict[str, tuple[np.ndarray, np.ndarray]] = {}
     for asset, candles in asset_candles.items():
         ind = compute_indicators(candles, cfg, tf_scale)
+        ind_1h = compute_indicators(candles, cfg, tf_scale * 4)  # 1h equivalent
         _, bb_upper, bb_lower = calc_bollinger(ind["closes"], 20 * tf_scale)
         asset_indicators[asset] = ind
+        asset_indicators_1h[asset] = ind_1h
         asset_bb[asset] = (bb_upper, bb_lower)
+
+    # BTC context indicators (populated after asset_time_idx is built)
+    btc_ind: dict | None = None
+    btc_time_idx_map: dict[int, int] | None = None
 
     # Build timeline (sorted unique timestamps after warmup period)
     all_timestamps: set[int] = set()
@@ -220,6 +292,11 @@ def run(args: argparse.Namespace) -> None:
     for asset, candles in asset_candles.items():
         asset_time_idx[asset] = {c["t"]: i for i, c in enumerate(candles)}
 
+    # BTC context indicators
+    if "BTC" in asset_indicators:
+        btc_ind = asset_indicators["BTC"]
+        btc_time_idx_map = asset_time_idx.get("BTC")
+
     # Pre-score all signals once (avoid re-running ML for each threshold)
     print("Scoring all signals with ML model...")
     # Each entry: (timestamp, asset, direction, probability, signal_label)
@@ -229,7 +306,12 @@ def run(args: argparse.Namespace) -> None:
     for asset in asset_candles:
         candles = asset_candles[asset]
         ind = asset_indicators[asset]
+        ind_1h = asset_indicators_1h[asset]
         bb_upper, bb_lower = asset_bb[asset]
+
+        # For BTC itself, don't pass BTC context (use defaults)
+        a_btc_ind = btc_ind if asset != "BTC" else None
+        a_btc_time_idx = btc_time_idx_map if asset != "BTC" else None
 
         for ts in timeline:
             if ts not in asset_time_idx[asset]:
@@ -244,7 +326,9 @@ def run(args: argparse.Namespace) -> None:
                 if sig != 0:
                     features = _extract_features(
                         candles, ind, bar_idx, bb_upper, bb_lower,
-                        signal_type=0.0,
+                        signal_type=0.0, direction=sig,
+                        btc_ind=a_btc_ind, btc_time_idx=a_btc_time_idx,
+                        ind_1h=ind_1h,
                     )
                     if features is not None:
                         proba = _predict(model, features, feature_names)
@@ -257,7 +341,9 @@ def run(args: argparse.Namespace) -> None:
                 if sig_vb != 0:
                     features = _extract_features(
                         candles, ind, bar_idx, bb_upper, bb_lower,
-                        signal_type=1.0,
+                        signal_type=1.0, direction=sig_vb,
+                        btc_ind=a_btc_ind, btc_time_idx=a_btc_time_idx,
+                        ind_1h=ind_1h,
                     )
                     if features is not None:
                         proba = _predict(model, features, feature_names)
@@ -270,7 +356,9 @@ def run(args: argparse.Namespace) -> None:
                 if sig_mb != 0:
                     features = _extract_features(
                         candles, ind, bar_idx, bb_upper, bb_lower,
-                        signal_type=2.0,
+                        signal_type=2.0, direction=sig_mb,
+                        btc_ind=a_btc_ind, btc_time_idx=a_btc_time_idx,
+                        ind_1h=ind_1h,
                     )
                     if features is not None:
                         proba = _predict(model, features, feature_names)

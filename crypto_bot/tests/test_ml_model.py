@@ -19,9 +19,12 @@ from crypto_bot.core.models import MarketState, Regime, Direction
 
 @pytest.fixture
 def mock_dataset() -> pd.DataFrame:
-    """Create a synthetic dataset for testing (14 features)."""
+    """Create a synthetic dataset for testing (25 features)."""
     np.random.seed(42)
     n = 200
+    # Generate timestamps spanning 30 days for time-weighted training
+    base_ts = int(datetime(2026, 2, 1, tzinfo=timezone.utc).timestamp() * 1000)
+    timestamps = [base_ts + i * 900_000 for i in range(n)]  # 15m apart
     data = {
         "adx": np.random.uniform(15, 60, n),
         "rsi": np.random.uniform(20, 80, n),
@@ -37,7 +40,22 @@ def mock_dataset() -> pd.DataFrame:
         "signal_type": np.random.choice([0.0, 1.0, 2.0], n),
         "candle_body_pct": np.random.uniform(0, 3.0, n),
         "rsi_slope": np.random.uniform(-15, 15, n),
+        # Tier 1
+        "day_of_week": np.random.uniform(0, 1, n),
+        "atr_percentile": np.random.uniform(0, 1, n),
+        "signed_ema_spread": np.random.uniform(-2, 2, n),
+        "direction": np.random.choice([1.0, -1.0], n),
+        # Tier 2
+        "btc_trend": np.random.choice([-1.0, 0.0, 1.0], n),
+        "btc_rsi": np.random.uniform(20, 80, n),
+        "btc_ema9_slope": np.random.uniform(-0.01, 0.01, n),
+        "tf_alignment": np.random.choice([-1.0, 0.0, 1.0], n),
+        "rsi_1h": np.random.uniform(20, 80, n),
+        "adx_1h": np.random.uniform(15, 60, n),
+        "funding_rate": np.random.uniform(-0.001, 0.001, n),
+        # Labels + metadata
         "label": np.random.randint(0, 2, n),
+        "timestamp": timestamps,
     }
     return pd.DataFrame(data)
 
@@ -87,6 +105,11 @@ def sample_market_state() -> MarketState:
         bb_upper=Decimal("51000"),
         bb_lower=Decimal("49000"),
         bb_mid=Decimal("50000"),
+        rsi_1h=Decimal("52"),
+        adx_1h=Decimal("30"),
+        ema9_1h=Decimal("50050"),
+        ema21_1h=Decimal("49850"),
+        funding_rate=Decimal("0.0001"),
         regime=Regime.TREND,
         trend_direction=Direction.LONG,
     )
@@ -131,7 +154,7 @@ class TestMLTraining:
 
     def test_feature_count_is_13(self) -> None:
         """FEATURES should have exactly 13 entries (11 + signal_type + candle_body_pct)."""
-        assert len(MLTradeModel.FEATURES) == 14
+        assert len(MLTradeModel.FEATURES) == 25
         assert "spread_pct" not in MLTradeModel.FEATURES
         assert "hour_of_day" in MLTradeModel.FEATURES
         assert "signal_type" in MLTradeModel.FEATURES
@@ -159,6 +182,11 @@ class TestMLPrediction:
             "regime_encoded": 2.0, "hour_of_day": 0.5,
             "signal_type": 0.0, "candle_body_pct": 0.5,
             "rsi_slope": 3.0,
+            "day_of_week": 0.5, "atr_percentile": 0.5,
+            "signed_ema_spread": 0.5, "direction": 1.0,
+            "btc_trend": 1.0, "btc_rsi": 50.0, "btc_ema9_slope": 0.0,
+            "tf_alignment": 1.0, "rsi_1h": 50.0, "adx_1h": 30.0,
+            "funding_rate": 0.0001,
         }
         prob, explanation = trained_model.predict(features)
 
@@ -189,7 +217,6 @@ class TestFeatureExtraction:
         features = trained_model.extract_features(sample_market_state)
         assert "direction_encoded" not in features
         assert "hour_utc" not in features   # hour_of_day is the normalized version
-        assert "day_of_week" not in features
         assert "spread_pct" not in features
 
     def test_extract_features_values_reasonable(
@@ -516,6 +543,11 @@ class TestMLPersistence:
             "regime_encoded": 2.0, "hour_of_day": 0.5,
             "signal_type": 0.0, "candle_body_pct": 0.5,
             "rsi_slope": 3.0,
+            "day_of_week": 0.5, "atr_percentile": 0.5,
+            "signed_ema_spread": 0.5, "direction": 1.0,
+            "btc_trend": 1.0, "btc_rsi": 50.0, "btc_ema9_slope": 0.0,
+            "tf_alignment": 1.0, "rsi_1h": 50.0, "adx_1h": 30.0,
+            "funding_rate": 0.0001,
         }
         prob_before, _ = trained_model.predict(features)
 

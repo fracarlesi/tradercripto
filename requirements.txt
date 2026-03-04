@@ -26,3 +26,7 @@ openai>=1.0.0
 # ML model
 xgboost>=2.0
 scikit-learn>=1.4
+lightgbm>=4.0
+
+# SQLite async
+aiosqlite>=0.19

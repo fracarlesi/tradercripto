@@ -116,7 +116,13 @@ class MarketState(BaseModel):
     # RSI slope (2-bar lookback: RSI[current] - RSI[2 bars ago])
     rsi_slope: Decimal = Field(default=Decimal("0"), description="RSI slope: RSI[i] - RSI[i-2]")
 
-    # Exchange data (live only — not used in ML yet, logged for future training)
+    # Multi-timeframe indicators (1h-equivalent computed from 15m bars)
+    rsi_1h: Optional[Decimal] = Field(None, ge=0, le=100, description="RSI(56) — 1h equivalent")
+    adx_1h: Optional[Decimal] = Field(None, ge=0, le=100, description="ADX(56) — 1h equivalent")
+    ema9_1h: Optional[Decimal] = Field(None, ge=0, description="EMA(36) — 1h EMA9 equivalent")
+    ema21_1h: Optional[Decimal] = Field(None, ge=0, description="EMA(84) — 1h EMA21 equivalent")
+
+    # Exchange data (live only — used as ML feature)
     funding_rate: Optional[Decimal] = Field(None, description="Current funding rate for symbol")
     open_interest: Optional[Decimal] = Field(None, description="Current open interest in USD")
 

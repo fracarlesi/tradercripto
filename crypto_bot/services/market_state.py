@@ -554,6 +554,18 @@ class MarketStateService(BaseService):
                     prev_close=float(prev_close),
                 )
 
+            # Multi-timeframe indicators (1h-equivalent from 15m bars)
+            # EMA(36) ≈ 1h EMA(9), EMA(84) ≈ 1h EMA(21)
+            ema9_1h_arr = calculate_ema(close, 36)
+            ema21_1h_arr = calculate_ema(close, 84)
+            rsi_1h_arr = calculate_rsi(close, 56)
+            adx_1h_arr = calculate_adx(high, low, close, 56)
+
+            ema9_1h_val = Decimal(str(ema9_1h_arr[-1]))
+            ema21_1h_val = Decimal(str(ema21_1h_arr[-1]))
+            rsi_1h_val = Decimal(str(max(0, min(100, rsi_1h_arr[-1]))))
+            adx_1h_val = Decimal(str(max(0, min(100, adx_1h_arr[-1]))))
+
             # Volume metrics
             current_volume = Decimal(str(volume[-1]))
             volume_usd = current_volume * Decimal(str(float(close[-1])))
@@ -602,6 +614,10 @@ class MarketStateService(BaseService):
                 bb_lower=Decimal(str(bb_lower[-1])),
                 bb_mid=Decimal(str(bb_mid[-1])),
                 bb_upper=Decimal(str(bb_upper[-1])),
+                rsi_1h=rsi_1h_val,
+                adx_1h=adx_1h_val,
+                ema9_1h=ema9_1h_val,
+                ema21_1h=ema21_1h_val,
                 funding_rate=Decimal(str(asset_ctx.get("funding", 0))) if asset_ctx else None,
                 open_interest=Decimal(str(asset_ctx.get("openInterest", 0))) if asset_ctx else None,
                 regime=regime,

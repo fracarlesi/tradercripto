@@ -53,12 +53,16 @@ def _label_signal(
     if entry_price <= 0:
         return None
 
+    # Fee-adjusted TP/SL levels: subtract round-trip fees (maker+taker ~0.09%)
+    fee_per_side = 0.00045  # 0.045% per side
+    fee_roundtrip = fee_per_side * 2
+
     if direction == 1:  # LONG
-        tp_price = entry_price * (1 + tp_pct)
-        sl_price = entry_price * (1 - sl_pct)
+        tp_price = entry_price * (1 + tp_pct - fee_roundtrip)
+        sl_price = entry_price * (1 - sl_pct + fee_roundtrip)
     else:  # SHORT
-        tp_price = entry_price * (1 - tp_pct)
-        sl_price = entry_price * (1 + sl_pct)
+        tp_price = entry_price * (1 - tp_pct + fee_roundtrip)
+        sl_price = entry_price * (1 + sl_pct - fee_roundtrip)
 
     end_idx = min(entry_idx + MAX_FORWARD_BARS + 1, len(candles))
 
@@ -77,7 +81,10 @@ def _label_signal(
             if low <= tp_price:
                 return 1
 
-    return None  # Neither hit
+    # Timeout: classify by final P&L (recover ~30% of previously discarded signals)
+    final_close = candles[end_idx - 1]["c"]
+    final_pnl = (final_close - entry_price) / entry_price * direction
+    return 1 if final_pnl > fee_roundtrip else 0  # profitable after fees
 
 
 def _extract_features(
@@ -90,16 +97,28 @@ def _extract_features(
     bb_upper: np.ndarray,
     bb_lower: np.ndarray,
     signal_type: float = 0.0,
+    btc_ind: dict | None = None,
+    btc_time_idx: dict[int, int] | None = None,
+    ind_1h: dict | None = None,
 ) -> dict:
-    """Extract feature dict for a single signal bar."""
+    """Extract feature dict for a single signal bar.
+
+    Args:
+        btc_ind: BTC indicator dict (for BTC context features). None = defaults.
+        btc_time_idx: BTC {timestamp: bar_idx} mapping for time alignment.
+        ind_1h: 1h-equivalent indicators (computed with timeframe_scale=4).
+    """
     close = candles[idx]["c"]
     open_price = candles[idx]["o"]
     ema9 = ind["ema9"][idx]
     ema21 = ind["ema21"][idx]
     ema200 = ind["ema200"][idx]
 
-    # EMA spread
+    # EMA spread (abs for backward compat)
     ema_spread_pct = abs(ema9 - ema21) / ema21 * 100 if ema21 != 0 else 0.0
+
+    # Signed EMA spread (directional)
+    signed_ema_spread = (ema9 - ema21) / ema21 * 100 if ema21 != 0 else 0.0
 
     # Volume ratio
     if not np.isnan(vol_sma20[idx]) and vol_sma20[idx] > 0:
@@ -144,7 +163,11 @@ def _extract_features(
 
     # Hour of day (UTC), normalized to [0, 1)
     ts_ms = candles[idx]["t"]
-    hour_of_day = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).hour / 24.0
+    dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
+    hour_of_day = dt.hour / 24.0
+
+    # Day of week, normalized to [0, 1]
+    day_of_week = dt.weekday() / 6.0
 
     # Candle body percentage
     candle_body_pct = abs(close - open_price) / open_price * 100 if open_price > 0 else 0.0
@@ -155,10 +178,61 @@ def _extract_features(
     else:
         rsi_slope = 0.0
 
+    # ATR percentile: rank of current ATR in last 100 bars [0,1]
+    atr_vals = ind["atr_pct"]
+    lookback = min(100, idx + 1)
+    if lookback > 1 and not np.isnan(atr_vals[idx]):
+        window = atr_vals[idx - lookback + 1: idx + 1]
+        valid = window[~np.isnan(window)]
+        if len(valid) > 1:
+            atr_percentile = float(np.searchsorted(np.sort(valid), atr_vals[idx])) / len(valid)
+        else:
+            atr_percentile = 0.5
+    else:
+        atr_percentile = 0.5
+
+    # --- BTC context features ---
+    btc_trend = 0.0
+    btc_rsi = 50.0
+    btc_ema9_slope = 0.0
+    if btc_ind is not None and btc_time_idx is not None:
+        btc_idx = btc_time_idx.get(ts_ms)
+        if btc_idx is not None:
+            b_ema9 = btc_ind["ema9"][btc_idx]
+            b_ema21 = btc_ind["ema21"][btc_idx]
+            if not np.isnan(b_ema9) and not np.isnan(b_ema21):
+                if b_ema9 > b_ema21:
+                    btc_trend = 1.0
+                elif b_ema9 < b_ema21:
+                    btc_trend = -1.0
+            if not np.isnan(btc_ind["rsi"][btc_idx]):
+                btc_rsi = float(btc_ind["rsi"][btc_idx])
+            if btc_idx >= 4 and not np.isnan(btc_ind["ema9"][btc_idx - 4]) and btc_ind["ema9"][btc_idx - 4] > 0:
+                btc_ema9_slope = (btc_ind["ema9"][btc_idx] - btc_ind["ema9"][btc_idx - 4]) / btc_ind["ema9"][btc_idx - 4]
+
+    # --- Multi-TF alignment features ---
+    rsi_1h = float(ind["rsi"][idx])  # default to 15m RSI
+    adx_1h = float(adx_val) if not np.isnan(adx_val) else 0.0
+    tf_alignment = 0.0
+    if ind_1h is not None:
+        if not np.isnan(ind_1h["rsi"][idx]):
+            rsi_1h = float(ind_1h["rsi"][idx])
+        if not np.isnan(ind_1h["adx"][idx]):
+            adx_1h = float(ind_1h["adx"][idx])
+        # Compare 15m vs 1h EMA direction
+        if (not np.isnan(ind_1h["ema9"][idx]) and not np.isnan(ind_1h["ema21"][idx])
+                and not np.isnan(ema9) and not np.isnan(ema21)):
+            dir_15m = 1.0 if ema9 > ema21 else -1.0
+            dir_1h = 1.0 if ind_1h["ema9"][idx] > ind_1h["ema21"][idx] else -1.0
+            tf_alignment = 1.0 if dir_15m == dir_1h else -1.0
+
+    # Funding rate: not available in historical data, default 0.0
+    funding_rate = 0.0
+
     return {
-        "adx": ind["adx"][idx],
-        "rsi": ind["rsi"][idx],
-        "atr_pct": ind["atr_pct"][idx],
+        "adx": float(adx_val) if not np.isnan(adx_val) else 0.0,
+        "rsi": float(ind["rsi"][idx]),
+        "atr_pct": float(ind["atr_pct"][idx]),
         "ema_spread_pct": ema_spread_pct,
         "volume_ratio": volume_ratio,
         "bb_position": bb_position,
@@ -170,6 +244,19 @@ def _extract_features(
         "signal_type": signal_type,
         "candle_body_pct": candle_body_pct,
         "rsi_slope": rsi_slope,
+        # Tier 1
+        "day_of_week": day_of_week,
+        "atr_percentile": atr_percentile,
+        "signed_ema_spread": signed_ema_spread,
+        "direction": float(direction),
+        # Tier 2
+        "btc_trend": btc_trend,
+        "btc_rsi": btc_rsi,
+        "btc_ema9_slope": btc_ema9_slope,
+        "tf_alignment": tf_alignment,
+        "rsi_1h": rsi_1h,
+        "adx_1h": adx_1h,
+        "funding_rate": funding_rate,
     }
 
 
@@ -199,6 +286,20 @@ def generate_dataset(
 
     all_rows: list[dict] = []
 
+    # --- Pre-compute BTC indicators ONCE for BTC context features ---
+    btc_ind: dict | None = None
+    btc_time_idx: dict[int, int] | None = None
+    logger.info("Fetching BTC candles for context features...")
+    try:
+        btc_candles = get_candles("BTC", cfg.timeframe, start_ms, end_ms)
+        if len(btc_candles) >= cfg.warmup_bars:
+            btc_ind = compute_indicators(btc_candles, cfg)
+            btc_time_idx = {c["t"]: i for i, c in enumerate(btc_candles)}
+            logger.info("BTC context: %d candles loaded", len(btc_candles))
+    except Exception:
+        logger.warning("Failed to fetch BTC candles for context, using defaults")
+    time.sleep(RATE_LIMIT_SLEEP)
+
     for sym_idx, symbol in enumerate(symbols):
         logger.info(
             "[%d/%d] Processing %s ...", sym_idx + 1, len(symbols), symbol
@@ -221,11 +322,18 @@ def generate_dataset(
         # Compute standard indicators (now includes opens, volumes, vol_sma20)
         ind = compute_indicators(candles, cfg)
 
+        # Compute 1h-equiv indicators (timeframe_scale=4: EMA(36), RSI(56), ADX(56))
+        ind_1h = compute_indicators(candles, cfg, timeframe_scale=4)
+
         # Additional indicators for features
         closes = ind["closes"]
         volumes = ind["volumes"]
         vol_sma20 = ind["vol_sma20"]
         _, bb_upper, bb_lower = calc_bollinger(closes)
+
+        # For BTC itself, pass None to get defaults (btc_trend=0, rsi=50, slope=0)
+        sym_btc_ind = btc_ind if symbol != "BTC" else None
+        sym_btc_time_idx = btc_time_idx if symbol != "BTC" else None
 
         # Dedup: track (symbol, bar_idx) to avoid duplicate labels from both signals
         seen: set[int] = set()
@@ -239,12 +347,15 @@ def generate_dataset(
 
             label = _label_signal(candles, idx, sig, cfg.tp_pct, cfg.sl_pct)
             if label is None:
-                continue  # Neither TP nor SL hit within 100 bars
+                continue
 
             features = _extract_features(
                 candles, ind, idx, sig,
                 volumes, vol_sma20, bb_upper, bb_lower,
                 signal_type=0.0,
+                btc_ind=sym_btc_ind,
+                btc_time_idx=sym_btc_time_idx,
+                ind_1h=ind_1h,
             )
             features["label"] = label
             features["symbol"] = symbol
@@ -271,6 +382,9 @@ def generate_dataset(
                 candles, ind, idx, sig,
                 volumes, vol_sma20, bb_upper, bb_lower,
                 signal_type=1.0,
+                btc_ind=sym_btc_ind,
+                btc_time_idx=sym_btc_time_idx,
+                ind_1h=ind_1h,
             )
             features["label"] = label
             features["symbol"] = symbol
@@ -296,6 +410,9 @@ def generate_dataset(
                 candles, ind, idx, sig,
                 volumes, vol_sma20, bb_upper, bb_lower,
                 signal_type=2.0,
+                btc_ind=sym_btc_ind,
+                btc_time_idx=sym_btc_time_idx,
+                ind_1h=ind_1h,
             )
             features["label"] = label
             features["symbol"] = symbol
