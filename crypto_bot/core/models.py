@@ -122,6 +122,9 @@ class MarketState(BaseModel):
     ema9_1h: Optional[Decimal] = Field(None, ge=0, description="EMA(36) — 1h EMA9 equivalent")
     ema21_1h: Optional[Decimal] = Field(None, ge=0, description="EMA(84) — 1h EMA21 equivalent")
 
+    # ATR percentile rank (percentile of current ATR in last 100 bars, [0,1])
+    atr_percentile: Optional[Decimal] = Field(None, ge=0, le=1, description="ATR percentile rank in last 100 bars")
+
     # Exchange data (live only — used as ML feature)
     funding_rate: Optional[Decimal] = Field(None, description="Current funding rate for symbol")
     open_interest: Optional[Decimal] = Field(None, description="Current open interest in USD")

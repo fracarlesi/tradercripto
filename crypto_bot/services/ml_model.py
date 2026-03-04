@@ -35,7 +35,7 @@ class MLTradeModel:
         "adx",
         "rsi",
         "atr_pct",
-        "ema_spread_pct",
+        "ema_spread_pct",  # TODO: DROP on next retrain — redundant with signed_ema_spread
         "volume_ratio",
         "bb_position",
         "ema9_slope",
@@ -141,27 +141,25 @@ class MLTradeModel:
             cv_model, X, y, cv=tscv, scoring="roc_auc",
         )
 
-        # -- Step 2: Threshold calibration on genuine holdout --------------
-        n_holdout = max(100, int(len(X) * 0.2))
-        X_train, X_hold = X.iloc[:-n_holdout], X.iloc[-n_holdout:]
-        y_train, y_hold = y.iloc[:-n_holdout], y.iloc[-n_holdout:]
-        sw_train = sample_weight[:-n_holdout] if sample_weight is not None else None
+        # -- Step 2: 3-way split (75% train / 15% validation / 10% calibration)
+        n_cal = max(50, int(len(X) * 0.10))
+        n_val = max(50, int(len(X) * 0.15))
+        n_train = len(X) - n_val - n_cal
 
-        cal_model = xgb.XGBClassifier(**{
-            k: v for k, v in params.items() if k != "early_stopping_rounds"
-        })
-        cal_model.fit(X_train, y_train, sample_weight=sw_train)
-        cal_probs = cal_model.predict_proba(X_hold)[:, 1]
-        self._optimal_threshold = self._calibrate_threshold_from_probs(
-            cal_probs, y_hold
-        )
+        X_train = X.iloc[:n_train]
+        y_train = y.iloc[:n_train]
+        X_val = X.iloc[n_train:n_train + n_val]
+        y_val = y.iloc[n_train:n_train + n_val]
+        X_cal = X.iloc[n_train + n_val:]
+        y_cal = y.iloc[n_train + n_val:]
+        sw_train = sample_weight[:n_train] if sample_weight is not None else None
 
-        # -- Step 3: Final XGBoost with early stopping on holdout ----------
+        # -- Step 3: Final XGBoost with early stopping on validation -------
         self._model = xgb.XGBClassifier(**params)
         self._model.fit(
             X_train, y_train,
             sample_weight=sw_train,
-            eval_set=[(X_hold, y_hold)],
+            eval_set=[(X_val, y_val)],
             verbose=False,
         )
 
@@ -186,10 +184,18 @@ class MLTradeModel:
             self._lgb_model.fit(
                 X_train, y_train,
                 sample_weight=sw_train,
-                eval_set=[(X_hold, y_hold)],
+                eval_set=[(X_val, y_val)],
                 callbacks=[lgb.early_stopping(20, verbose=False)],
             )
             logger.info("LightGBM ensemble model trained")
+
+        # -- Step 4b: Threshold calibration on calibration set (ensemble) --
+        cal_xgb = self._model.predict_proba(X_cal)[:, 1]
+        cal_lgb = self._lgb_model.predict_proba(X_cal)[:, 1] if self._lgb_model else cal_xgb
+        cal_ensemble = (cal_xgb + cal_lgb) / 2.0
+        self._optimal_threshold = self._calibrate_threshold_from_probs(
+            cal_ensemble, y_cal
+        )
 
         # -- Step 5: Walk-forward validation (expanding window) -------------
         # More realistic OOS metric: 5 folds with 100-bar embargo to avoid
@@ -453,9 +459,8 @@ class MLTradeModel:
         # Day of week, normalized to [0, 1]
         day_of_week = state.timestamp.weekday() / 6.0
 
-        # ATR percentile: not available from single MarketState, use 0.5 default
-        # (backtesting/training compute this from full history)
-        atr_percentile = 0.5
+        # ATR percentile from MarketState (computed from last 100 bars)
+        atr_percentile = float(state.atr_percentile) if state.atr_percentile is not None else 0.5
 
         # --- BTC context features ---
         if btc_state is not None and state.symbol != "BTC":
@@ -475,8 +480,8 @@ class MLTradeModel:
             btc_ema9_slope = 0.0
 
         # --- Multi-TF alignment features ---
-        rsi_1h = float(state.rsi_1h) if getattr(state, "rsi_1h", None) is not None else float(state.rsi)
-        adx_1h = float(state.adx_1h) if getattr(state, "adx_1h", None) is not None else float(state.adx)
+        rsi_1h = float(state.rsi_1h) if state.rsi_1h is not None else (float(state.rsi) if state.rsi is not None else 50.0)
+        adx_1h = float(state.adx_1h) if state.adx_1h is not None else (float(state.adx) if state.adx is not None else 20.0)
 
         # TF alignment: compare 15m and 1h EMA direction
         ema9_1h = getattr(state, "ema9_1h", None)
@@ -488,8 +493,8 @@ class MLTradeModel:
         else:
             tf_alignment = 0.0  # unknown
 
-        # Funding rate
-        funding_rate = float(state.funding_rate) if state.funding_rate is not None else 0.0
+        # Funding rate: always 0 until fixed in data pipeline (train/serve skew)
+        funding_rate = 0.0  # TODO: funding_rate has train/serve skew — always 0 until fixed in data pipeline
 
         return {
             "adx": float(state.adx),

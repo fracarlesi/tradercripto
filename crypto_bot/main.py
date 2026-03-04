@@ -31,7 +31,7 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -363,6 +363,9 @@ class ConservativeBot:
         self._health_task: Optional[asyncio.Task] = None
         self._retrain_task: Optional[asyncio.Task] = None
 
+        # Consecutive scan error counter for ntfy alerts (#17)
+        self._consecutive_scan_errors: int = 0
+
     # =========================================================================
     # Properties
     # =========================================================================
@@ -600,6 +603,12 @@ class ConservativeBot:
             take_profit_pct=cfg.take_profit_pct, stop_loss_pct=cfg.stop_loss_pct,
         )
 
+        # Wire performance_monitor into risk_manager for cooldown trade history
+        risk_mgr = self._services.get("risk_manager")
+        perf_mon = self._services.get("performance_monitor")
+        if risk_mgr and perf_mon:
+            risk_mgr._performance_monitor = perf_mon
+
         # ML Model - required
         model_loaded = self._ml_model.load(cfg.ml_model_path)
         if model_loaded:
@@ -637,6 +646,7 @@ class ConservativeBot:
         while self._running and not self._shutdown_event.is_set():
             try:
                 await self._evaluate_all_assets()
+                self._consecutive_scan_errors = 0
 
                 logger.info("Next scan in %d minutes", self.config.scan_interval_minutes)
                 try:
@@ -651,7 +661,14 @@ class ConservativeBot:
                 logger.debug("Evaluation loop cancelled")
                 break
             except Exception as e:
+                self._consecutive_scan_errors += 1
                 logger.error("Evaluation loop error: %s", e, exc_info=True)
+                if self._consecutive_scan_errors >= 5 and self._bus:
+                    await self._bus.publish(Topic.RISK_ALERTS, {
+                        "alert_type": "scan_errors",
+                        "message": f"5 consecutive scan errors. Latest: {e}",
+                        "consecutive_errors": self._consecutive_scan_errors,
+                    })
                 await asyncio.sleep(60)
 
     async def _evaluate_all_assets(self) -> None:
@@ -695,6 +712,22 @@ class ConservativeBot:
         states = market_state_svc.get_all_states()
         if not states:
             logger.warning("No market states available")
+            return
+
+        # --- Filter out stale market states (#23) ---
+        now = datetime.now(timezone.utc)
+        scan_interval_seconds = self.config.scan_interval_minutes * 60
+        max_age = timedelta(seconds=scan_interval_seconds * 2)
+        fresh_states = {
+            sym: state for sym, state in states.items()
+            if state.timestamp and (now - state.timestamp) <= max_age
+        }
+        stale_count = len(states) - len(fresh_states)
+        if stale_count > 0:
+            logger.warning("Filtered %d stale market states (max age %ds)", stale_count, scan_interval_seconds * 2)
+        states = fresh_states
+        if not states:
+            logger.warning("All market states are stale, skipping evaluation")
             return
 
         # --- Update counterfactual logger with fresh market states ---
@@ -772,26 +805,52 @@ class ConservativeBot:
             if state.regime == Regime.TREND:
                 direction = state.trend_direction
                 if direction != Direction.FLAT:
-                    dir_float = 1.0 if direction == Direction.LONG else -1.0
-                    features = self._ml_model.extract_features(
-                        state, signal_type=0.0, direction=dir_float,
-                        btc_state=btc_state,
-                    )
-                    prob, reason = self._ml_model.predict(features)
-                    all_scores.append((f"{symbol}/ema", prob))
-                    if prob > top_scored_prob:
-                        top_scored_prob = prob
-                        top_scored_direction = direction
-                    if prob >= threshold and prob > best_prob:
-                        best_prob = prob
-                        best_direction = direction
-                        best_reason = reason
-                        best_setup_type = SetupType.MOMENTUM
-                        best_signal_type = 0.0
+                    # Gate: Funding rate filter (skip if paying excessive funding)
+                    funding_ok = True
+                    if direction == Direction.LONG and state.funding_rate and float(state.funding_rate) > 0.0005:
+                        funding_ok = False
+                    if direction == Direction.SHORT and state.funding_rate and float(state.funding_rate) < -0.0005:
+                        funding_ok = False
+
+                    # Gate: Multi-timeframe alignment (1h EMA9/EMA21 must agree with direction)
+                    mtf_aligned = True
+                    if state.ema9_1h is not None and state.ema21_1h is not None:
+                        if direction == Direction.LONG and float(state.ema9_1h) <= float(state.ema21_1h):
+                            mtf_aligned = False
+                        elif direction == Direction.SHORT and float(state.ema9_1h) >= float(state.ema21_1h):
+                            mtf_aligned = False
+
+                    # Gate: RSI hard floor for SHORT entries
+                    rsi_ok = True
+                    if direction == Direction.SHORT and state.rsi and float(state.rsi) < 35:
+                        rsi_ok = False
+
+                    if funding_ok and mtf_aligned and rsi_ok:
+                        dir_float = 1.0 if direction == Direction.LONG else -1.0
+                        features = self._ml_model.extract_features(
+                            state, signal_type=0.0, direction=dir_float,
+                            btc_state=btc_state,
+                        )
+                        prob, reason = self._ml_model.predict(features)
+                        all_scores.append((f"{symbol}/ema", prob))
+                        if prob > top_scored_prob:
+                            top_scored_prob = prob
+                            top_scored_direction = direction
+                        if prob >= threshold and prob > best_prob:
+                            best_prob = prob
+                            best_direction = direction
+                            best_reason = reason
+                            best_setup_type = SetupType.MOMENTUM
+                            best_signal_type = 0.0
 
             # --- PATH 2: CHAOS+TREND → volume check → price direction → ML(signal_type=1.0) ---
             if vb_enabled and state.regime.value.lower() in vb_allowed_regimes:
                 vb_direction = self._breakout_direction(state)
+                # Gate: Funding rate filter
+                if vb_direction == Direction.LONG and state.funding_rate and float(state.funding_rate) > 0.0005:
+                    vb_direction = Direction.FLAT
+                if vb_direction == Direction.SHORT and state.funding_rate and float(state.funding_rate) < -0.0005:
+                    vb_direction = Direction.FLAT
                 if vb_direction != Direction.FLAT and self._is_volume_breakout(state):
                     breakout_evaluated += 1
                     vb_dir_float = 1.0 if vb_direction == Direction.LONG else -1.0
@@ -815,6 +874,11 @@ class ConservativeBot:
             if mb_enabled and state.regime.value.lower() in mb_allowed_regimes:
                 if self._is_momentum_burst(state):
                     mb_direction = self._momentum_burst_direction(state)
+                    # Gate: Funding rate filter
+                    if mb_direction == Direction.LONG and state.funding_rate and float(state.funding_rate) > 0.0005:
+                        mb_direction = Direction.FLAT
+                    if mb_direction == Direction.SHORT and state.funding_rate and float(state.funding_rate) < -0.0005:
+                        mb_direction = Direction.FLAT
                     if mb_direction != Direction.FLAT:
                         burst_evaluated += 1
                         mb_dir_float = 1.0 if mb_direction == Direction.LONG else -1.0
@@ -1131,6 +1195,11 @@ class ConservativeBot:
                 await self._do_retrain()
             except Exception as e:
                 logger.error("Retrain error: %s", e, exc_info=True)
+                if self._bus:
+                    await self._bus.publish(Topic.RISK_ALERTS, {
+                        "alert_type": "retrain_failure",
+                        "message": f"ML model retrain failed: {e}",
+                    })
 
             try:
                 await asyncio.wait_for(self._shutdown_event.wait(), timeout=interval)

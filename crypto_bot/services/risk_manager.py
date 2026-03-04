@@ -46,6 +46,10 @@ CORR_GROUPS: Dict[str, List[str]] = {
     "defi": ["UNI", "AAVE", "CRV", "SNX", "DYDX", "GMX", "PENDLE", "JUP"],
     "meme": ["DOGE", "SHIB", "PEPE", "WIF", "BONK", "FLOKI", "MEME", "MYRO"],
     "ai": ["FET", "RNDR", "TAO", "ARKM", "WLD", "NEAR"],
+    "gaming": ["IMX", "GALA", "AXS", "SAND", "MANA"],
+    "rwa": ["ONDO", "PENDLE", "MKR"],
+    "privacy": ["XMR", "ZEC", "DASH"],
+    "exchange": ["BNB", "FTT", "CRO", "OKB"],
 }
 
 
@@ -107,6 +111,7 @@ class RiskManagerService(BaseService):
         config: Optional[RiskConfig] = None,
         client: Optional[Any] = None,
         telegram: Optional[Any] = None,
+        performance_monitor: Optional[Any] = None,
     ) -> None:
         """Initialize RiskManagerService."""
         super().__init__(
@@ -118,9 +123,10 @@ class RiskManagerService(BaseService):
         self._config = config or RiskConfig()
         self._client = client  # HyperliquidClient for equity updates
         self._telegram = telegram  # TelegramService for alerts
+        self._performance_monitor = performance_monitor  # For cooldown trade history
 
         # State
-        self._current_equity: Decimal = Decimal("100")  # Safe default, updated from API
+        self._current_equity: Decimal = Decimal("0")  # Zero until loaded from API
         self._open_positions: Dict[str, Dict] = {}
         self._pending_intents: Dict[str, TradeIntent] = {}
 
@@ -187,9 +193,10 @@ class RiskManagerService(BaseService):
         self._logger.info("Stopping RiskManagerService...")
 
     async def _run_iteration(self) -> None:
-        """Periodic tasks - update equity, sync positions."""
+        """Periodic tasks - update equity, sync positions, cleanup stale intents."""
         await self._update_equity()
         await self._sync_positions_from_exchange()
+        self._cleanup_stale_intents()
 
     async def _update_equity(self) -> None:
         """Fetch current equity from exchange."""
@@ -444,6 +451,7 @@ class RiskManagerService(BaseService):
         cfg = self._config
 
         def _reject(reason: str) -> RiskParams:
+            """Create a rejection RiskParams."""
             return RiskParams(
                 risk_amount=Decimal("0"),
                 position_size=Decimal("0"),
@@ -455,6 +463,10 @@ class RiskManagerService(BaseService):
                 size_approved=False,
                 rejection_reason=reason,
             )
+
+        # Guard: reject if equity not loaded yet
+        if equity <= 0:
+            return _reject("Equity not loaded yet")
 
         # Check position limits (including pending intents!)
         total_position_count = len(self._open_positions) + len(self._pending_intents)
@@ -542,8 +554,8 @@ class RiskManagerService(BaseService):
         notional_value = position_size * setup.entry_price
 
         # Ensure minimum order value for profitability
-        # At $50 with 2-3% TP = $1-1.50 profit, easily covers ~$0.05 fees
-        MIN_NOTIONAL = Decimal("50")  # $50 minimum for meaningful profit
+        # At $15 with 2-3% TP = $0.30-0.45 profit, covers fees on small accounts
+        MIN_NOTIONAL = Decimal("15")  # $15 minimum notional
         if notional_value < MIN_NOTIONAL:
             notional_value = MIN_NOTIONAL
             position_size = notional_value / setup.entry_price
@@ -729,6 +741,19 @@ class RiskManagerService(BaseService):
         if count > 0:
             self._logger.info("Cleared %d pending intents", count)
 
+    def _cleanup_stale_intents(self, ttl_seconds: int = 300) -> None:
+        """Remove pending intents older than TTL (default 300s / 5min)."""
+        now = datetime.now(timezone.utc)
+        stale = [
+            symbol for symbol, intent in self._pending_intents.items()
+            if (now - intent.timestamp).total_seconds() > ttl_seconds
+        ]
+        for symbol in stale:
+            self._pending_intents.pop(symbol, None)
+            self._logger.warning(
+                "Removed stale pending intent for %s (older than %ds)", symbol, ttl_seconds
+            )
+
     def get_position_count(self) -> int:
         """Get count of open positions."""
         return len(self._open_positions)
@@ -798,8 +823,29 @@ class RiskManagerService(BaseService):
         return False, None
 
     async def _get_recent_trades(self, hours: int) -> List[Dict]:
-        """Get trades from the last N hours. Stubbed - no DB trades table."""
-        return []
+        """Get trades from the last N hours via PerformanceMonitorService."""
+        if not self._performance_monitor:
+            return []
+
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+        result: List[Dict] = []
+        for trade in self._performance_monitor._trades:
+            try:
+                closed_at = datetime.fromisoformat(trade.closed_at)
+                if closed_at.tzinfo is None:
+                    closed_at = closed_at.replace(tzinfo=timezone.utc)
+                if closed_at >= cutoff:
+                    result.append({
+                        "symbol": trade.symbol,
+                        "direction": trade.direction,
+                        "net_pnl": trade.realized_pnl,
+                        "pnl_pct": trade.pnl_pct,
+                        "notes": trade.exit_reason,
+                        "closed_at": trade.closed_at,
+                    })
+            except (ValueError, AttributeError):
+                continue
+        return result
 
     async def _get_today_trade_count(self) -> int:
         """
@@ -979,6 +1025,7 @@ def create_risk_manager(
     config: Optional[RiskConfig] = None,
     client: Optional[Any] = None,
     telegram: Optional[Any] = None,
+    performance_monitor: Optional[Any] = None,
 ) -> RiskManagerService:
     """Factory function to create RiskManagerService."""
     return RiskManagerService(
@@ -987,4 +1034,5 @@ def create_risk_manager(
         config=config,
         client=client,
         telegram=telegram,
+        performance_monitor=performance_monitor,
     )

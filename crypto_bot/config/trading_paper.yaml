@@ -218,7 +218,7 @@ llm:
 # -----------------------------------------------------------------------------
 execution:
   prefer_limit: true
-  limit_timeout_seconds: 300
+  limit_timeout_seconds: 90
   entry_mode: "maker"
   maker_reprice_interval_seconds: 10
   maker_max_reprices: 6

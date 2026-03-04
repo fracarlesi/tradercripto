@@ -71,7 +71,7 @@ BREAKEVEN_THRESHOLD_PCT = 1.2  # Default fallback; overridden by config.risk.bre
 
 # Offset above/below entry for breakeven SL to cover exchange fees.
 # For LONG: SL = entry * (1 + offset/100); for SHORT: SL = entry * (1 - offset/100).
-BREAKEVEN_OFFSET_PCT = 0.15  # 0.15% offset covers 2x round-trip fees + spread
+BREAKEVEN_OFFSET_PCT = 0.25  # 0.25% offset prevents stop-hunting near entry
 
 
 # =============================================================================
@@ -2130,6 +2130,9 @@ class ExecutionEngineService(BaseService):
                 # Trail SL behind price (ATR-based, after breakeven)
                 await self._check_trailing_stops()
 
+                # Close dead trades that exceeded max hold time
+                await self._check_max_hold_time()
+
                 # Check for ROI-based exits (time-based take profit)
                 await self._check_roi_exits()
 
@@ -2448,6 +2451,51 @@ class ExecutionEngineService(BaseService):
                     "Failed to place breakeven SL for %s: %s", symbol, e,
                 )
 
+    async def _check_max_hold_time(self) -> None:
+        """Close dead trades that have been open longer than 4 hours with negligible P&L.
+
+        A "dead trade" is one where abs(pnl_pct) < 0.3% after 4 hours — it's going
+        nowhere and just consuming a position slot.
+        """
+        MAX_HOLD_HOURS = 4
+        DEAD_TRADE_PNL_PCT = 0.003  # 0.3%
+
+        now = datetime.now(timezone.utc)
+
+        for symbol, position in list(self.active_positions.items()):
+            if position.status != PositionStatus.OPEN:
+                continue
+            if symbol in self._settling_symbols:
+                continue
+            if not position.opened_at:
+                continue
+            if position.entry_price <= 0:
+                continue
+
+            age_hours = (now - position.opened_at).total_seconds() / 3600.0
+            if age_hours < MAX_HOLD_HOURS:
+                continue
+
+            # Calculate P&L percentage
+            if position.side == "long":
+                pnl_pct = (position.current_price - position.entry_price) / position.entry_price
+            else:
+                pnl_pct = (position.entry_price - position.current_price) / position.entry_price
+
+            if abs(pnl_pct) < DEAD_TRADE_PNL_PCT:
+                self._logger.info(
+                    "MAX HOLD TIME: %s %s | age=%.1fh | pnl=%.3f%% | closing dead trade",
+                    position.side.upper(), symbol, age_hours, pnl_pct * 100,
+                )
+                position.exit_reason = "max_hold_time"
+                try:
+                    await self.close_position(symbol)
+                except Exception as e:
+                    self._logger.error(
+                        "Failed to close %s on max_hold_time: %s", symbol, e
+                    )
+                    position.exit_reason = None
+
     async def _check_trailing_stops(self) -> None:
         """ATR-based trailing stop.
 
@@ -2471,10 +2519,17 @@ class ExecutionEngineService(BaseService):
                 continue
             if not position.breakeven_activated:
                 continue  # Trailing only after breakeven
-            if position.entry_atr_pct <= 0:
-                continue  # No ATR data, skip
             if symbol in self._settling_symbols:
                 continue
+
+            # Refresh ATR from market state cache (avoid stale entry-time values)
+            cached_states = getattr(self, "_market_states", {})
+            cached = cached_states.get(symbol) if cached_states else None
+            if cached and getattr(cached, "atr_pct", None):
+                position.entry_atr_pct = float(cached.atr_pct)
+
+            if position.entry_atr_pct <= 0:
+                continue  # No ATR data, skip
 
             current = position.current_price
             if current <= 0:

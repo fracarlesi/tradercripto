@@ -52,7 +52,7 @@ class LLMVetoConfig:
 
     # Rate limiting
     max_calls_per_day: int = 50000
-    timeout_seconds: int = 30
+    timeout_seconds: int = 10
 
     # Fallback behavior
     fallback_on_error: str = "deny"   # Fail-safe: deny if LLM unavailable

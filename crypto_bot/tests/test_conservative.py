@@ -503,6 +503,7 @@ class TestRegimeGate:
         bot._config.stop_loss_pct = 0.8
         bot._config.take_profit_pct = 1.6
         bot._config.max_spread_pct = 0.30
+        bot._config.scan_interval_minutes = 5
         bot._exchange = AsyncMock()
         bot._bus = AsyncMock(spec_set=["publish"])
         bot._bus.publish = AsyncMock()
@@ -665,6 +666,7 @@ class TestMLThresholdSelection:
         bot._config.stop_loss_pct = 0.8
         bot._config.take_profit_pct = 1.6
         bot._config.max_spread_pct = 0.30
+        bot._config.scan_interval_minutes = 5
         bot._exchange = AsyncMock()
         bot._bus = AsyncMock(spec_set=["publish"])
         bot._bus.publish = AsyncMock()

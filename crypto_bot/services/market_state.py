@@ -482,6 +482,13 @@ class MarketStateService(BaseService):
             atr = Decimal(str(atr_values[-1]))
             atr_pct = atr / current_price * 100
 
+            # ATR percentile rank (percentile of current ATR% in last 100 bars)
+            atr_pct_array = atr_values / close[1:] * 100  # ATR as % of price for each bar
+            lookback = min(100, len(atr_pct_array))
+            window = atr_pct_array[-lookback:]
+            atr_percentile_val = float(np.searchsorted(np.sort(window), atr_pct_array[-1])) / len(window)
+            atr_percentile = Decimal(str(round(atr_percentile_val, 4)))
+
             # EMAs
             ema50 = calculate_ema(close, 50)
             ema200 = calculate_ema(close, 200)
@@ -592,6 +599,7 @@ class MarketStateService(BaseService):
                 volume_ratio=vol_ratio,
                 atr=atr,
                 atr_pct=atr_pct,
+                atr_percentile=atr_percentile,
                 adx=adx,
                 rsi=rsi,
                 ema50=Decimal(str(ema50[-1])),
@@ -647,65 +655,78 @@ class MarketStateService(BaseService):
             return None
 
     async def _fetch_ohlcv(self, symbol: str) -> Optional[Dict[str, np.ndarray]]:
-        """Fetch OHLCV data from Hyperliquid."""
-        try:
-            loop = asyncio.get_event_loop()
+        """Fetch OHLCV data from Hyperliquid with 429 retry backoff."""
+        max_retries = 3
 
-            # Calculate time range
-            end_time = int(datetime.now(timezone.utc).timestamp() * 1000)
+        for attempt in range(max_retries + 1):
+            try:
+                loop = asyncio.get_event_loop()
 
-            # Timeframe to milliseconds
-            tf_map = {
-                "1m": 60 * 1000,
-                "5m": 5 * 60 * 1000,
-                "15m": 15 * 60 * 1000,
-                "1h": 60 * 60 * 1000,
-                "4h": 4 * 60 * 60 * 1000,
-                "1d": 24 * 60 * 60 * 1000,
-            }
-            interval_ms = tf_map.get(self._state_config.timeframe, 4 * 60 * 60 * 1000)
-            start_time = end_time - (self._state_config.bars_to_fetch * interval_ms)
+                # Calculate time range
+                end_time = int(datetime.now(timezone.utc).timestamp() * 1000)
 
-            # Fetch candles (positional args: symbol, interval, start_time, end_time)
-            candles = await loop.run_in_executor(
-                None,
-                lambda: self._info.candles_snapshot(
-                    symbol,
-                    self._state_config.timeframe,
-                    start_time,
-                    end_time,
+                # Timeframe to milliseconds
+                tf_map = {
+                    "1m": 60 * 1000,
+                    "5m": 5 * 60 * 1000,
+                    "15m": 15 * 60 * 1000,
+                    "1h": 60 * 60 * 1000,
+                    "4h": 4 * 60 * 60 * 1000,
+                    "1d": 24 * 60 * 60 * 1000,
+                }
+                interval_ms = tf_map.get(self._state_config.timeframe, 4 * 60 * 60 * 1000)
+                start_time = end_time - (self._state_config.bars_to_fetch * interval_ms)
+
+                # Fetch candles (positional args: symbol, interval, start_time, end_time)
+                candles = await loop.run_in_executor(
+                    None,
+                    lambda: self._info.candles_snapshot(
+                        symbol,
+                        self._state_config.timeframe,
+                        start_time,
+                        end_time,
+                    )
                 )
-            )
 
-            if not candles:
-                self._logger.warning("No candles returned for %s", symbol)
+                if not candles:
+                    self._logger.warning("No candles returned for %s", symbol)
+                    return None
+
+                # Parse candles
+                opens = []
+                highs = []
+                lows = []
+                closes = []
+                volumes = []
+
+                for candle in candles:
+                    opens.append(float(candle.get("o", 0)))
+                    highs.append(float(candle.get("h", 0)))
+                    lows.append(float(candle.get("l", 0)))
+                    closes.append(float(candle.get("c", 0)))
+                    volumes.append(float(candle.get("v", 0)))
+
+                return {
+                    "open": np.array(opens),
+                    "high": np.array(highs),
+                    "low": np.array(lows),
+                    "close": np.array(closes),
+                    "volume": np.array(volumes),
+                }
+
+            except Exception as e:
+                err_msg = str(e).lower()
+                is_rate_limit = "429" in err_msg or "rate" in err_msg or "too many" in err_msg
+                if is_rate_limit and attempt < max_retries:
+                    backoff = (2 ** attempt) * 2  # 2s, 4s, 8s
+                    self._logger.warning(
+                        "Rate limited fetching %s (attempt %d/%d), backing off %.0fs",
+                        symbol, attempt + 1, max_retries, backoff,
+                    )
+                    await asyncio.sleep(backoff)
+                    continue
+                self._logger.error("Failed to fetch OHLCV for %s: %s", symbol, e)
                 return None
-
-            # Parse candles
-            opens = []
-            highs = []
-            lows = []
-            closes = []
-            volumes = []
-
-            for candle in candles:
-                opens.append(float(candle.get("o", 0)))
-                highs.append(float(candle.get("h", 0)))
-                lows.append(float(candle.get("l", 0)))
-                closes.append(float(candle.get("c", 0)))
-                volumes.append(float(candle.get("v", 0)))
-
-            return {
-                "open": np.array(opens),
-                "high": np.array(highs),
-                "low": np.array(lows),
-                "close": np.array(closes),
-                "volume": np.array(volumes),
-            }
-
-        except Exception as e:
-            self._logger.error("Failed to fetch OHLCV for %s: %s", symbol, e)
-            return None
 
     # =========================================================================
     # EMA Slope Calculation

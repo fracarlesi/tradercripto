@@ -206,7 +206,7 @@ llm:
   api_key_env: "DEEPSEEK_API_KEY"
 
   max_calls_per_day: 50000
-  timeout_seconds: 30
+  timeout_seconds: 10
 
   fallback_on_error: "deny"
   fallback_on_chaos: "deny"
@@ -218,7 +218,7 @@ llm:
 # -----------------------------------------------------------------------------
 execution:
   prefer_limit: true
-  limit_timeout_seconds: 300
+  limit_timeout_seconds: 90
   entry_mode: "maker"
   maker_reprice_interval_seconds: 10
   maker_max_reprices: 6

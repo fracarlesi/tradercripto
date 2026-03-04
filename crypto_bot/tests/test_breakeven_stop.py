@@ -439,4 +439,4 @@ class TestBreakevenConstant:
         assert BREAKEVEN_THRESHOLD_PCT == 1.2
 
     def test_offset_value(self) -> None:
-        assert BREAKEVEN_OFFSET_PCT == 0.15
+        assert BREAKEVEN_OFFSET_PCT == 0.25

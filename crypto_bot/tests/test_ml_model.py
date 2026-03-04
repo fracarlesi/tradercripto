@@ -427,8 +427,9 @@ class TestOptimalThreshold:
     ) -> None:
         """Threshold calibration must use a genuine holdout (not full data).
 
-        We verify this by checking that _calibrate_threshold_from_probs is
-        called with arrays whose length is ~20% of the dataset, not 100%.
+        With the 3-way split (75% train / 15% val / 10% cal), we verify that
+        _calibrate_threshold_from_probs is called with the calibration set
+        (max(50, 10% of dataset)), not the full data.
         """
         model = MLTradeModel()
         original_calibrate = model._calibrate_threshold_from_probs
@@ -443,11 +444,11 @@ class TestOptimalThreshold:
         model.train(mock_dataset)
 
         assert len(call_args) == 1
-        holdout_size = call_args[0]
-        # Holdout should be max(100, 20% of 200) = 100
-        assert holdout_size == 100
+        cal_size = call_args[0]
+        # Calibration set should be max(50, 10% of 200) = 50
+        assert cal_size == 50
         # Must be less than total dataset
-        assert holdout_size < len(mock_dataset)
+        assert cal_size < len(mock_dataset)
 
 
 # ── EMA Slope Computation Tests ──────────────────────────────────────────
