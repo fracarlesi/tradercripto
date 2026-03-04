@@ -127,8 +127,8 @@ kill_switch:
 # Stops - Fixed TP/SL
 # -----------------------------------------------------------------------------
 stops:
-  stop_loss_pct: 1.0       # Sweep-optimal (Sharpe 10.32)
-  take_profit_pct: 2.0
+  stop_loss_pct: 1.0       # Sweep-optimal — 1:2.5 R:R
+  take_profit_pct: 2.5     # Widened from 2.0 — let winners run
   breakeven_threshold_pct: 1.2   # Sweep-optimal — aligned with mainnet
   # Note: TP/SL are always server-side trigger orders (hardcoded in execution_engine)
 
@@ -136,19 +136,15 @@ stops:
   trailing_atr_mult: 1.5
   trailing_update_interval: 300
 
-  # Graduated ROI - time-based profit targets
+  # Graduated ROI - DISABLED (backtest showed it cuts winners prematurely)
   minimal_roi:
-    "0": 0.04
-    "60": 0.02
-    "120": 0.01
-    "240": 0.005
-    "360": 0.0
+    "0": 9.0
 
-  # Momentum Fade Exit
+  # Momentum Fade Exit — DISABLED (backtest showed it cuts winners prematurely)
   momentum_exit:
     enabled: true
     min_age_minutes: 5
-    min_profit_pct: 0.5        # Sweep-optimal
+    min_profit_pct: 9.0        # Effectively disabled — 900% profit threshold never reached
     rsi_slope_threshold: 1.0
 
 # -----------------------------------------------------------------------------
@@ -160,7 +156,7 @@ regime:
   range_adx_max: 20
   choppiness_range_min: 60
   confirmation_bars: 2
-  regime_exit_grace_minutes: 5 # Min position age before regime-change exit allowed
+  regime_exit_grace_minutes: 99999 # DISABLED — backtest showed regime exit cuts winners prematurely
 
 # -----------------------------------------------------------------------------
 # Strategies
