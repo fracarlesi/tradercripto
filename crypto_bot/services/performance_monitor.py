@@ -219,7 +219,7 @@ class PerformanceMonitorService(BaseService):
             recent_section = (
                 f"Last 12h: {recent_count} trades\n"
                 f"Win rate: {recent_wr:.0f}% ({len(recent_wins)}W/{len(recent_losses)}L)\n"
-                f"P&L: {rp_sign}${recent_pnl:.2f} (fees: ${total_fees:.2f})\n"
+                f"Gross: {gp_sign}${gross_pnl:.2f} | Fees: -${total_fees:.2f} | Net: {rp_sign}${recent_pnl:.2f}\n"
                 f"Avg win: +${recent_avg_win:.2f} | Avg loss: ${recent_avg_loss:.2f}\n"
                 f"TP: {recent_tp} | SL: {recent_sl}"
             )
