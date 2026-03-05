@@ -2889,11 +2889,43 @@ class ExecutionEngineService(BaseService):
 
         self.metrics.positions_closed += 1
 
+        # Fetch real P&L and fees from exchange fills
+        closed_pnl = position.unrealized_pnl  # fallback
+        total_fee = 0.0
+        taker_fees = 0.0
+        maker_fees = 0.0
+        try:
+            fills = await self.client.get_fills(limit=50)
+            # Find fills for this symbol (recent first) to get closedPnl and fee
+            symbol_fills = [f for f in fills if f["symbol"] == symbol]
+            if symbol_fills:
+                # The closing fill has closedPnl != 0
+                close_fills = [f for f in symbol_fills if f.get("closedPnl", 0) != 0]
+                if close_fills:
+                    closed_pnl = close_fills[0]["closedPnl"]
+                # Sum fees by maker/taker for this symbol's recent fills (entry + exit)
+                for f in symbol_fills[:4]:
+                    fee = abs(f.get("fee", 0))
+                    if f.get("is_taker", True):
+                        taker_fees += fee
+                    else:
+                        maker_fees += fee
+                total_fee = taker_fees + maker_fees
+        except Exception as e:
+            self._logger.debug("Could not fetch fills for fee tracking: %s", e)
+
+        net_pnl = closed_pnl - total_fee
+
         self._logger.info(
-            "Position closed: %s %s - PnL: %.2f",
+            "Position closed: %s %s - Gross: $%.2f, Fee: $%.4f (maker: $%.4f, taker: $%.4f), Net: $%.2f [%s]",
             position.side,
             symbol,
-            position.unrealized_pnl
+            closed_pnl,
+            total_fee,
+            maker_fees,
+            taker_fees,
+            net_pnl,
+            position.exit_reason or "unknown",
         )
 
         # Calculate PnL percentage for notification
@@ -2911,9 +2943,9 @@ class ExecutionEngineService(BaseService):
             self._daily_date = today
         self._daily_closed.append({
             "symbol": symbol,
-            "pnl": position.unrealized_pnl,
+            "pnl": net_pnl,
             "pnl_pct": pnl_pct,
-            "is_win": position.unrealized_pnl > 0,
+            "is_win": net_pnl > 0,
         })
         daily_wins = sum(1 for t in self._daily_closed if t["is_win"])
         daily_trades = len(self._daily_closed)
@@ -2926,7 +2958,9 @@ class ExecutionEngineService(BaseService):
             "side": position.side,
             "entry_price": position.entry_price,
             "exit_price": position.current_price,
-            "realized_pnl": position.unrealized_pnl,
+            "realized_pnl": net_pnl,
+            "gross_pnl": closed_pnl,
+            "fee": total_fee,
             "pnl_pct": pnl_pct,
             "exit_reason": position.exit_reason,
             "position": position.to_dict(),

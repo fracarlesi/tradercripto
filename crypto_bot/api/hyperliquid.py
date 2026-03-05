@@ -714,9 +714,11 @@ class HyperliquidClient:
                 "price": float(f.get("px", 0)),
                 "size": float(f.get("sz", 0)),
                 "fee": float(f.get("fee", 0)),
+                "is_taker": bool(f.get("crossed", True)),  # crossed=True means taker
                 "time": datetime.fromtimestamp(f.get("time", 0) / 1000) if f.get("time") else None,
                 "orderId": f.get("oid"),
                 "closedPnl": float(f.get("closedPnl", 0)),
+                "dir": f.get("dir", ""),  # "Open Long", "Close Short", etc.
             })
 
         return result
