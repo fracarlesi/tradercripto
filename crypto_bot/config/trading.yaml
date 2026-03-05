@@ -91,11 +91,11 @@ timeframes:
 # Risk Management
 # -----------------------------------------------------------------------------
 risk:
-  per_trade_pct: 15.0
+  per_trade_pct: 18.0
   max_per_trade_pct: 20.0
 
-  max_positions: 4          # Was 3 — exposure cap at 300% is the real safety net
-  max_exposure_pct: 300
+  max_positions: 3          # Concentrate capital, reduce correlation
+  max_exposure_pct: 270     # 3 pos × 18% × 10x × 1.5 buffer
   max_position_pct: 60      # Was 70 — smaller per-position to compensate for 4th slot
 
   leverage: 10
@@ -110,13 +110,13 @@ risk:
 kill_switch:
   enabled: true
 
-  daily_loss_pct: 8.0
+  daily_loss_pct: 6.0
   daily_loss_action: "pause_until_tomorrow"
 
   weekly_loss_pct: 15.0
   weekly_loss_action: "pause_3_days"
 
-  max_drawdown_pct: 30.0
+  max_drawdown_pct: 25.0
   max_drawdown_action: "stop_all"
 
   check_interval_seconds: 60
@@ -127,7 +127,7 @@ kill_switch:
 stops:
   stop_loss_pct: 1.0       # Sweep-optimal — 1:2.5 R:R
   take_profit_pct: 2.5     # Widened from 2.0 — let winners run (R:R 1:2.5)
-  breakeven_threshold_pct: 1.2
+  breakeven_threshold_pct: 1.0
   # Note: TP/SL are always server-side trigger orders (hardcoded in execution_engine)
 
   # ATR multipliers — used ONLY by the trailing stop system (after breakeven).
@@ -220,11 +220,11 @@ execution:
   prefer_limit: true
   limit_timeout_seconds: 90
   entry_mode: "maker"
-  maker_reprice_interval_seconds: 10
-  maker_max_reprices: 6
+  maker_reprice_interval_seconds: 5
+  maker_max_reprices: 12
 
   max_slippage_pct: 0.30       # Aligned with spread — was 0.25% causing instant position closes
-  max_spread_pct: 0.30         # Tightened from 0.35% — aligned with slippage to avoid open+close waste
+  max_spread_pct: 0.15         # Skip illiquid assets — tighter filter
 
   max_retries: 3
   retry_delay_seconds: 5
@@ -298,7 +298,7 @@ ml_model:
   enabled: true
   model_path: "models/trade_model.joblib"
   min_probability: 0.52        # Sweep-optimal — more trades, higher net P&L at this threshold
-  retrain_days: 30             # Giorni di dati per training
+  retrain_days: 90             # 3× training window to reduce overfitting
   retrain_interval_days: 3     # Ogni quanto ri-addestrare
 
 # -----------------------------------------------------------------------------

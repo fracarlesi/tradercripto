@@ -35,19 +35,18 @@ class MLTradeModel:
         "adx",
         "rsi",
         "atr_pct",
-        "ema_spread_pct",  # TODO: DROP on next retrain — redundant with signed_ema_spread
         "volume_ratio",
         "bb_position",
         "ema9_slope",
         "ema21_slope",
         "close_vs_ema200",
         "regime_encoded",   # TREND=2.0, CHAOS=1.0, RANGE=0.0
-        "hour_of_day",      # UTC hour / 24.0 — intraday session pattern
+        "session",          # 0=Asia(00-08), 1=London(08-13), 2=US(13-21), 3=LateNight(21-00)
         "signal_type",      # 0.0=EMA crossover, 1.0=volume breakout, 2.0=momentum burst
         "candle_body_pct",  # |close-open|/open * 100 — price conviction
         "rsi_slope",        # RSI[i] - RSI[i-2] — RSI acceleration
         # --- Tier 1 (v2) ---
-        "day_of_week",      # weekday() / 6.0
+        "is_weekend",       # 1 if Saturday/Sunday, 0 otherwise
         "atr_percentile",   # percentile rank of ATR in last 100 bars [0,1]
         "signed_ema_spread", # (ema9 - ema21) / ema21 * 100 (signed, not abs)
         "direction",        # 1.0=LONG, -1.0=SHORT
@@ -58,7 +57,6 @@ class MLTradeModel:
         "tf_alignment",     # 1h vs 15m direction: +1=agree, -1=disagree
         "rsi_1h",           # RSI(56) — 1h equivalent
         "adx_1h",           # ADX(56) — 1h equivalent
-        "funding_rate",     # Current funding rate (0.0 default for training)
     ]
 
     _DEFAULT_PARAMS: dict = {
@@ -441,23 +439,21 @@ class MLTradeModel:
             if bb_range > 0:
                 bb_position = (close - float(state.bb_lower)) / bb_range
 
-        # EMA spread as percentage (abs for backward compat feature)
-        ema_spread_pct = abs(ema9 - ema21) / ema21 * 100 if ema21 != 0 else 0.0
-
         # Signed EMA spread (directional)
         signed_ema_spread = (ema9 - ema21) / ema21 * 100 if ema21 != 0 else 0.0
 
         # Close vs EMA200 as percentage
         close_vs_ema200 = (close - ema200) / ema200 * 100 if ema200 != 0 else 0.0
 
-        # Hour of day (UTC), normalized to [0, 1)
-        hour_of_day = state.timestamp.hour / 24.0
+        # Session bin: 0=Asia(00-08), 1=London(08-13), 2=US(13-21), 3=LateNight(21-00)
+        h = state.timestamp.hour
+        session = 0 if h < 8 else (1 if h < 13 else (2 if h < 21 else 3))
 
         # Candle body percentage
         candle_body_pct = abs(close - open_price) / open_price * 100 if open_price > 0 else 0.0
 
-        # Day of week, normalized to [0, 1]
-        day_of_week = state.timestamp.weekday() / 6.0
+        # Is weekend (Saturday=5, Sunday=6)
+        is_weekend = 1 if state.timestamp.weekday() >= 5 else 0
 
         # ATR percentile from MarketState (computed from last 100 bars)
         atr_percentile = float(state.atr_percentile) if state.atr_percentile is not None else 0.5
@@ -493,26 +489,22 @@ class MLTradeModel:
         else:
             tf_alignment = 0.0  # unknown
 
-        # Funding rate: always 0 until fixed in data pipeline (train/serve skew)
-        funding_rate = 0.0  # TODO: funding_rate has train/serve skew — always 0 until fixed in data pipeline
-
         return {
             "adx": float(state.adx),
             "rsi": float(state.rsi),
             "atr_pct": float(state.atr_pct),
-            "ema_spread_pct": ema_spread_pct,
             "volume_ratio": float(state.volume_ratio) if state.volume_ratio is not None else 1.0,
             "bb_position": bb_position,
             "ema9_slope": float(state.ema9_slope),
             "ema21_slope": float(state.ema21_slope),
             "close_vs_ema200": close_vs_ema200,
             "regime_encoded": regime_encoded,
-            "hour_of_day": hour_of_day,
+            "session": session,
             "signal_type": signal_type,
             "candle_body_pct": candle_body_pct,
             "rsi_slope": float(state.rsi_slope),
             # Tier 1
-            "day_of_week": day_of_week,
+            "is_weekend": is_weekend,
             "atr_percentile": atr_percentile,
             "signed_ema_spread": signed_ema_spread,
             "direction": direction,
@@ -523,7 +515,6 @@ class MLTradeModel:
             "tf_alignment": tf_alignment,
             "rsi_1h": rsi_1h,
             "adx_1h": adx_1h,
-            "funding_rate": funding_rate,
         }
 
     # ------------------------------------------------------------------

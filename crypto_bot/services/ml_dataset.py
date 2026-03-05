@@ -114,9 +114,6 @@ def _extract_features(
     ema21 = ind["ema21"][idx]
     ema200 = ind["ema200"][idx]
 
-    # EMA spread (abs for backward compat)
-    ema_spread_pct = abs(ema9 - ema21) / ema21 * 100 if ema21 != 0 else 0.0
-
     # Signed EMA spread (directional)
     signed_ema_spread = (ema9 - ema21) / ema21 * 100 if ema21 != 0 else 0.0
 
@@ -161,13 +158,14 @@ def _extract_features(
     else:
         regime_encoded = 1.0  # CHAOS
 
-    # Hour of day (UTC), normalized to [0, 1)
+    # Session bin: 0=Asia(00-08), 1=London(08-13), 2=US(13-21), 3=LateNight(21-00)
     ts_ms = candles[idx]["t"]
     dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
-    hour_of_day = dt.hour / 24.0
+    h = dt.hour
+    session = 0 if h < 8 else (1 if h < 13 else (2 if h < 21 else 3))
 
-    # Day of week, normalized to [0, 1]
-    day_of_week = dt.weekday() / 6.0
+    # Is weekend (Saturday=5, Sunday=6)
+    is_weekend = 1 if dt.weekday() >= 5 else 0
 
     # Candle body percentage
     candle_body_pct = abs(close - open_price) / open_price * 100 if open_price > 0 else 0.0
@@ -226,26 +224,22 @@ def _extract_features(
             dir_1h = 1.0 if ind_1h["ema9"][idx] > ind_1h["ema21"][idx] else -1.0
             tf_alignment = 1.0 if dir_15m == dir_1h else -1.0
 
-    # Funding rate: not available in historical data, default 0.0
-    funding_rate = 0.0
-
     return {
         "adx": float(adx_val) if not np.isnan(adx_val) else 0.0,
         "rsi": float(ind["rsi"][idx]),
         "atr_pct": float(ind["atr_pct"][idx]),
-        "ema_spread_pct": ema_spread_pct,
         "volume_ratio": volume_ratio,
         "bb_position": bb_position,
         "ema9_slope": ema9_slope,
         "ema21_slope": ema21_slope,
         "close_vs_ema200": close_vs_ema200,
         "regime_encoded": regime_encoded,
-        "hour_of_day": hour_of_day,
+        "session": session,
         "signal_type": signal_type,
         "candle_body_pct": candle_body_pct,
         "rsi_slope": rsi_slope,
         # Tier 1
-        "day_of_week": day_of_week,
+        "is_weekend": is_weekend,
         "atr_percentile": atr_percentile,
         "signed_ema_spread": signed_ema_spread,
         "direction": float(direction),
@@ -256,7 +250,6 @@ def _extract_features(
         "tf_alignment": tf_alignment,
         "rsi_1h": rsi_1h,
         "adx_1h": adx_1h,
-        "funding_rate": funding_rate,
     }
 
 

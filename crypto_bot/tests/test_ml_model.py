@@ -19,7 +19,7 @@ from crypto_bot.core.models import MarketState, Regime, Direction
 
 @pytest.fixture
 def mock_dataset() -> pd.DataFrame:
-    """Create a synthetic dataset for testing (25 features)."""
+    """Create a synthetic dataset for testing (23 features)."""
     np.random.seed(42)
     n = 200
     # Generate timestamps spanning 30 days for time-weighted training
@@ -29,19 +29,18 @@ def mock_dataset() -> pd.DataFrame:
         "adx": np.random.uniform(15, 60, n),
         "rsi": np.random.uniform(20, 80, n),
         "atr_pct": np.random.uniform(0.05, 1.0, n),
-        "ema_spread_pct": np.random.uniform(0, 2, n),
         "volume_ratio": np.random.uniform(0.3, 3.0, n),
         "bb_position": np.random.uniform(0, 1, n),
         "ema9_slope": np.random.uniform(-0.01, 0.01, n),
         "ema21_slope": np.random.uniform(-0.01, 0.01, n),
         "close_vs_ema200": np.random.uniform(-5, 5, n),
         "regime_encoded": np.random.choice([0.0, 1.0, 2.0], n),
-        "hour_of_day": np.random.uniform(0, 1, n),
+        "session": np.random.choice([0, 1, 2, 3], n),
         "signal_type": np.random.choice([0.0, 1.0, 2.0], n),
         "candle_body_pct": np.random.uniform(0, 3.0, n),
         "rsi_slope": np.random.uniform(-15, 15, n),
         # Tier 1
-        "day_of_week": np.random.uniform(0, 1, n),
+        "is_weekend": np.random.choice([0, 1], n),
         "atr_percentile": np.random.uniform(0, 1, n),
         "signed_ema_spread": np.random.uniform(-2, 2, n),
         "direction": np.random.choice([1.0, -1.0], n),
@@ -52,7 +51,6 @@ def mock_dataset() -> pd.DataFrame:
         "tf_alignment": np.random.choice([-1.0, 0.0, 1.0], n),
         "rsi_1h": np.random.uniform(20, 80, n),
         "adx_1h": np.random.uniform(15, 60, n),
-        "funding_rate": np.random.uniform(-0.001, 0.001, n),
         # Labels + metadata
         "label": np.random.randint(0, 2, n),
         "timestamp": timestamps,
@@ -152,11 +150,16 @@ class TestMLTraining:
         assert 0.0 <= metrics["auc"] <= 1.0
         assert 0.0 <= metrics["cv_auc_mean"] <= 1.0
 
-    def test_feature_count_is_13(self) -> None:
-        """FEATURES should have exactly 13 entries (11 + signal_type + candle_body_pct)."""
-        assert len(MLTradeModel.FEATURES) == 25
+    def test_feature_count_is_23(self) -> None:
+        """FEATURES should have exactly 23 entries (v4: session/is_weekend, no ema_spread_pct/funding_rate)."""
+        assert len(MLTradeModel.FEATURES) == 23
         assert "spread_pct" not in MLTradeModel.FEATURES
-        assert "hour_of_day" in MLTradeModel.FEATURES
+        assert "hour_of_day" not in MLTradeModel.FEATURES
+        assert "day_of_week" not in MLTradeModel.FEATURES
+        assert "ema_spread_pct" not in MLTradeModel.FEATURES
+        assert "funding_rate" not in MLTradeModel.FEATURES
+        assert "session" in MLTradeModel.FEATURES
+        assert "is_weekend" in MLTradeModel.FEATURES
         assert "signal_type" in MLTradeModel.FEATURES
         assert "candle_body_pct" in MLTradeModel.FEATURES
 
@@ -176,17 +179,16 @@ class TestMLPrediction:
     ) -> None:
         features = {
             "adx": 35, "rsi": 55, "atr_pct": 0.4,
-            "ema_spread_pct": 0.5, "volume_ratio": 1.2,
+            "volume_ratio": 1.2,
             "bb_position": 0.6, "ema9_slope": 0.002,
             "ema21_slope": 0.001, "close_vs_ema200": 2.0,
-            "regime_encoded": 2.0, "hour_of_day": 0.5,
+            "regime_encoded": 2.0, "session": 2,
             "signal_type": 0.0, "candle_body_pct": 0.5,
             "rsi_slope": 3.0,
-            "day_of_week": 0.5, "atr_percentile": 0.5,
+            "is_weekend": 0, "atr_percentile": 0.5,
             "signed_ema_spread": 0.5, "direction": 1.0,
             "btc_trend": 1.0, "btc_rsi": 50.0, "btc_ema9_slope": 0.0,
             "tf_alignment": 1.0, "rsi_1h": 50.0, "adx_1h": 30.0,
-            "funding_rate": 0.0001,
         }
         prob, explanation = trained_model.predict(features)
 
@@ -213,10 +215,14 @@ class TestFeatureExtraction:
     def test_extract_features_no_removed_features(
         self, trained_model: MLTradeModel, sample_market_state: MarketState
     ) -> None:
-        """Verify removed overfitting features are not present."""
+        """Verify removed/dropped features are not present."""
         features = trained_model.extract_features(sample_market_state)
         assert "direction_encoded" not in features
-        assert "hour_utc" not in features   # hour_of_day is the normalized version
+        assert "hour_utc" not in features
+        assert "hour_of_day" not in features
+        assert "day_of_week" not in features
+        assert "ema_spread_pct" not in features
+        assert "funding_rate" not in features
         assert "spread_pct" not in features
 
     def test_extract_features_values_reasonable(
@@ -240,7 +246,7 @@ class TestFeatureExtraction:
         sample_market_state.ema9 = None
         sample_market_state.ema21 = None
         features = trained_model.extract_features(sample_market_state)
-        assert features["ema_spread_pct"] == 0.0
+        assert features["signed_ema_spread"] == 0.0
 
     def test_extract_features_reads_slopes_from_market_state(
         self, trained_model: MLTradeModel, sample_market_state: MarketState
@@ -294,21 +300,54 @@ class TestFeatureExtraction:
         features = trained_model.extract_features(sample_market_state)
         assert features["regime_encoded"] == 0.0
 
-    def test_extract_features_hour_of_day(
+    def test_extract_features_session_us(
         self, trained_model: MLTradeModel, sample_market_state: MarketState
     ) -> None:
-        """hour_of_day should be timestamp.hour / 24.0."""
-        # sample_market_state timestamp is 14:30 UTC
+        """session should be 2 (US) for 14:30 UTC."""
+        # sample_market_state timestamp is 14:30 UTC -> US session
         features = trained_model.extract_features(sample_market_state)
-        assert features["hour_of_day"] == pytest.approx(14 / 24.0)
+        assert features["session"] == 2
 
-    def test_extract_features_hour_of_day_midnight(
+    def test_extract_features_session_asia(
         self, trained_model: MLTradeModel, sample_market_state: MarketState
     ) -> None:
-        """hour_of_day should be 0.0 at midnight UTC."""
-        sample_market_state.timestamp = datetime(2026, 2, 24, 0, 0, tzinfo=timezone.utc)
+        """session should be 0 (Asia) for 03:00 UTC."""
+        sample_market_state.timestamp = datetime(2026, 2, 24, 3, 0, tzinfo=timezone.utc)
         features = trained_model.extract_features(sample_market_state)
-        assert features["hour_of_day"] == 0.0
+        assert features["session"] == 0
+
+    def test_extract_features_session_london(
+        self, trained_model: MLTradeModel, sample_market_state: MarketState
+    ) -> None:
+        """session should be 1 (London) for 10:00 UTC."""
+        sample_market_state.timestamp = datetime(2026, 2, 24, 10, 0, tzinfo=timezone.utc)
+        features = trained_model.extract_features(sample_market_state)
+        assert features["session"] == 1
+
+    def test_extract_features_session_latenight(
+        self, trained_model: MLTradeModel, sample_market_state: MarketState
+    ) -> None:
+        """session should be 3 (LateNight) for 22:00 UTC."""
+        sample_market_state.timestamp = datetime(2026, 2, 24, 22, 0, tzinfo=timezone.utc)
+        features = trained_model.extract_features(sample_market_state)
+        assert features["session"] == 3
+
+    def test_extract_features_is_weekend(
+        self, trained_model: MLTradeModel, sample_market_state: MarketState
+    ) -> None:
+        """is_weekend should be 1 for Saturday."""
+        # 2026-02-28 is Saturday
+        sample_market_state.timestamp = datetime(2026, 2, 28, 14, 0, tzinfo=timezone.utc)
+        features = trained_model.extract_features(sample_market_state)
+        assert features["is_weekend"] == 1
+
+    def test_extract_features_is_weekday(
+        self, trained_model: MLTradeModel, sample_market_state: MarketState
+    ) -> None:
+        """is_weekend should be 0 for Tuesday."""
+        # sample_market_state is 2026-02-24 which is a Tuesday
+        features = trained_model.extract_features(sample_market_state)
+        assert features["is_weekend"] == 0
 
     def test_extract_features_signal_type_default(
         self, trained_model: MLTradeModel, sample_market_state: MarketState
@@ -538,17 +577,16 @@ class TestMLPersistence:
     ) -> None:
         features = {
             "adx": 35, "rsi": 55, "atr_pct": 0.4,
-            "ema_spread_pct": 0.5, "volume_ratio": 1.2,
+            "volume_ratio": 1.2,
             "bb_position": 0.6, "ema9_slope": 0.002,
             "ema21_slope": 0.001, "close_vs_ema200": 2.0,
-            "regime_encoded": 2.0, "hour_of_day": 0.5,
+            "regime_encoded": 2.0, "session": 2,
             "signal_type": 0.0, "candle_body_pct": 0.5,
             "rsi_slope": 3.0,
-            "day_of_week": 0.5, "atr_percentile": 0.5,
+            "is_weekend": 0, "atr_percentile": 0.5,
             "signed_ema_spread": 0.5, "direction": 1.0,
             "btc_trend": 1.0, "btc_rsi": 50.0, "btc_ema9_slope": 0.0,
             "tf_alignment": 1.0, "rsi_1h": 50.0, "adx_1h": 30.0,
-            "funding_rate": 0.0001,
         }
         prob_before, _ = trained_model.predict(features)
 

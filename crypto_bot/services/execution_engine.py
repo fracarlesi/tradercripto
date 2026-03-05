@@ -1504,7 +1504,7 @@ class ExecutionEngineService(BaseService):
                 self._logger.error("Failed immediate %s close for %s: %s", reason, symbol, e)
             return
 
-        # Place TP order with retry
+        # Place TP order with retry (limit order for maker fee savings)
         try:
             tp_result = await self._place_trigger_with_retry(
                 symbol=symbol,
@@ -1512,14 +1512,15 @@ class ExecutionEngineService(BaseService):
                 size=size,
                 trigger_price=tp_price,
                 tpsl="tp",
+                limit_price=tp_price,
             )
             position.tp_order_id = tp_result.get("orderId")
             position.tp_price = tp_price
-            self._logger.info("TP trigger order placed for %s: %s @ %.4f", symbol, position.tp_order_id, tp_price)
+            self._logger.info("TP limit trigger placed for %s: %s @ %.4f (maker fee)", symbol, position.tp_order_id, tp_price)
         except Exception as e:
             self._logger.error("Failed to place TP trigger order for %s after retries: %s", symbol, e)
 
-        # Place SL order with retry
+        # Place SL order with retry (market order for guaranteed execution)
         try:
             sl_result = await self._place_trigger_with_retry(
                 symbol=symbol,
@@ -1585,8 +1586,15 @@ class ExecutionEngineService(BaseService):
         trigger_price: float,
         tpsl: str,
         max_retries: int = 3,
+        limit_price: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """Place a trigger order with retry and exponential backoff."""
+        """Place a trigger order with retry and exponential backoff.
+
+        Args:
+            limit_price: If set, the trigger order executes as a limit order
+                at this price (maker fee 0.02%) instead of market (taker 0.05%).
+                Used for TP orders to save on fees.
+        """
         for attempt in range(max_retries):
             try:
                 result = await self.client.place_trigger_order(
@@ -1594,7 +1602,7 @@ class ExecutionEngineService(BaseService):
                     is_buy=is_buy,
                     size=size,
                     trigger_price=trigger_price,
-                    limit_price=None,
+                    limit_price=limit_price,
                     tpsl=tpsl,
                     reduce_only=True,
                 )
@@ -1730,7 +1738,7 @@ class ExecutionEngineService(BaseService):
                 self._logger.error("Failed to close unprotectable position %s: %s", symbol, e)
             return
 
-        # Place TP order with retry
+        # Place TP order with retry (limit order for maker fee savings)
         try:
             tp_result = await self._place_trigger_with_retry(
                 symbol=symbol,
@@ -1738,10 +1746,11 @@ class ExecutionEngineService(BaseService):
                 size=size,
                 trigger_price=tp_price,
                 tpsl="tp",
+                limit_price=tp_price,
             )
             position.tp_order_id = tp_result.get("orderId")
             position.tp_price = tp_price
-            self._logger.info("TP trigger order placed: %s @ %.4f", position.tp_order_id, tp_price)
+            self._logger.info("TP limit trigger placed: %s @ %.4f (maker fee)", position.tp_order_id, tp_price)
 
         except Exception as e:
             self._logger.error("Failed to place TP trigger order after retries: %s", e)
@@ -1751,7 +1760,7 @@ class ExecutionEngineService(BaseService):
                 f"Position has NO take-profit protection! Error: {e}"
             )
 
-        # Place SL order with retry
+        # Place SL order with retry (market order for guaranteed execution)
         try:
             sl_result = await self._place_trigger_with_retry(
                 symbol=symbol,
@@ -1821,7 +1830,7 @@ class ExecutionEngineService(BaseService):
                     position.sl_order_id, symbol, e,
                 )
 
-        # 3) Re-place TP at the same price, new size
+        # 3) Re-place TP at the same price, new size (limit order for maker fee)
         if position.tp_price:
             try:
                 tp_result = await self._place_trigger_with_retry(
@@ -1830,10 +1839,11 @@ class ExecutionEngineService(BaseService):
                     size=new_size,
                     trigger_price=position.tp_price,
                     tpsl="tp",
+                    limit_price=position.tp_price,
                 )
                 position.tp_order_id = tp_result.get("orderId")
                 self._logger.info(
-                    "TP re-placed for %s: size %.4f @ %.4f (order %s)",
+                    "TP limit re-placed for %s: size %.4f @ %.4f (order %s, maker fee)",
                     symbol, new_size, position.tp_price, position.tp_order_id,
                 )
             except Exception as e:

@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
+from scipy.stats import rankdata
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -636,22 +637,44 @@ class ConservativeBot:
     # =========================================================================
 
     async def _strategy_loop(self) -> None:
-        """Main evaluation loop: scan all assets with ML model."""
+        """Main evaluation loop: scan all assets with ML model.
+
+        Scans are aligned to the 15-minute bar close + 30s buffer, so the bot
+        always evaluates freshly closed candles rather than mid-candle data.
+        This means scans fire at ~XX:00:30, XX:15:30, XX:30:30, XX:45:30 UTC.
+        """
         logger.info("ML evaluation loop started")
 
         await asyncio.sleep(10)  # Let services initialize
 
-        scan_seconds = self.config.scan_interval_minutes * 60
+        bar_seconds = 15 * 60  # 15m bars
+        buffer = 30  # seconds after bar close to let data feed update
 
         while self._running and not self._shutdown_event.is_set():
             try:
                 await self._evaluate_all_assets()
                 self._consecutive_scan_errors = 0
 
-                logger.info("Next scan in %d minutes", self.config.scan_interval_minutes)
+                # Align next scan to the next 15m bar close + buffer
+                now = datetime.now(timezone.utc)
+                current_ts = int(now.timestamp())
+                next_bar_close = (current_ts // bar_seconds + 1) * bar_seconds
+                sleep_seconds = next_bar_close + buffer - current_ts
+                if sleep_seconds <= 0:
+                    sleep_seconds = bar_seconds  # fallback: full bar
+
+                next_scan_time = datetime.fromtimestamp(
+                    current_ts + sleep_seconds, tz=timezone.utc
+                )
+                logger.info(
+                    "Next scan at %s UTC (in %ds, aligned to bar close + %ds)",
+                    next_scan_time.strftime("%H:%M:%S"),
+                    sleep_seconds,
+                    buffer,
+                )
                 try:
                     await asyncio.wait_for(
-                        self._shutdown_event.wait(), timeout=scan_seconds,
+                        self._shutdown_event.wait(), timeout=sleep_seconds,
                     )
                     break
                 except asyncio.TimeoutError:
@@ -987,6 +1010,28 @@ class ConservativeBot:
         # --- Sort by P(TP) desc, execute top N ---
         if not candidates:
             return
+
+        # Cross-sectional momentum rank as tiebreaker (80% ML + 20% momentum)
+        if len(candidates) > 1:
+            # Momentum proxy: signed EMA spread = (ema9 - ema21) / ema21
+            # Captures both direction and magnitude of momentum
+            momentums: list[float] = []
+            for c in candidates:
+                sym = c[0]
+                st = states.get(sym)
+                if st is not None and st.ema9 is not None and st.ema21 is not None:
+                    ema21_val = float(st.ema21)
+                    if ema21_val != 0:
+                        momentums.append(abs(float(st.ema9) - ema21_val) / ema21_val)
+                    else:
+                        momentums.append(0.0)
+                else:
+                    momentums.append(0.0)
+            ranks = rankdata(momentums, method="ordinal") / len(momentums)
+            candidates = [
+                (c[0], c[1], 0.8 * c[2] + 0.2 * ranks[i], c[3])
+                for i, c in enumerate(candidates)
+            ]
 
         candidates.sort(key=lambda x: x[2], reverse=True)
 

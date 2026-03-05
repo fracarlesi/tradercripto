@@ -64,9 +64,6 @@ def _extract_features(
     if any(np.isnan(v) for v in [ema9, ema21, ema200, adx_val, rsi_val]):
         return None
 
-    # EMA spread (abs)
-    ema_spread_pct = abs(ema9 - ema21) / ema21 * 100 if ema21 != 0 else 0.0
-
     # Signed EMA spread
     signed_ema_spread = (ema9 - ema21) / ema21 * 100 if ema21 != 0 else 0.0
 
@@ -107,11 +104,12 @@ def _extract_features(
     else:
         regime_encoded = 1.0
 
-    # Hour of day + day of week
+    # Session bin + is_weekend
     ts_ms = candles[idx]["t"]
     dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
-    hour_of_day = dt.hour / 24.0
-    day_of_week = dt.weekday() / 6.0
+    h = dt.hour
+    session = 0 if h < 8 else (1 if h < 13 else (2 if h < 21 else 3))
+    is_weekend = 1 if dt.weekday() >= 5 else 0
 
     # Candle body pct
     candle_body_pct = abs(close - open_price) / open_price * 100 if open_price > 0 else 0.0
@@ -166,19 +164,18 @@ def _extract_features(
         "adx": float(adx_val),
         "rsi": float(rsi_val),
         "atr_pct": float(atr_pct_val),
-        "ema_spread_pct": ema_spread_pct,
         "volume_ratio": volume_ratio,
         "bb_position": bb_position,
         "ema9_slope": ema9_slope,
         "ema21_slope": ema21_slope,
         "close_vs_ema200": close_vs_ema200,
         "regime_encoded": regime_encoded,
-        "hour_of_day": hour_of_day,
+        "session": session,
         "signal_type": signal_type,
         "candle_body_pct": candle_body_pct,
         "rsi_slope": rsi_slope,
         # Tier 1
-        "day_of_week": day_of_week,
+        "is_weekend": is_weekend,
         "atr_percentile": atr_percentile,
         "signed_ema_spread": signed_ema_spread,
         "direction": float(direction),
@@ -189,7 +186,6 @@ def _extract_features(
         "tf_alignment": tf_alignment,
         "rsi_1h": rsi_1h,
         "adx_1h": adx_1h,
-        "funding_rate": 0.0,
     }
 
 
@@ -465,9 +461,11 @@ def _predict(model: object, features: dict, feature_names: list[str] | None) -> 
     row = pd.DataFrame([features])
 
     if feature_names:
-        # Use only features the model knows
-        cols = [f for f in feature_names if f in row.columns]
-        row = row[cols].astype(float)
+        # Add missing features with 0.0 default so XGBoost gets all expected cols
+        for f in feature_names:
+            if f not in row.columns:
+                row[f] = 0.0
+        row = row[feature_names].astype(float)
     else:
         row = row.astype(float)
 
