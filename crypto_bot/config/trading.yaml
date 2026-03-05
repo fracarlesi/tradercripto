@@ -91,12 +91,12 @@ timeframes:
 # Risk Management
 # -----------------------------------------------------------------------------
 risk:
-  per_trade_pct: 18.0
-  max_per_trade_pct: 20.0
+  per_trade_pct: 25.0
+  max_per_trade_pct: 30.0
 
   max_positions: 3          # Concentrate capital, reduce correlation
-  max_exposure_pct: 270     # 3 pos × 18% × 10x × 1.5 buffer
-  max_position_pct: 60      # Was 70 — smaller per-position to compensate for 4th slot
+  max_exposure_pct: 375     # 3 pos × 25% × 10x × 1.5 buffer
+  max_position_pct: 85      # 25% equity × 10x leverage needs room
 
   leverage: 10
   max_leverage: 20
@@ -297,7 +297,7 @@ metrics:
 ml_model:
   enabled: true
   model_path: "models/trade_model.joblib"
-  min_probability: 0.52        # Sweep-optimal — more trades, higher net P&L at this threshold
+  min_probability: 0.58        # Better risk-adjusted: fewer trades, lower fee drag, higher Sharpe
   retrain_days: 90             # 3× training window to reduce overfitting
   retrain_interval_days: 3     # Ogni quanto ri-addestrare
 

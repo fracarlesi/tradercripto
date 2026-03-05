@@ -2863,6 +2863,21 @@ class ExecutionEngineService(BaseService):
         position.status = PositionStatus.CLOSED
         position.closed_at = datetime.now(timezone.utc)
 
+        # Infer exit_reason from exit price when not set (exchange-side TP/SL)
+        if not position.exit_reason:
+            exit_px = position.current_price
+            if position.tp_price and position.sl_price:
+                tp_dist = abs(exit_px - position.tp_price) / position.entry_price if position.entry_price else float("inf")
+                sl_dist = abs(exit_px - position.sl_price) / position.entry_price if position.entry_price else float("inf")
+                if tp_dist < sl_dist:
+                    position.exit_reason = "take_profit"
+                else:
+                    position.exit_reason = "stop_loss"
+            elif position.tp_price:
+                position.exit_reason = "take_profit"
+            elif position.sl_price:
+                position.exit_reason = "stop_loss"
+
         # Cancel remaining TP/SL orders (the one that didn't trigger)
         for order_id in [position.tp_order_id, position.sl_order_id]:
             if order_id:

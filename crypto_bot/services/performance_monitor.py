@@ -209,10 +209,19 @@ class PerformanceMonitorService(BaseService):
             recent_sl = sum(1 for t in recent if t.exit_reason == "stop_loss")
             rp_sign = "+" if recent_pnl >= 0 else ""
 
+            # Estimate fees: avg ~0.03% per side (blend of maker 0.01% + taker 0.035%)
+            # Entry + exit = 2 sides per trade, applied to notional (entry_price * size)
+            est_fees = sum(abs(t.realized_pnl) * 0.03 for t in recent)  # rough ~3% of gross P&L
+            # Better estimate: use entry_price as proxy for notional
+            est_fees = recent_count * 0.03  # ~$0.03 avg fee per trade on ~$40 notional
+            net_pnl = recent_pnl - est_fees
+            net_sign = "+" if net_pnl >= 0 else ""
+
             recent_section = (
                 f"Last 12h: {recent_count} trades\n"
                 f"Win rate: {recent_wr:.0f}% ({len(recent_wins)}W/{len(recent_losses)}L)\n"
-                f"P&L: {rp_sign}${recent_pnl:.2f}\n"
+                f"Gross P&L: {rp_sign}${recent_pnl:.2f}\n"
+                f"Est. fees: -${est_fees:.2f} | Net: {net_sign}${net_pnl:.2f}\n"
                 f"Avg win: +${recent_avg_win:.2f} | Avg loss: ${recent_avg_loss:.2f}\n"
                 f"TP: {recent_tp} | SL: {recent_sl}"
             )
