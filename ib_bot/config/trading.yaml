@@ -6,19 +6,19 @@
 # IB Connection
 ib_connection:
   host: "127.0.0.1"
-  port: 7497                    # TWS paper: 7497, TWS live: 7496, IB Gateway paper: 4002, live: 4001
+  port: 4002                    # TWS paper: 7497, TWS live: 7496, IB Gateway paper: 4002, live: 4001
   client_id: 1
   timeout: 30
   readonly: false
   reconnect_delay: 5
   max_reconnect_attempts: 10
 
-# Contracts to trade (start with MES for paper)
+# Contracts to trade (MES + MNQ micros for $2K account)
 contracts:
   - symbol: MES
     enabled: true
   - symbol: MNQ
-    enabled: false
+    enabled: true
   - symbol: ES
     enabled: false
   - symbol: NQ
@@ -29,8 +29,8 @@ opening_range:
   or_start: "09:30"            # ET - market open
   or_end: "09:45"              # ET - 15 min opening range
   bar_size: "1 min"
-  min_range_ticks: 8           # Skip too-flat ranges
-  max_range_ticks: 80          # Skip too-volatile ranges
+  min_range_ticks: 4           # Skip too-flat ranges (lowered for more setups)
+  max_range_ticks: 120         # Skip too-volatile ranges (raised to accept wider ranges)
   timezone: "US/Eastern"
 
 # Strategy
@@ -47,15 +47,15 @@ strategy:
 stops:
   stop_type: "or_midpoint"     # Stop at OR midpoint
   stop_buffer_ticks: 2         # Buffer below stop level
-  reward_risk_ratio: "1.5"     # R:R 1:1.5
+  reward_risk_ratio: "2.0"     # R:R 1:2.0 (Config L optimal)
   trailing_enabled: false
   eod_flatten_time: "15:45"    # ET - flatten all before close
 
 # Risk Management
 risk:
-  max_risk_per_trade_usd: "500"
-  max_daily_loss_usd: "1000"
-  max_contracts_per_trade: 2
+  max_risk_per_trade_usd: "50"     # Sized for $2K account (Size-E)
+  max_daily_loss_usd: "200"        # Reduced proportionally for $2K
+  max_contracts_per_trade: 1       # 1 contract max for $2K account
   max_trades_per_day: 2
   consecutive_stops_halt: 2    # Halt after N consecutive stops
 
@@ -63,6 +63,13 @@ risk:
 notifications:
   enabled: true
   ntfy_topic: "${NTFY_TOPIC:}"
+
+# ATR Filter (skip extreme volatility days)
+atr_filter:
+  enabled: true
+  lookback_days: 20            # Rolling window of daily ATR values
+  low_percentile: 20.0         # Skip if ATR below this percentile
+  high_percentile: 80.0        # Skip if ATR above this percentile
 
 # Logging
 logging:

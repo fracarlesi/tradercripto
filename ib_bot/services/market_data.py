@@ -16,8 +16,8 @@ from .base import BaseService
 from .message_bus import MessageBus
 from .ib_client import IBClient
 from ..config.loader import OpeningRangeConfig
-from ..core.contracts import CONTRACTS, FuturesSpec
-from ..core.enums import Direction, SessionPhase, Topic
+from ..core.contracts import FuturesSpec
+from ..core.enums import SessionPhase, Topic
 from ..core.models import FuturesMarketState, ORBRange
 
 logger = logging.getLogger(__name__)
@@ -118,6 +118,7 @@ class MarketDataService(BaseService):
         self._or_range: Dict[str, Optional[ORBRange]] = {}
         self._or_published: Dict[str, bool] = {}
         self._bar_subscriptions: Dict[str, Any] = {}
+        self._last_bar_count: Dict[str, int] = {}
 
         for symbol in symbols:
             self._vwap[symbol] = VWAPCalculator()
@@ -125,6 +126,7 @@ class MarketDataService(BaseService):
             self._or_bars[symbol] = []
             self._or_range[symbol] = None
             self._or_published[symbol] = False
+            self._last_bar_count[symbol] = 0
 
     async def _on_start(self) -> None:
         for symbol in self._symbols:
@@ -145,6 +147,7 @@ class MarketDataService(BaseService):
                 self._vwap[symbol].update(h, l, c, v)
                 self._atr[symbol].update(h, l, c)
 
+            self._last_bar_count[symbol] = len(bars)
             self._logger.info("Subscribed to %s bars (%d historical)", symbol, len(bars))
 
     async def _on_stop(self) -> None:
@@ -158,50 +161,50 @@ class MarketDataService(BaseService):
             if not bars:
                 continue
 
-            # Process new bars
+            current_count = len(bars)
+            last_count = self._last_bar_count.get(symbol, 0)
+
+            if current_count <= last_count:
+                continue  # No new bars
+
+            # Process only new bars
             spec = self._ib_client.get_spec(symbol)
-            await self._process_bars(symbol, bars, spec)
+            for i in range(last_count, current_count):
+                bar = bars[i]
+                h = Decimal(str(bar.high))
+                l = Decimal(str(bar.low))
+                c = Decimal(str(bar.close))
+                v = Decimal(str(bar.volume))
 
-    async def _process_bars(
-        self, symbol: str, bars: Any, spec: FuturesSpec
-    ) -> None:
-        """Process latest bars: update indicators and check OR window."""
-        if not bars:
-            return
+                self._vwap[symbol].update(h, l, c, v)
+                self._atr[symbol].update(h, l, c)
 
-        latest = bars[-1]
-        h = Decimal(str(latest.high))
-        l = Decimal(str(latest.low))
-        c = Decimal(str(latest.close))
-        v = Decimal(str(latest.volume))
+                # Check if bar is in OR window
+                bar_time = bar.date if hasattr(bar, "date") else None
+                if bar_time and self._is_in_or_window(bar_time):
+                    self._or_bars[symbol].append(bar)
 
-        # Update indicators
-        vwap = self._vwap[symbol].update(h, l, c, v)
-        atr = self._atr[symbol].update(h, l, c)
+                # Check if OR window just ended
+                if bar_time and self._is_or_window_ended(bar_time) and not self._or_published[symbol]:
+                    await self._calculate_and_publish_or(symbol, spec)
 
-        # Check if bar is in OR window
-        bar_time = latest.date if hasattr(latest, "date") else None
-        if bar_time and self._is_in_or_window(bar_time):
-            self._or_bars[symbol].append(latest)
+            self._last_bar_count[symbol] = current_count
 
-        # Check if OR window just ended
-        if bar_time and self._is_or_window_ended(bar_time) and not self._or_published[symbol]:
-            await self._calculate_and_publish_or(symbol, spec)
+            # Publish latest market state using the LAST bar
+            latest = bars[-1]
+            bar_time = latest.date if hasattr(latest, "date") else None
+            phase = self._get_session_phase(bar_time) if bar_time else SessionPhase.CLOSED
 
-        # Determine session phase
-        phase = self._get_session_phase(bar_time) if bar_time else SessionPhase.CLOSED
-
-        # Publish market state
-        state = FuturesMarketState(
-            symbol=symbol,
-            last_price=c,
-            vwap=vwap,
-            atr_14=atr,
-            volume=v,
-            session_phase=phase,
-            timestamp=datetime.now(timezone.utc),
-        )
-        await self.publish(Topic.MARKET_DATA, state.model_dump())
+            state = FuturesMarketState(
+                symbol=symbol,
+                last_price=Decimal(str(latest.close)),
+                vwap=self._vwap[symbol].vwap,
+                atr_14=self._atr[symbol].atr,
+                volume=Decimal(str(latest.volume)),
+                session_phase=phase,
+                timestamp=datetime.now(timezone.utc),
+            )
+            await self.publish(Topic.MARKET_DATA, state.model_dump())
 
     def _is_in_or_window(self, bar_time: Any) -> bool:
         """Check if bar timestamp falls within Opening Range window."""
@@ -329,4 +332,5 @@ class MarketDataService(BaseService):
             self._or_bars[symbol].clear()
             self._or_range[symbol] = None
             self._or_published[symbol] = False
+            self._last_bar_count[symbol] = 0
         self._logger.info("Session state reset for all symbols")

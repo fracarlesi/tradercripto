@@ -14,7 +14,7 @@ Entry point: python -m ib_bot.main
 import asyncio
 import logging
 import logging.handlers
-import os
+
 import signal
 import sys
 from datetime import datetime, time, timezone
@@ -33,6 +33,7 @@ from .services.execution_engine import ExecutionEngine
 from .services.risk_manager import RiskManager
 from .services.kill_switch import KillSwitchService
 from .services.notifications import NotificationService
+from .services.atr_filter import ATRFilter
 from .strategies.orb import ORBStrategy
 
 logger = logging.getLogger(__name__)
@@ -127,6 +128,7 @@ class IBBot:
             strategy_config=config.strategy,
             stops_config=config.stops,
         )
+        self._atr_filter = ATRFilter(config.atr_filter)
 
     # =========================================================================
     # Startup Diagnostics
@@ -182,6 +184,11 @@ class IBBot:
             f"  R:R ratio:       1:{cfg.stops.reward_risk_ratio}",
             f"  Trailing:        {cfg.stops.trailing_enabled}",
             f"  EOD flatten:     {cfg.stops.eod_flatten_time} ET",
+            "",
+            "  --- ATR Filter ---",
+            f"  Enabled:         {cfg.atr_filter.enabled}",
+            f"  Lookback:        {cfg.atr_filter.lookback_days} days",
+            f"  Range:           p{cfg.atr_filter.low_percentile:.0f} - p{cfg.atr_filter.high_percentile:.0f}",
             "",
             "  --- Session ---",
             f"  UTC time:        {now_utc.strftime('%Y-%m-%d %H:%M:%S')}",
@@ -351,6 +358,7 @@ class IBBot:
             self._kill_switch.reset_daily()
             self._execution.reset_daily()
             self._market_data.reset_session()
+            self._atr_filter.reset_daily()
             logger.info("Daily reset complete - ready for new session")
 
         elif new == SessionPhase.OPENING_RANGE:
@@ -380,6 +388,19 @@ class IBBot:
                     )
                 else:
                     logger.warning("OR RANGE [%s]: not detected", symbol)
+
+            # ATR percentile filter — check once at start of active trading
+            if self._atr_filter.is_enabled and not self._atr_filter.today_checked:
+                # Use ATR from the first enabled symbol as the reference
+                for symbol in self._symbols:
+                    atr_value = self._market_data.get_atr(symbol)
+                    if atr_value > 0:
+                        allowed = self._atr_filter.record_and_check(atr_value)
+                        if not allowed:
+                            await self._notifications.notify_session(
+                                f"ATR filter: skipping today (ATR={float(atr_value):.4f})"
+                            )
+                        break
 
         elif new == SessionPhase.EOD_FLATTEN:
             # Flatten all positions
@@ -462,6 +483,10 @@ class IBBot:
             return
 
         if not self._kill_switch.is_trading_allowed:
+            return
+
+        # ATR filter: skip if today's volatility is out of range
+        if self._atr_filter.is_enabled and self._atr_filter.today_checked and not self._atr_filter.today_allowed:
             return
 
         payload = msg.payload if hasattr(msg, "payload") else msg  # type: ignore[union-attr]

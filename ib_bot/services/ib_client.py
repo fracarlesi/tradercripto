@@ -13,8 +13,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Callable, Dict, List, Optional
 
-from ib_insync import IB, Contract, Fill, Future, MarketOrder, LimitOrder, Order, Trade
-from ib_insync import util
+from ib_insync import IB, Contract, Fill, Future, MarketOrder, Trade
 
 from ..config.loader import IBConnectionConfig
 from ..core.contracts import CONTRACTS, FuturesSpec
@@ -26,7 +25,7 @@ logger = logging.getLogger(__name__)
 # Callback type aliases
 OrderStatusCallback = Callable[[Trade], None]
 FillCallback = Callable[[Trade, Fill], None]
-ErrorCallback = Callable[[int, str, str], None]
+ErrorCallback = Callable[[int, int, str], None]
 
 
 def _front_month_expiry() -> str:
@@ -90,6 +89,9 @@ class IBClient:
                 self._connected = True
                 self._reconnect_count = 0
                 self._subscribe_events()
+                # Log managed accounts for verification
+                accounts = self._ib.managedAccounts()
+                logger.info("Connected accounts: %s", accounts)
                 logger.info("Connected to IB successfully")
                 return
             except Exception as e:
@@ -113,9 +115,24 @@ class IBClient:
             logger.info("Disconnected from IB")
 
     def _on_disconnect(self) -> None:
-        """Handle unexpected disconnection."""
+        """Handle unexpected disconnection - attempt reconnect."""
         self._connected = False
         logger.warning("Disconnected from IB unexpectedly")
+        # Schedule reconnection attempt
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._auto_reconnect())
+        except RuntimeError:
+            logger.warning("No event loop - cannot auto-reconnect")
+
+    async def _auto_reconnect(self) -> None:
+        """Attempt to reconnect after unexpected disconnect."""
+        await asyncio.sleep(5.0)  # Wait before reconnecting
+        try:
+            await self.reconnect()
+            logger.info("Auto-reconnect successful")
+        except Exception as e:
+            logger.error("Auto-reconnect failed: %s", e)
 
     # =========================================================================
     # Event Handling
@@ -331,7 +348,6 @@ class IBClient:
         """
         contract = await self.qualify_contract(symbol)
         action = "BUY" if direction == Direction.LONG else "SELL"
-        reverse_action = "SELL" if direction == Direction.LONG else "BUY"
 
         bracket = self._ib.bracketOrder(
             action=action,

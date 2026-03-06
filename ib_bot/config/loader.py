@@ -337,6 +337,46 @@ class NotificationsConfig(BaseConfig):
         return self.ntfy_topic or os.environ.get("NTFY_TOPIC", "")
 
 
+class ATRFilterConfig(BaseConfig):
+    """ATR percentile filter configuration.
+
+    Skips trading on days where the OR-period ATR is in extreme
+    percentiles of recent history (too quiet or too volatile).
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable ATR percentile filter",
+    )
+    lookback_days: int = Field(
+        default=20,
+        ge=5,
+        le=100,
+        description="Rolling window of daily ATR values for percentile calculation",
+    )
+    low_percentile: float = Field(
+        default=20.0,
+        ge=0.0,
+        le=50.0,
+        description="Skip if ATR below this percentile (too quiet)",
+    )
+    high_percentile: float = Field(
+        default=80.0,
+        ge=50.0,
+        le=100.0,
+        description="Skip if ATR above this percentile (too volatile)",
+    )
+
+    @model_validator(mode="after")
+    def validate_percentiles(self) -> "ATRFilterConfig":
+        if self.low_percentile >= self.high_percentile:
+            raise ValueError(
+                f"low_percentile ({self.low_percentile}) must be less than "
+                f"high_percentile ({self.high_percentile})"
+            )
+        return self
+
+
 class LoggingConfig(BaseConfig):
     """Logging configuration."""
 
@@ -371,6 +411,7 @@ class TradingConfig(BaseConfig):
     strategy: StrategyConfig = Field(default_factory=StrategyConfig)
     stops: StopsConfig = Field(default_factory=StopsConfig)
     risk: RiskConfig = Field(default_factory=RiskConfig)
+    atr_filter: ATRFilterConfig = Field(default_factory=ATRFilterConfig)
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
