@@ -57,8 +57,8 @@ class BacktestConfig:
     exclude_symbols: set[str] = field(default_factory=set)
 
     # Exit management
-    momentum_exit_min_profit_pct: float = 0.001  # 0.1% — min profit before momentum_fade exit
-    breakeven_threshold_pct: float = 0.012        # 1.2% — profit at which SL moves to entry
+    momentum_exit_min_profit_pct: float = 0.09  # 9.0% — effectively disabled (matches trading.yaml)
+    breakeven_threshold_pct: float = 0.01        # 1.0% — profit at which SL moves to entry
 
     # Trailing stop (after breakeven)
     trailing_atr_mult: float = 1.5
@@ -79,6 +79,9 @@ class BacktestConfig:
 
     # Regime exit grace period in bars
     regime_exit_grace_bars: int = 1
+
+    # ML model
+    ml_threshold: float = 0.58  # ml_model.min_probability from trading.yaml
 
     # CLI overridable
     timeframe: str = "15m"
@@ -110,6 +113,7 @@ def load_config(**overrides: object) -> BacktestConfig:
     execution = raw.get("execution", {})
     roi_raw = stops.get("minimal_roi", {})
     mom_raw = stops.get("momentum_exit", {})
+    ml_cfg = raw.get("ml_model", {})
 
     # Determine entry fee based on execution.entry_mode
     entry_mode = execution.get("entry_mode", "taker")
@@ -143,9 +147,12 @@ def load_config(**overrides: object) -> BacktestConfig:
         cooldown_minutes=10,
         cooldown_after_sl_minutes=30,
         max_trades_per_symbol_per_day=2,
+        momentum_exit_min_profit_pct=mom_raw.get("min_profit_pct", 9.0) / 100,
         momentum_rsi_slope_threshold=mom_raw.get("rsi_slope_threshold", 1.0),
         momentum_exit_min_age_bars=1,
+        breakeven_threshold_pct=stops.get("breakeven_threshold_pct", 1.0) / 100,
         regime_exit_grace_bars=max(1, regime.get("regime_exit_grace_minutes", 5) // 15),
+        ml_threshold=ml_cfg.get("min_probability", 0.58),
     )
 
     # Apply CLI overrides

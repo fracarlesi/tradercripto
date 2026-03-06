@@ -150,14 +150,20 @@ def run(args: argparse.Namespace) -> None:
     """Run a full replay simulation."""
     days = args.days if args.days is not None else 7
     tf = args.timeframe or "15m"
-    account = args.account or 86.0
-    threshold = getattr(args, "threshold", None) or 0.52
     use_kelly = getattr(args, "kelly", False)
     use_ml = not getattr(args, "no_ml", False)
     verbose = getattr(args, "verbose", False)
     bar_log_path = getattr(args, "bar_log", None)
 
-    cfg = load_config(timeframe=tf, lookback_days=days, account_size=account)
+    # Load config from trading.yaml first, then apply CLI overrides
+    cli_overrides: dict[str, object] = {"timeframe": tf, "lookback_days": days}
+    if args.account is not None:
+        cli_overrides["account_size"] = args.account
+    cfg = load_config(**cli_overrides)
+
+    # ML threshold: CLI flag > trading.yaml (cfg.ml_threshold)
+    cli_threshold = getattr(args, "threshold", None)
+    threshold = cli_threshold if cli_threshold is not None else cfg.ml_threshold
 
     warmup = {"5m": 650, "15m": 200, "1h": 200}.get(tf, 200)
     cfg.warmup_bars = warmup
@@ -258,6 +264,11 @@ def run(args: argparse.Namespace) -> None:
                 continue
             bar_idx = asset_time_idx[asset][ts]
             if bar_idx < warmup:
+                continue
+
+            # Fix 3: ATR vs SL gate — skip if single candle range exceeds stop loss
+            atr_pct_val = ind["atr_pct"][bar_idx]
+            if not np.isnan(atr_pct_val) and atr_pct_val > cfg.sl_pct * 100:
                 continue
 
             # PATH 1: EMA crossover (TREND only)

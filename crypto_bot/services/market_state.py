@@ -448,6 +448,7 @@ class MarketStateService(BaseService):
                     result[sym] = {
                         "funding": float(asset_ctx.get("funding", 0)),
                         "openInterest": float(asset_ctx.get("openInterest", 0)),
+                        "dayNtlVlm": float(asset_ctx.get("dayNtlVlm", 0)),
                     }
 
             return result
@@ -628,6 +629,7 @@ class MarketStateService(BaseService):
                 ema21_1h=ema21_1h_val,
                 funding_rate=Decimal(str(asset_ctx.get("funding", 0))) if asset_ctx else None,
                 open_interest=Decimal(str(asset_ctx.get("openInterest", 0))) if asset_ctx else None,
+                volume_24h=Decimal(str(asset_ctx.get("dayNtlVlm", 0))) if asset_ctx else None,
                 regime=regime,
                 trend_direction=trend_direction,
                 bars_count=len(close),

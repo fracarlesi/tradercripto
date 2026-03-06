@@ -128,6 +128,7 @@ class MarketState(BaseModel):
     # Exchange data (live only — used as ML feature)
     funding_rate: Optional[Decimal] = Field(None, description="Current funding rate for symbol")
     open_interest: Optional[Decimal] = Field(None, description="Current open interest in USD")
+    volume_24h: Optional[Decimal] = Field(None, ge=0, description="24h notional volume in USD")
 
     # Derived
     regime: Regime = Field(..., description="Detected market regime")

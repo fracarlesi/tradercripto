@@ -64,6 +64,8 @@ universe:
     - "LAUNCHCOIN"
     # No candle data available
     - "OM"
+    # Gold-backed token — doesn't respond to crypto momentum signals
+    - "PAXG"
 
   assets:
     - symbol: "BTC"
@@ -125,8 +127,8 @@ kill_switch:
 # Stops - Fixed TP/SL
 # -----------------------------------------------------------------------------
 stops:
-  stop_loss_pct: 1.0       # Sweep-optimal — 1:2.5 R:R
-  take_profit_pct: 2.5     # Widened from 2.0 — let winners run (R:R 1:2.5)
+  stop_loss_pct: 1.0       # Grid-search optimal across all configs
+  take_profit_pct: 3.5     # 90d sweep optimal — R:R 1:3.5, PF 3.16, Sharpe 60.7
   breakeven_threshold_pct: 1.0
   # Note: TP/SL are always server-side trigger orders (hardcoded in execution_engine)
 
@@ -297,7 +299,7 @@ metrics:
 ml_model:
   enabled: true
   model_path: "models/trade_model.joblib"
-  min_probability: 0.58        # Better risk-adjusted: fewer trades, lower fee drag, higher Sharpe
+  min_probability: 0.65        # 90d sweep optimal — 65% WR, PF 3.16, Sharpe 60.7, MaxDD $66
   retrain_days: 90             # 3× training window to reduce overfitting
   retrain_interval_days: 3     # Ogni quanto ri-addestrare
 

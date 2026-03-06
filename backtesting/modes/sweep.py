@@ -30,11 +30,11 @@ from backtesting.stats import BacktestResult
 # ---------------------------------------------------------------------------
 
 SWEEP_GRID: dict[str, list[float]] = {
-    "tp_pct":                       [0.008, 0.012, 0.016, 0.020],   # 0.8% - 2.0%
-    "sl_pct":                       [0.004, 0.006, 0.008, 0.010],   # 0.4% - 1.0%
-    "threshold":                    [0.52, 0.55],                    # ML probability (reduced)
-    "momentum_exit_min_profit_pct": [0.001, 0.002, 0.003, 0.005],   # 0.1% - 0.5%
-    "breakeven_threshold_pct":      [0.003, 0.005, 0.008, 0.012],   # 0.3% - 1.2%
+    "tp_pct":                       [0.015, 0.020, 0.025, 0.030, 0.035],  # 1.5% - 3.5%
+    "sl_pct":                       [0.006, 0.008, 0.010, 0.012, 0.015],  # 0.6% - 1.5%
+    "threshold":                    [0.55, 0.58, 0.60, 0.62, 0.65],       # ML probability
+    "momentum_exit_min_profit_pct": [0.09],                                # 9.0% = disabled (production)
+    "breakeven_threshold_pct":      [0.010],                               # 1.0% = production value
 }
 
 # Fixed slippage (middle value) to keep grid manageable
@@ -161,8 +161,7 @@ def _simulate_combo(
 def run(args: argparse.Namespace) -> None:
     days = args.days if args.days is not None else 30
     tf = args.timeframe or "15m"
-    account = args.account or 86.0
-    cfg = load_config(timeframe=tf, lookback_days=days, account_size=account)
+    cfg = load_config(timeframe=tf, lookback_days=days, account_size=args.account)
 
     warmup = {"5m": 650, "15m": 200, "1h": 200}.get(tf, 200)
     cfg.warmup_bars = warmup

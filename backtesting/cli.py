@@ -51,8 +51,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp_replay = sub.add_parser("replay",
                                help="Replay historical data through full live-bot logic")
     add_common(sp_replay)
-    sp_replay.add_argument("--threshold", type=float, default=0.52,
-                           help="ML probability threshold (default: 0.52)")
+    sp_replay.add_argument("--threshold", type=float, default=None,
+                           help="ML probability threshold (default: from trading.yaml)")
     sp_replay.add_argument("--kelly", action="store_true",
                            help="Use Kelly criterion for position sizing")
     sp_replay.add_argument("--no-ml", action="store_true", dest="no_ml",

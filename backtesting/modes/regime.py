@@ -179,7 +179,7 @@ def run(args: argparse.Namespace) -> None:
     days = args.days if args.days is not None else 2
     tf = args.timeframe or "15m"
     cfg = load_config(timeframe=tf, lookback_days=days,
-                      account_size=args.account or 86.0)
+                      account_size=args.account)
 
     tf_scale = {"5m": 3, "15m": 1, "1h": 1}.get(tf, 1)
     warmup = {"5m": 650, "15m": 200, "1h": 200}.get(tf, 200)

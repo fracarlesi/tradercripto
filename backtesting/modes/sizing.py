@@ -37,7 +37,7 @@ def run(args: argparse.Namespace) -> None:
     cfg = load_config(
         timeframe=tf,
         lookback_days=days,
-        account_size=args.account or 86.0,
+        account_size=args.account,
     )
 
     # Scale indicator periods for sub-15m timeframes

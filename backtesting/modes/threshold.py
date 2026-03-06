@@ -213,8 +213,7 @@ THRESHOLDS = [0.50, 0.52, 0.55, 0.58, 0.60, 0.62, 0.65, 0.68, 0.70]
 def run(args: argparse.Namespace) -> None:
     days = args.days if args.days is not None else 30
     tf = args.timeframe or "15m"
-    account = args.account or 86.0
-    cfg = load_config(timeframe=tf, lookback_days=days, account_size=account)
+    cfg = load_config(timeframe=tf, lookback_days=days, account_size=args.account)
 
     warmup = {"5m": 650, "15m": 200, "1h": 200}.get(tf, 200)
     cfg.warmup_bars = warmup
@@ -314,6 +313,11 @@ def run(args: argparse.Namespace) -> None:
                 continue
             bar_idx = asset_time_idx[asset][ts]
             if bar_idx < warmup:
+                continue
+
+            # Fix 3: ATR vs SL gate — skip if single candle range exceeds stop loss
+            atr_pct_val = ind["atr_pct"][bar_idx]
+            if not np.isnan(atr_pct_val) and atr_pct_val > cfg.sl_pct * 100:
                 continue
 
             # PATH 1: EMA crossover (TREND only)

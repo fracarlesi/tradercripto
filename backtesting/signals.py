@@ -105,12 +105,15 @@ def signal_ema_crossover_only(ind: dict, idx: int) -> int:
     return 0
 
 
-def signal_ema_crossover_entry(ind: dict, idx: int) -> int:
+def signal_ema_crossover_entry(ind: dict, idx: int,
+                               min_ema_gap_pct: float = 0.001) -> int:
     """Only fires on the actual EMA9/EMA21 crossover bar.
 
     Unlike signal_ema_crossover_only (state-based), this detects only the
     MOMENT of crossover — preventing data leakage where a 200-bar trend
     would generate 200 identical labels.
+
+    Fix 4: Requires minimum EMA gap (default 0.10%) to filter noise crossovers.
 
     Returns: 1=bullish crossover, -1=bearish crossover, 0=no crossover
     """
@@ -123,8 +126,14 @@ def signal_ema_crossover_entry(ind: dict, idx: int) -> int:
     if np.isnan(prev_ema9) or np.isnan(curr_ema9) or np.isnan(prev_ema21) or np.isnan(curr_ema21):
         return 0
     if prev_ema9 <= prev_ema21 and curr_ema9 > curr_ema21:
+        # Fix 4: Check minimum EMA gap
+        if curr_ema21 > 0 and abs(curr_ema9 - curr_ema21) / curr_ema21 < min_ema_gap_pct:
+            return 0
         return 1   # Bullish crossover
     if prev_ema9 >= prev_ema21 and curr_ema9 < curr_ema21:
+        # Fix 4: Check minimum EMA gap
+        if curr_ema21 > 0 and abs(curr_ema9 - curr_ema21) / curr_ema21 < min_ema_gap_pct:
+            return 0
         return -1  # Bearish crossover
     return 0
 
@@ -194,10 +203,14 @@ def signal_volume_breakout_entry(ind: dict, idx: int,
     if not (rsi_min <= rsi <= rsi_max):
         return 0
 
-    # Direction: price momentum
+    # Direction: price momentum + Fix 5: RSI direction alignment
     if close > open_price and close > prev_close:
+        if rsi > 70:  # Don't long when already overbought
+            return 0
         return 1   # LONG breakout
     if close < open_price and close < prev_close:
+        if rsi < 30:  # Don't short when already oversold
+            return 0
         return -1  # SHORT breakout
 
     return 0
@@ -264,17 +277,21 @@ def signal_momentum_burst_entry(ind: dict, idx: int,
         return 0
 
     # LONG: RSI accelerating up, price above EMA9, bullish candle, not overbought
+    # Fix 5: Hard cap RSI < 70 for LONG (don't buy into overbought)
     if (rsi_slope >= min_rsi_slope
             and close > ema9
             and close > open_price
-            and rsi_curr <= max_rsi_entry):
+            and rsi_curr <= max_rsi_entry
+            and rsi_curr < 70):
         return 1
 
     # SHORT: RSI accelerating down, price below EMA9, bearish candle, not oversold
+    # Fix 5: Hard floor RSI > 30 for SHORT (don't short into oversold)
     if (rsi_slope <= -min_rsi_slope
             and close < ema9
             and close < open_price
-            and rsi_curr >= (100 - max_rsi_entry)):
+            and rsi_curr >= (100 - max_rsi_entry)
+            and rsi_curr > 30):
         return -1
 
     return 0

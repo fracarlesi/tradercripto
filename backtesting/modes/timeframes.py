@@ -34,7 +34,7 @@ TF_CONFIG = {
 def run(args: argparse.Namespace) -> None:
     days = args.days if args.days is not None else 7
     cfg_base = load_config(lookback_days=days,
-                           account_size=args.account or 86.0)
+                           account_size=args.account)
 
     print("=" * 80)
     print(f"TIMEFRAME BACKTEST: 5m vs 15m vs 1h - Last {days}d")

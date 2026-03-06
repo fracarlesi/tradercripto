@@ -62,13 +62,17 @@ def _score(
 def run_comparison(
     days: int = 7,
     account: float = 64.0,
-    threshold: float = 0.52,
+    threshold: float | None = None,
     variants: list[ConfigVariant] | None = None,
 ) -> None:
     tf = "15m"
     cfg_base = load_config(timeframe=tf, lookback_days=days, account_size=account)
     warmup = 200
     cfg_base.warmup_bars = warmup
+
+    # ML threshold: explicit param > trading.yaml default
+    if threshold is None:
+        threshold = cfg_base.ml_threshold
 
     # Default variants if not specified
     if variants is None:
@@ -154,6 +158,11 @@ def run_comparison(
                 continue
             bidx = asset_time_idx[asset][ts]
             if bidx < warmup:
+                continue
+
+            # Fix 3: ATR vs SL gate — skip if single candle range exceeds stop loss
+            atr_pct_val = ind["atr_pct"][bidx]
+            if not np.isnan(atr_pct_val) and atr_pct_val > cfg.sl_pct * 100:
                 continue
 
             # PATH 1: EMA crossover (TREND only)

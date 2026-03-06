@@ -810,8 +810,21 @@ class ConservativeBot:
         regime_skipped: int = 0
         breakout_evaluated: int = 0
         burst_evaluated: int = 0
+        sl_pct_frac = self.config.stop_loss_pct / 100  # e.g. 1.0 -> 0.01
+        min_ema_gap_pct = 0.001  # Fix 4: minimum 0.10% EMA9/EMA21 gap
+
         for symbol, state in states.items():
             if symbol in symbols_with_positions:
+                continue
+
+            # Fix 2: Enforce min_volume_24h filter
+            if state.volume_24h is not None and float(state.volume_24h) < self.config.min_volume_24h:
+                logger.debug("Skipping %s: 24h volume $%.0f < $%.0f min", symbol, float(state.volume_24h), self.config.min_volume_24h)
+                continue
+
+            # Fix 3: ATR vs SL gate — skip if single candle range exceeds stop loss
+            if state.atr_pct is not None and float(state.atr_pct) > self.config.stop_loss_pct:
+                logger.debug("Skipping %s: ATR %.2f%% > SL %.2f%%", symbol, float(state.atr_pct), self.config.stop_loss_pct)
                 continue
 
             best_prob = -1.0
@@ -828,6 +841,14 @@ class ConservativeBot:
             if state.regime == Regime.TREND:
                 direction = state.trend_direction
                 if direction != Direction.FLAT:
+                    # Fix 4: Minimum EMA gap — skip noise crossovers
+                    ema_gap_ok = True
+                    if state.ema9 is not None and state.ema21 is not None and float(state.ema21) > 0:
+                        ema_gap = abs(float(state.ema9) - float(state.ema21)) / float(state.ema21)
+                        if ema_gap < min_ema_gap_pct:
+                            ema_gap_ok = False
+                            logger.debug("Skipping %s EMA: gap %.4f%% < %.4f%% min", symbol, ema_gap * 100, min_ema_gap_pct * 100)
+
                     # Gate: Funding rate filter (skip if paying excessive funding)
                     funding_ok = True
                     if direction == Direction.LONG and state.funding_rate and float(state.funding_rate) > 0.0005:
@@ -848,7 +869,7 @@ class ConservativeBot:
                     if direction == Direction.SHORT and state.rsi and float(state.rsi) < 35:
                         rsi_ok = False
 
-                    if funding_ok and mtf_aligned and rsi_ok:
+                    if funding_ok and mtf_aligned and rsi_ok and ema_gap_ok:
                         dir_float = 1.0 if direction == Direction.LONG else -1.0
                         features = self._ml_model.extract_features(
                             state, signal_type=0.0, direction=dir_float,
@@ -873,6 +894,11 @@ class ConservativeBot:
                 if vb_direction == Direction.LONG and state.funding_rate and float(state.funding_rate) > 0.0005:
                     vb_direction = Direction.FLAT
                 if vb_direction == Direction.SHORT and state.funding_rate and float(state.funding_rate) < -0.0005:
+                    vb_direction = Direction.FLAT
+                # Fix 5: RSI direction alignment — don't long overbought, don't short oversold
+                if vb_direction == Direction.LONG and state.rsi and float(state.rsi) > 70:
+                    vb_direction = Direction.FLAT
+                if vb_direction == Direction.SHORT and state.rsi and float(state.rsi) < 30:
                     vb_direction = Direction.FLAT
                 if vb_direction != Direction.FLAT and self._is_volume_breakout(state):
                     breakout_evaluated += 1
@@ -901,6 +927,11 @@ class ConservativeBot:
                     if mb_direction == Direction.LONG and state.funding_rate and float(state.funding_rate) > 0.0005:
                         mb_direction = Direction.FLAT
                     if mb_direction == Direction.SHORT and state.funding_rate and float(state.funding_rate) < -0.0005:
+                        mb_direction = Direction.FLAT
+                    # Fix 5: RSI direction alignment — don't long overbought, don't short oversold
+                    if mb_direction == Direction.LONG and state.rsi and float(state.rsi) > 70:
+                        mb_direction = Direction.FLAT
+                    if mb_direction == Direction.SHORT and state.rsi and float(state.rsi) < 30:
                         mb_direction = Direction.FLAT
                     if mb_direction != Direction.FLAT:
                         burst_evaluated += 1
