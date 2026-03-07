@@ -212,3 +212,6 @@ __marimo__/
 # Claude
 .claude/
 .mcp.json
+
+# Deploy secrets (VPS IP, SSH user, paths)
+deploy.env

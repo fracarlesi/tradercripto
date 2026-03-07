@@ -96,14 +96,14 @@ cd crypto_bot && python3 main.py    # Bot (live)
 
 ---
 
-## Deploy Workflow: Locale -> Hetzner
+## Deploy Workflow: Locale -> VPS
 
 1. **Sviluppo locale**: modifica codice
 2. **Test**: `cd crypto_bot && python3 -m pytest tests/ -v`
 3. **Lint**: `pyright crypto_bot/ && cd crypto_bot && ruff check .`
 4. **Commit + push**: solo dopo che tutti i test passano
-5. **Deploy**: `./deploy.sh` (rsync + docker rebuild)
-6. **Verifica**: `ssh root@<VPS_IP_REDACTED> "cd /opt/hlquantbot && docker compose logs -f bot"`
+5. **Deploy**: `./deploy.sh` (rsync + docker rebuild — config in `deploy.env`)
+6. **Verifica**: vedi comandi in `deploy.env` per IP e path
 
 ---
 
@@ -172,18 +172,15 @@ NTFY_TOPIC=...
 
 ---
 
-## Hetzner VPS (Production)
+## VPS (Production)
 
-| Risorsa | Valore |
-|---------|--------|
-| **IP** | `<VPS_IP_REDACTED>` |
-| **SSH** | `ssh root@<VPS_IP_REDACTED>` |
-| **Deploy Dir** | `/opt/hlquantbot` |
+Connection details are in `deploy.env` (gitignored). See `deploy.env.example` for template.
 
 ### Comandi Server
 ```bash
-ssh root@<VPS_IP_REDACTED>
-cd /opt/hlquantbot
+source deploy.env
+ssh $VPS_USER@$VPS_IP
+cd $DEPLOY_DIR
 docker compose ps                # Status
 docker compose logs -f bot       # Log bot
 docker compose restart bot       # Restart
