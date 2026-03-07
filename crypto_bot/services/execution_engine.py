@@ -2381,7 +2381,7 @@ class ExecutionEngineService(BaseService):
         1. Calculate current P&L % using Decimal arithmetic.
         2. If P&L % >= BREAKEVEN_THRESHOLD_PCT:
            a. Cancel the old SL trigger on the exchange.
-           b. Place a new SL trigger at the entry price.
+           b. Only if the cancel succeeds, place a new SL trigger at the entry price.
            c. Mark the position as breakeven_activated.
         """
         from decimal import Decimal
@@ -2427,7 +2427,7 @@ class ExecutionEngineService(BaseService):
                 float(pnl_pct),
             )
 
-            # 1) Cancel old SL trigger
+            # 1) Cancel old SL trigger — MUST succeed before placing new one
             if position.sl_order_id:
                 try:
                     await self.client.cancel_order(symbol, int(position.sl_order_id))
@@ -2436,9 +2436,16 @@ class ExecutionEngineService(BaseService):
                     )
                 except Exception as e:
                     self._logger.warning(
-                        "Failed to cancel old SL %s for %s: %s",
+                        "Failed to cancel old SL %s for %s: %s — skipping breakeven to avoid duplicate orders",
                         position.sl_order_id, symbol, e,
                     )
+                    continue  # Do NOT place new SL if cancel failed
+            else:
+                self._logger.warning(
+                    "No existing SL order_id for %s — skipping breakeven to avoid duplicate orders",
+                    symbol,
+                )
+                continue  # Do NOT place new SL without cancelling old one first
 
             # 2) Place new SL trigger at entry (breakeven)
             try:
@@ -2565,11 +2572,24 @@ class ExecutionEngineService(BaseService):
                             symbol, position.highest_price, new_sl, position.sl_price,
                         )
 
-                    # Update SL on exchange
-                    try:
-                        if position.sl_order_id:
-                            await self.client.cancel_order(symbol, int(position.sl_order_id))
+                    # Cancel old SL FIRST, then place new one
+                    if not position.sl_order_id:
+                        self._logger.warning(
+                            "No existing SL order_id for %s — skipping trailing update to avoid duplicate orders",
+                            symbol,
+                        )
+                        continue
 
+                    try:
+                        await self.client.cancel_order(symbol, int(position.sl_order_id))
+                    except Exception as e:
+                        self._logger.warning(
+                            "Failed to cancel old trailing SL %s for %s: %s — skipping update to avoid duplicate orders",
+                            position.sl_order_id, symbol, e,
+                        )
+                        continue  # Do NOT place new SL if cancel failed
+
+                    try:
                         sl_result = await self._place_trigger_with_retry(
                             symbol=symbol,
                             is_buy=False,  # Close long = sell
@@ -2584,7 +2604,10 @@ class ExecutionEngineService(BaseService):
                             symbol, new_sl, position.highest_price, trail_distance,
                         )
                     except Exception as e:
-                        self._logger.error("Failed to update trailing SL for %s: %s", symbol, e)
+                        self._logger.error(
+                            "Failed to place trailing SL for %s after cancel succeeded: %s — position has NO SL!",
+                            symbol, e,
+                        )
 
             elif position.side == "short":
                 # Update trough price
@@ -2603,11 +2626,24 @@ class ExecutionEngineService(BaseService):
                             symbol, position.lowest_price, new_sl, position.sl_price,
                         )
 
-                    # Update SL on exchange
-                    try:
-                        if position.sl_order_id:
-                            await self.client.cancel_order(symbol, int(position.sl_order_id))
+                    # Cancel old SL FIRST, then place new one
+                    if not position.sl_order_id:
+                        self._logger.warning(
+                            "No existing SL order_id for %s — skipping trailing update to avoid duplicate orders",
+                            symbol,
+                        )
+                        continue
 
+                    try:
+                        await self.client.cancel_order(symbol, int(position.sl_order_id))
+                    except Exception as e:
+                        self._logger.warning(
+                            "Failed to cancel old trailing SL %s for %s: %s — skipping update to avoid duplicate orders",
+                            position.sl_order_id, symbol, e,
+                        )
+                        continue  # Do NOT place new SL if cancel failed
+
+                    try:
                         sl_result = await self._place_trigger_with_retry(
                             symbol=symbol,
                             is_buy=True,  # Close short = buy
@@ -2622,7 +2658,10 @@ class ExecutionEngineService(BaseService):
                             symbol, new_sl, position.lowest_price, trail_distance,
                         )
                     except Exception as e:
-                        self._logger.error("Failed to update trailing SL for %s: %s", symbol, e)
+                        self._logger.error(
+                            "Failed to place trailing SL for %s after cancel succeeded: %s — position has NO SL!",
+                            symbol, e,
+                        )
 
     async def should_exit_on_roi(self, position: ExecutionPosition) -> tuple[bool, float, float]:
         """
@@ -2951,6 +2990,16 @@ class ExecutionEngineService(BaseService):
         daily_trades = len(self._daily_closed)
         daily_pnl = sum(t["pnl"] for t in self._daily_closed)
 
+        # Fetch current equity for notifications
+        current_equity = 0.0
+        try:
+            state = await self.client._run_sync(
+                lambda: self.client._info.user_state(self.client._account.address)
+            )
+            current_equity = float(state.get("marginSummary", {}).get("accountValue", 0))
+        except Exception:
+            pass
+
         # Publish fill/close event with flat fields for notifications
         await self.publish(Topic.FILLS, {
             "event": "position_closed",
@@ -2968,6 +3017,7 @@ class ExecutionEngineService(BaseService):
             "daily_wins": daily_wins,
             "daily_trades": daily_trades,
             "daily_pnl": daily_pnl,
+            "equity": current_equity,
         })
         
         # Clean up tracking sets

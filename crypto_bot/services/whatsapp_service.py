@@ -277,6 +277,15 @@ class WhatsAppService(BaseService):
                 dp_sign = "+" if daily_pnl >= 0 else ""
                 daily_line = f"\n---\nToday: {daily_wins}W/{daily_trades - daily_wins}L ({wr:.0f}%) | {dp_sign}${daily_pnl:.2f}"
 
+            equity = payload.get("equity", 0)
+            equity_line = ""
+            if equity > 0:
+                # Expected daily P&L: +$1.03/day (from grid replay: +$93/90d)
+                expected_daily = 1.03
+                dp = daily_pnl if daily_pnl is not None else 0
+                pace = "ahead" if dp >= expected_daily else "behind" if dp < 0 else "on track"
+                equity_line = f"\nBalance: ${equity:.2f} | {pace}"
+
             text = (
                 f"{emoji} Position Closed\n"
                 f"Symbol: {symbol}\n"
@@ -284,6 +293,7 @@ class WhatsAppService(BaseService):
                 f"Entry: ${entry:.2f} -> Exit: ${exit_price:.2f}\n"
                 f"P&L: {pnl_sign}${pnl:.2f} ({pnl_sign}{pnl_pct:.2f}%)"
                 f"{daily_line}"
+                f"{equity_line}"
             )
             await self._send_message(text, title=f"{emoji} Closed {symbol} {pnl_sign}${pnl:.2f}")
 
