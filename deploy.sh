@@ -44,24 +44,20 @@ if [ -f .env.paper ]; then
     scp .env.paper root@$VPS_IP:$DEPLOY_DIR/.env.paper
 fi
 
-# Step 4: Stop existing containers
-echo "[4/6] Stopping existing containers..."
-ssh root@$VPS_IP "cd $DEPLOY_DIR && docker compose down 2>/dev/null || true"
-
-# Step 5: Build and start services
-echo "[5/6] Building and starting services..."
+# Step 4: Stop target container(s) and rebuild
+echo "[4/6] Stopping and rebuilding..."
 case $MODE in
     crypto)
-        ssh root@$VPS_IP "cd $DEPLOY_DIR && docker compose build crypto_bot --no-cache && docker compose up -d crypto_bot"
+        ssh root@$VPS_IP "cd $DEPLOY_DIR && docker compose stop crypto_bot && docker compose rm -f crypto_bot && docker compose build crypto_bot --no-cache && docker compose up -d crypto_bot"
         ;;
     paper)
-        ssh root@$VPS_IP "cd $DEPLOY_DIR && docker compose --profile paper build crypto_bot_paper --no-cache && docker compose --profile paper up -d crypto_bot_paper"
+        ssh root@$VPS_IP "cd $DEPLOY_DIR && docker compose --profile paper stop crypto_bot_paper && docker compose --profile paper rm -f crypto_bot_paper && docker compose --profile paper build crypto_bot_paper --no-cache && docker compose --profile paper up -d crypto_bot_paper"
         ;;
     ib)
-        ssh root@$VPS_IP "cd $DEPLOY_DIR && docker compose --profile ib build ib_bot --no-cache && docker compose --profile ib up -d ib_bot"
+        ssh root@$VPS_IP "cd $DEPLOY_DIR && docker compose --profile ib stop ib_bot && docker compose --profile ib rm -f ib_bot && docker compose --profile ib build ib_bot --no-cache && docker compose --profile ib up -d ib_bot"
         ;;
     all)
-        ssh root@$VPS_IP "cd $DEPLOY_DIR && docker compose --profile ib --profile paper build --no-cache && docker compose --profile ib --profile paper up -d"
+        ssh root@$VPS_IP "cd $DEPLOY_DIR && docker compose --profile ib --profile paper down && docker compose --profile ib --profile paper build --no-cache && docker compose --profile ib --profile paper up -d"
         ;;
     *)
         echo "Unknown mode: $MODE. Use: crypto, paper, ib, or all"

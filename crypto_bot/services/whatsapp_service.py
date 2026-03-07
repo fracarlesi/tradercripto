@@ -131,6 +131,9 @@ class WhatsAppService(BaseService):
         self._messages_sent = 0
         self._messages_failed = 0
 
+        # Dedup: prevent duplicate close notifications (e.g. during deploy overlap)
+        self._recent_close_keys: set[str] = set()
+
         # Validate config
         if self._enabled and not self._topic:
             self._logger.warning(
@@ -253,6 +256,18 @@ class WhatsAppService(BaseService):
 
         if event_type == "position_closed" and "trade_close" in self._alert_on:
             symbol = payload.get("symbol", "N/A")
+            timestamp = payload.get("timestamp", "")
+
+            # Dedup: skip if we already notified this close recently
+            dedup_key = f"close_{symbol}_{timestamp}"
+            if dedup_key in self._recent_close_keys:
+                self._logger.debug("Skipping duplicate close notification for %s", symbol)
+                return
+            self._recent_close_keys.add(dedup_key)
+            # Keep set bounded (max 50 entries)
+            if len(self._recent_close_keys) > 50:
+                self._recent_close_keys.clear()
+
             pnl = payload.get("realized_pnl", 0)
             pnl_pct = payload.get("pnl_pct", 0)
             side = payload.get("side", "unknown")
