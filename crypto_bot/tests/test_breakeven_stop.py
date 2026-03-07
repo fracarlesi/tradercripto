@@ -307,7 +307,7 @@ class TestBreakevenOrderLifecycle:
 
     @pytest.mark.asyncio
     async def test_no_old_sl_to_cancel(self) -> None:
-        """If sl_order_id is None, cancel is not called but new SL is placed."""
+        """If sl_order_id is None, skip breakeven to avoid duplicate SL orders."""
         engine = _make_engine()
         pos = _make_position(
             entry_price=100_000.0,
@@ -321,12 +321,12 @@ class TestBreakevenOrderLifecycle:
         await engine._check_breakeven_stops()
 
         engine.client.cancel_order.assert_not_called()
-        engine._place_trigger_with_retry.assert_called_once()
-        assert pos.breakeven_activated is True
+        engine._place_trigger_with_retry.assert_not_called()
+        assert pos.breakeven_activated is False
 
     @pytest.mark.asyncio
-    async def test_cancel_failure_still_places_new_sl(self) -> None:
-        """If cancelling the old SL fails, the new SL is still placed."""
+    async def test_cancel_failure_skips_new_sl(self) -> None:
+        """If cancelling the old SL fails, do NOT place a new SL to avoid duplicates."""
         engine = _make_engine()
         engine.client.cancel_order.side_effect = Exception("Order not found")
         pos = _make_position(
@@ -340,9 +340,9 @@ class TestBreakevenOrderLifecycle:
 
         # Cancel was attempted
         engine.client.cancel_order.assert_called_once()
-        # New SL still placed
-        engine._place_trigger_with_retry.assert_called_once()
-        assert pos.breakeven_activated is True
+        # New SL NOT placed — cancel failed, so we skip to avoid duplicate orders
+        engine._place_trigger_with_retry.assert_not_called()
+        assert pos.breakeven_activated is False
 
     @pytest.mark.asyncio
     async def test_new_sl_placement_failure(self) -> None:
