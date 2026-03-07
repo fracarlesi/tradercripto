@@ -13,15 +13,20 @@ from typing import Optional
 import joblib
 import numpy as np
 import pandas as pd
-import xgboost as xgb
-from sklearn.model_selection import TimeSeriesSplit, cross_val_score
-from sklearn.metrics import accuracy_score, precision_recall_curve, roc_auc_score
 
+# IMPORTANT: Import LightGBM BEFORE XGBoost on macOS ARM64.
+# Both ship their own libomp.dylib; whichever loads first "wins" the
+# dynamic linker symbol table.  If XGBoost's libomp loads first and
+# LightGBM tries to use it later, a SIGSEGV occurs during LGB.fit().
 try:
     import lightgbm as lgb
     HAS_LIGHTGBM = True
 except ImportError:
     HAS_LIGHTGBM = False
+
+import xgboost as xgb
+from sklearn.model_selection import TimeSeriesSplit, cross_val_score
+from sklearn.metrics import accuracy_score, precision_recall_curve, roc_auc_score
 
 from ..core.models import MarketState
 
@@ -86,15 +91,15 @@ class MLTradeModel:
     # ------------------------------------------------------------------
 
     def train(self, df: pd.DataFrame) -> dict:
-        """Train XGBoost on DataFrame with FEATURES + 'label' columns.
+        """Train XGBoost + LightGBM ensemble on DataFrame with FEATURES + 'label'.
 
         Pipeline:
-        1. CV AUC via TimeSeriesSplit(n_splits=5) for reporting.
-        2. Threshold calibration on a genuine holdout (last 20%) — a
-           temporary model is trained on the first 80% only, then predicts
-           on the holdout to pick the optimal F0.5 threshold.
-        3. Final model trained on the first 80% with early stopping on
-           the holdout set.
+        1. Data preparation and 3-way split.
+        2. LightGBM fit FIRST (macOS ARM64: LGB must load libomp before XGB).
+        3. XGBoost CV AUC (for reporting).
+        4. XGBoost fit with early stopping.
+        5. Threshold calibration on held-out calibration set.
+        6. Walk-forward validation for realistic OOS metric.
 
         Returns dict with:
             accuracy, auc, feature_importances, n_samples, n_positive, n_negative
@@ -130,16 +135,7 @@ class MLTradeModel:
             **self._config.get("xgb_params", {}),
         }
 
-        # -- Step 1: CV AUC (for reporting) --------------------------------
-        cv_model = xgb.XGBClassifier(**{
-            k: v for k, v in params.items() if k != "early_stopping_rounds"
-        })
-        tscv = TimeSeriesSplit(n_splits=5)
-        cv_scores = cross_val_score(
-            cv_model, X, y, cv=tscv, scoring="roc_auc",
-        )
-
-        # -- Step 2: 3-way split (75% train / 15% validation / 10% calibration)
+        # -- Step 1: 3-way split (75% train / 15% validation / 10% calibration)
         n_cal = max(50, int(len(X) * 0.10))
         n_val = max(50, int(len(X) * 0.15))
         n_train = len(X) - n_val - n_cal
@@ -152,18 +148,9 @@ class MLTradeModel:
         y_cal = y.iloc[n_train + n_val:]
         sw_train = sample_weight[:n_train] if sample_weight is not None else None
 
-        # -- Step 3: Final XGBoost with early stopping on validation -------
-        self._model = xgb.XGBClassifier(**params)
-        self._model.fit(
-            X_train, y_train,
-            sample_weight=sw_train,
-            eval_set=[(X_val, y_val)],
-            verbose=False,
-        )
-
-        assert self._model is not None  # for type checker
-
-        # -- Step 4: LightGBM ensemble (if available) ----------------------
+        # -- Step 2: LightGBM ensemble FIRST (if available) ----------------
+        # IMPORTANT: On macOS ARM64, LightGBM must load its libomp.dylib
+        # before XGBoost loads its own copy, otherwise a SIGSEGV occurs.
         self._lgb_model = None
         if HAS_LIGHTGBM:
             lgb_params = {
@@ -187,7 +174,32 @@ class MLTradeModel:
             )
             logger.info("LightGBM ensemble model trained")
 
-        # -- Step 4b: Threshold calibration on calibration set (ensemble) --
+        # -- Step 3: CV AUC (for reporting) --------------------------------
+        # Skip full CV on large datasets (>20K) — too slow, only for reporting
+        if len(X) > 20_000:
+            logger.info("Large dataset (%d) — skipping CV, using walk-forward AUC only", len(X))
+            cv_scores = np.array([0.0])
+        else:
+            cv_model = xgb.XGBClassifier(**{
+                k: v for k, v in params.items() if k != "early_stopping_rounds"
+            })
+            tscv = TimeSeriesSplit(n_splits=5)
+            cv_scores = cross_val_score(
+                cv_model, X, y, cv=tscv, scoring="roc_auc",
+            )
+
+        # -- Step 4: Final XGBoost with early stopping on validation -------
+        self._model = xgb.XGBClassifier(**params)
+        self._model.fit(
+            X_train, y_train,
+            sample_weight=sw_train,
+            eval_set=[(X_val, y_val)],
+            verbose=False,
+        )
+
+        assert self._model is not None  # for type checker
+
+        # -- Step 5: Threshold calibration on calibration set (ensemble) ---
         cal_xgb = self._model.predict_proba(X_cal)[:, 1]
         cal_lgb = self._lgb_model.predict_proba(X_cal)[:, 1] if self._lgb_model else cal_xgb
         cal_ensemble = (cal_xgb + cal_lgb) / 2.0
@@ -195,7 +207,7 @@ class MLTradeModel:
             cal_ensemble, y_cal
         )
 
-        # -- Step 5: Walk-forward validation (expanding window) -------------
+        # -- Step 6: Walk-forward validation (expanding window) ------------
         # More realistic OOS metric: 5 folds with 100-bar embargo to avoid
         # lookahead bias.  Uses a temporary XGBoost (no early stopping) so it
         # is self-contained.
@@ -288,7 +300,7 @@ class MLTradeModel:
             metrics["cv_auc_mean"],
             metrics["cv_auc_std"],
             metrics["wf_auc"],
-            self._optimal_threshold if self._optimal_threshold is not None else 0.55,
+            self._optimal_threshold,
             metrics["ensemble"],
         )
 

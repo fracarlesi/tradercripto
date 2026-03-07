@@ -12,8 +12,17 @@ RATE_LIMIT_SLEEP = 0.25
 
 def get_all_assets_with_info() -> tuple[list[str], dict[str, int]]:
     """Fetch all tradeable asset symbols and their max leverage from Hyperliquid."""
-    resp = requests.post(API_URL, json={"type": "meta"}, timeout=10)
-    resp.raise_for_status()
+    for attempt in range(5):
+        resp = requests.post(API_URL, json={"type": "meta"}, timeout=10)
+        if resp.status_code == 429:
+            wait = 10 * (attempt + 1)
+            print(f"  Rate limited (429), waiting {wait}s... (attempt {attempt+1}/5)")
+            time.sleep(wait)
+            continue
+        resp.raise_for_status()
+        break
+    else:
+        resp.raise_for_status()
     universe = resp.json()["universe"]
     names = [u["name"] for u in universe]
     leverage_caps = {u["name"]: u.get("maxLeverage", 100) for u in universe}

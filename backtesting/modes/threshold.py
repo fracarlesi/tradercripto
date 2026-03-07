@@ -228,11 +228,13 @@ def run(args: argparse.Namespace) -> None:
     import joblib
     payload = joblib.load(model_path)
     model = payload["model"]
+    lgb_model = payload.get("lgb_model", None)
     feature_names = list(model.get_booster().feature_names) if model.get_booster().feature_names else None
     optimal_threshold = payload.get("optimal_threshold", 0.55)
 
     n_model_features = getattr(model, "n_features_in_", 13)
     has_breakout = n_model_features >= 13
+    ensemble_str = "xgb+lgb" if lgb_model else "xgb"
 
     print("=" * 100)
     print(f"BACKTEST THRESHOLD: ML P&L at each threshold — Last {days}d — All Assets ({tf})")
@@ -241,7 +243,7 @@ def run(args: argparse.Namespace) -> None:
           f"{cfg.leverage}x leverage | ${cfg.account_size} | "
           f"{cfg.position_pct*100:.0f}% size")
     print(f"Model: {n_model_features} features | calibrated threshold: {optimal_threshold:.4f} | "
-          f"breakout: {'ON' if has_breakout else 'OFF'}")
+          f"breakout: {'ON' if has_breakout else 'OFF'} | ensemble: {ensemble_str}")
     print()
 
     # Fetch data
@@ -331,7 +333,7 @@ def run(args: argparse.Namespace) -> None:
                         ind_1h=ind_1h,
                     )
                     if features is not None:
-                        proba = _predict(model, features, feature_names)
+                        proba = _predict(model, features, feature_names, lgb_model)
                         scored_signals.append((ts, asset, sig, proba, "ema"))
                         n_crossover += 1
 
@@ -346,7 +348,7 @@ def run(args: argparse.Namespace) -> None:
                         ind_1h=ind_1h,
                     )
                     if features is not None:
-                        proba = _predict(model, features, feature_names)
+                        proba = _predict(model, features, feature_names, lgb_model)
                         scored_signals.append((ts, asset, sig_vb, proba, "vb"))
                         n_breakout += 1
 
@@ -361,7 +363,7 @@ def run(args: argparse.Namespace) -> None:
                         ind_1h=ind_1h,
                     )
                     if features is not None:
-                        proba = _predict(model, features, feature_names)
+                        proba = _predict(model, features, feature_names, lgb_model)
                         scored_signals.append((ts, asset, sig_mb, proba, "mb"))
                         n_momentum_burst += 1
 
@@ -460,7 +462,8 @@ def run(args: argparse.Namespace) -> None:
             print_top_bottom_trades(best_result.trades, best_result.label)
 
 
-def _predict(model: object, features: dict, feature_names: list[str] | None) -> float:
+def _predict(model: object, features: dict, feature_names: list[str] | None,
+             lgb_model: object | None = None) -> float:
     """Run ML prediction, handling backward compat with fewer features."""
     row = pd.DataFrame([features])
 
@@ -473,4 +476,15 @@ def _predict(model: object, features: dict, feature_names: list[str] | None) -> 
     else:
         row = row.astype(float)
 
-    return float(model.predict_proba(row)[:, 1][0])  # type: ignore[union-attr]
+    xgb_proba = float(model.predict_proba(row)[:, 1][0])  # type: ignore[union-attr]
+
+    # Ensemble: average XGBoost and LightGBM probabilities (matches production)
+    if lgb_model is not None:
+        lgb_row = row
+        n_lgb_features = getattr(lgb_model, "n_features_in_", lgb_row.shape[1])
+        if lgb_row.shape[1] > n_lgb_features:
+            lgb_row = lgb_row.iloc[:, :n_lgb_features]
+        lgb_proba = float(lgb_model.predict_proba(lgb_row)[:, 1][0])  # type: ignore[union-attr]
+        return (xgb_proba + lgb_proba) / 2.0
+
+    return xgb_proba

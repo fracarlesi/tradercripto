@@ -127,15 +127,15 @@ kill_switch:
 # Stops - Fixed TP/SL
 # -----------------------------------------------------------------------------
 stops:
-  stop_loss_pct: 1.0       # Grid-search optimal across all configs
-  take_profit_pct: 3.5     # 90d sweep optimal — R:R 1:3.5, PF 3.16, Sharpe 60.7
-  breakeven_threshold_pct: 1.0
+  stop_loss_pct: 1.0       # Grid replay optimal (XGB+LGB ensemble, 90d)
+  take_profit_pct: 4.0     # Grid replay winner: +$93, PF 1.32, Sharpe 17.8
+  breakeven_threshold_pct: 99.0  # DISABLED — destroys profitability in replay
   # Note: TP/SL are always server-side trigger orders (hardcoded in execution_engine)
 
   # ATR multipliers — used ONLY by the trailing stop system (after breakeven).
   # NOT used for initial TP/SL placement (which always uses stop_loss_pct / take_profit_pct above).
   initial_atr_mult: 2.5           # Deprecated for initial TP/SL — kept for trailing reference only
-  trailing_atr_mult: 1.5          # Trail distance = entry_atr_pct * trailing_atr_mult
+  trailing_atr_mult: 0            # DISABLED — pure TP/SL only (grid replay validated)
   trailing_update_interval: 300
 
   # Graduated ROI - DISABLED (backtest showed it cuts winners prematurely)
@@ -299,7 +299,7 @@ metrics:
 ml_model:
   enabled: true
   model_path: "models/trade_model.joblib"
-  min_probability: 0.65        # 90d sweep optimal — 65% WR, PF 3.16, Sharpe 60.7, MaxDD $66
+  min_probability: 0.58        # Grid replay optimal (XGB+LGB ensemble): +$93, PF 1.32, Sharpe 17.8
   retrain_days: 90             # 3× training window to reduce overfitting
   retrain_interval_days: 3     # Ogni quanto ri-addestrare
 

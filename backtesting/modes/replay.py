@@ -43,6 +43,7 @@ def _score(
     bb_lower: np.ndarray,
     signal_type: float,
     use_ml: bool,
+    lgb_model: object | None = None,
 ) -> float:
     """Wrap _extract_features + _predict.  Returns 1.0 if ML is disabled."""
     if not use_ml:
@@ -50,7 +51,7 @@ def _score(
     feats = _extract_features(candles, ind, idx, bb_upper, bb_lower, signal_type)
     if feats is None:
         return 0.0
-    return _predict(model, feats, feature_names)
+    return _predict(model, feats, feature_names, lgb_model)
 
 
 def _print_replay_summary(
@@ -165,6 +166,22 @@ def run(args: argparse.Namespace) -> None:
     cli_threshold = getattr(args, "threshold", None)
     threshold = cli_threshold if cli_threshold is not None else cfg.ml_threshold
 
+    # TP/SL: CLI flag > trading.yaml
+    cli_tp = getattr(args, "tp", None)
+    if cli_tp is not None:
+        cfg.tp_pct = cli_tp / 100.0
+    cli_sl = getattr(args, "sl", None)
+    if cli_sl is not None:
+        cfg.sl_pct = cli_sl / 100.0
+
+    cli_be = getattr(args, "breakeven", None)
+    if cli_be is not None:
+        cfg.breakeven_threshold_pct = cli_be / 100.0
+
+    cli_trail = getattr(args, "trailing", None)
+    if cli_trail is not None:
+        cfg.trailing_atr_mult = cli_trail
+
     warmup = {"5m": 650, "15m": 200, "1h": 200}.get(tf, 200)
     cfg.warmup_bars = warmup
     tf_scale = {"5m": 3, "15m": 1, "1h": 1}.get(tf, 1)
@@ -183,6 +200,7 @@ def run(args: argparse.Namespace) -> None:
 
     # Load ML model
     model = None
+    lgb_model = None
     feature_names: list[str] | None = None
     has_breakout = True
 
@@ -198,14 +216,17 @@ def run(args: argparse.Namespace) -> None:
             import joblib
             payload = joblib.load(model_path)
             model = payload["model"]
+            lgb_model = payload.get("lgb_model", None)
             feature_names = (
                 list(model.get_booster().feature_names)
                 if model.get_booster().feature_names else None
             )
             n_model_features = getattr(model, "n_features_in_", 13)
             has_breakout = n_model_features >= 13
+            ensemble_str = "xgb+lgb" if lgb_model else "xgb"
             print(f"ML model loaded: {n_model_features} features, "
-                  f"breakout={'ON' if has_breakout else 'OFF'}")
+                  f"breakout={'ON' if has_breakout else 'OFF'}, "
+                  f"ensemble={ensemble_str}")
 
     # Fetch data
     now_ms = int(time.time() * 1000)
@@ -275,9 +296,15 @@ def run(args: argparse.Namespace) -> None:
             if ind["is_trend"][bar_idx]:
                 sig = signal_ema_crossover_entry(ind, bar_idx)
                 if sig != 0:
+                    # Fix: RSI hard floor for SHORT (matches production gate)
+                    rsi_val = ind["rsi"][bar_idx]
+                    if sig == -1 and not np.isnan(rsi_val) and rsi_val < 35:
+                        sig = 0
+                if sig != 0:
                     proba = _score(
                         model, feature_names, candles, ind, bar_idx,
-                        bb_upper, bb_lower, signal_type=0.0, use_ml=use_ml)
+                        bb_upper, bb_lower, signal_type=0.0, use_ml=use_ml,
+                        lgb_model=lgb_model)
                     scored.append((ts, asset, sig, proba, "ema"))
                     n_ema += 1
 
@@ -287,7 +314,8 @@ def run(args: argparse.Namespace) -> None:
                 if sig_vb != 0:
                     proba = _score(
                         model, feature_names, candles, ind, bar_idx,
-                        bb_upper, bb_lower, signal_type=1.0, use_ml=use_ml)
+                        bb_upper, bb_lower, signal_type=1.0, use_ml=use_ml,
+                        lgb_model=lgb_model)
                     scored.append((ts, asset, sig_vb, proba, "vb"))
                     n_vb += 1
 
@@ -297,7 +325,8 @@ def run(args: argparse.Namespace) -> None:
                 if sig_mb != 0:
                     proba = _score(
                         model, feature_names, candles, ind, bar_idx,
-                        bb_upper, bb_lower, signal_type=2.0, use_ml=use_ml)
+                        bb_upper, bb_lower, signal_type=2.0, use_ml=use_ml,
+                        lgb_model=lgb_model)
                     scored.append((ts, asset, sig_mb, proba, "mb"))
                     n_mb += 1
 

@@ -48,6 +48,7 @@ def _score(
     btc_ind: dict | None = None,
     btc_time_idx: dict[int, int] | None = None,
     ind_1h: dict | None = None,
+    lgb_model: object | None = None,
 ) -> float:
     feats = _extract_features(
         candles, ind, idx, bb_upper, bb_lower, signal_type,
@@ -56,7 +57,7 @@ def _score(
     )
     if feats is None:
         return 0.0
-    return _predict(model, feats, feature_names)
+    return _predict(model, feats, feature_names, lgb_model)
 
 
 def run_comparison(
@@ -127,12 +128,14 @@ def run_comparison(
     import joblib
     payload = joblib.load(model_path)
     model = payload["model"]
+    lgb_model = payload.get("lgb_model", None)
     feature_names: list[str] | None = (
         list(model.get_booster().feature_names)
         if model.get_booster().feature_names else None
     )
     n_features = getattr(model, "n_features_in_", 13)
     has_breakout = n_features >= 13
+    ensemble_str = "xgb+lgb" if lgb_model else "xgb"
 
     # BTC context indicators
     btc_ind: dict | None = asset_indicators.get("BTC")
@@ -172,7 +175,7 @@ def run_comparison(
                     p = _score(model, feature_names, candles, ind, bidx,
                                bb_upper, bb_lower, 0.0, direction=sig,
                                btc_ind=a_btc_ind, btc_time_idx=a_btc_time_idx,
-                               ind_1h=ind_1h)
+                               ind_1h=ind_1h, lgb_model=lgb_model)
                     if p > 0:
                         raw_signals.append((ts, asset, sig, p, "ema", bidx))
 
@@ -183,7 +186,7 @@ def run_comparison(
                     p = _score(model, feature_names, candles, ind, bidx,
                                bb_upper, bb_lower, 1.0, direction=sig,
                                btc_ind=a_btc_ind, btc_time_idx=a_btc_time_idx,
-                               ind_1h=ind_1h)
+                               ind_1h=ind_1h, lgb_model=lgb_model)
                     if p > 0:
                         raw_signals.append((ts, asset, sig, p, "vb", bidx))
 
@@ -194,7 +197,7 @@ def run_comparison(
                     p = _score(model, feature_names, candles, ind, bidx,
                                bb_upper, bb_lower, 2.0, direction=sig,
                                btc_ind=a_btc_ind, btc_time_idx=a_btc_time_idx,
-                               ind_1h=ind_1h)
+                               ind_1h=ind_1h, lgb_model=lgb_model)
                     if p > 0:
                         raw_signals.append((ts, asset, sig, p, "mb", bidx))
 

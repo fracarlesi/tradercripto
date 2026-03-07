@@ -44,15 +44,15 @@ def build_parser() -> argparse.ArgumentParser:
                                help="Compare P&L at each ML threshold level")
     add_common(sp_thresh)
 
-    sp_sweep = sub.add_parser("sweep",
-                              help="Grid-search TP/SL/threshold/slippage")
-    add_common(sp_sweep)
-
     sp_replay = sub.add_parser("replay",
                                help="Replay historical data through full live-bot logic")
     add_common(sp_replay)
     sp_replay.add_argument("--threshold", type=float, default=None,
                            help="ML probability threshold (default: from trading.yaml)")
+    sp_replay.add_argument("--tp", type=float, default=None,
+                           help="Take-profit %% (e.g. 3.5 for 3.5%%)")
+    sp_replay.add_argument("--sl", type=float, default=None,
+                           help="Stop-loss %% (e.g. 1.0 for 1.0%%)")
     sp_replay.add_argument("--kelly", action="store_true",
                            help="Use Kelly criterion for position sizing")
     sp_replay.add_argument("--no-ml", action="store_true", dest="no_ml",
@@ -61,6 +61,10 @@ def build_parser() -> argparse.ArgumentParser:
                            help="Print each open/close event")
     sp_replay.add_argument("--bar-log", type=str, default=None, dest="bar_log",
                            help="Write bar-level CSV log to FILE")
+    sp_replay.add_argument("--breakeven", type=float, default=None,
+                           help="Breakeven threshold %% (e.g. 1.0 for 1.0%%, 99 to disable)")
+    sp_replay.add_argument("--trailing", type=float, default=None,
+                           help="Trailing ATR multiplier (0 to disable)")
 
     return parser
 
@@ -79,8 +83,6 @@ def main(argv: list[str] | None = None) -> None:
         from backtesting.modes.timeframes import run
     elif args.mode == "threshold":
         from backtesting.modes.threshold import run
-    elif args.mode == "sweep":
-        from backtesting.modes.sweep import run
     elif args.mode == "replay":
         from backtesting.modes.replay import run
     else:
