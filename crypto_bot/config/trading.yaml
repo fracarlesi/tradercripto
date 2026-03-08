@@ -2,7 +2,7 @@
 # HLQuantBot v3.0 - Momentum Scalper Configuration
 # =============================================================================
 # Strategy: EMA9/EMA21 crossover on 15m with RSI filter
-# Target: Aggressive growth on small account ($65 USDC)
+# Target: Validation mode — capital ladder starting at $65 USDC
 # Risk: Fixed TP/SL (2.5%/1.0%), 10x leverage, LONG+SHORT
 # =============================================================================
 
@@ -12,7 +12,7 @@
 universe:
   mode: "all"
 
-  min_volume_24h: 100000
+  min_volume_24h: 500000   # Filtered universe: v7 trained on >$500K volume assets
   min_market_cap: 0
 
   exclude_symbols:
@@ -96,15 +96,15 @@ risk:
   per_trade_pct: 25.0
   max_per_trade_pct: 30.0
 
-  max_positions: 3          # Concentrate capital, reduce correlation
+  max_positions: 1          # Validation mode: single position
   max_exposure_pct: 375     # 3 pos × 25% × 10x × 1.5 buffer
   max_position_pct: 85      # 25% equity × 10x leverage needs room
 
-  leverage: 10
-  max_leverage: 20
+  leverage: 3               # Validation mode: conservative leverage
+  max_leverage: 5
 
   correlation_limit: 0.7
-  max_daily_trades: 0   # 0 = unlimited — other protections handle risk (StoplossGuard, KillSwitch, MaxDrawdown)
+  max_daily_trades: 3   # Validation mode: conservative trade cap
 
 # -----------------------------------------------------------------------------
 # Kill Switch
@@ -127,8 +127,8 @@ kill_switch:
 # Stops - Fixed TP/SL
 # -----------------------------------------------------------------------------
 stops:
-  stop_loss_pct: 1.0       # Grid replay optimal (XGB+LGB ensemble, 90d)
-  take_profit_pct: 4.0     # Grid replay winner: +$93, PF 1.32, Sharpe 17.8
+  stop_loss_pct: 1.0       # v7 replay validated: PF 2.39, 287 trades
+  take_profit_pct: 2.5     # v7 target-aligned: TP=2.5% labeling + replay
   breakeven_threshold_pct: 99.0  # DISABLED — destroys profitability in replay
   # Note: TP/SL are always server-side trigger orders (hardcoded in execution_engine)
 
@@ -223,10 +223,10 @@ execution:
   limit_timeout_seconds: 90
   entry_mode: "maker"
   maker_reprice_interval_seconds: 5
-  maker_max_reprices: 12
+  maker_max_reprices: 6         # Validation mode: fewer reprices → skip if no fill
 
-  max_slippage_pct: 0.30       # Aligned with spread — was 0.25% causing instant position closes
-  max_spread_pct: 0.15         # Skip illiquid assets — tighter filter
+  max_slippage_pct: 0.15       # Validation mode: tight slippage control
+  max_spread_pct: 0.08         # Validation mode: only liquid assets
 
   max_retries: 3
   retry_delay_seconds: 5
@@ -302,6 +302,79 @@ ml_model:
   min_probability: 0.58        # Grid replay optimal (XGB+LGB ensemble): +$93, PF 1.32, Sharpe 17.8
   retrain_days: 90             # 3× training window to reduce overfitting
   retrain_interval_days: 3     # Ogni quanto ri-addestrare
+
+# -----------------------------------------------------------------------------
+# Capital Ladder — Progressive scale-up with objective criteria
+# -----------------------------------------------------------------------------
+capital_ladder:
+  enabled: true
+  current_level: 0
+  auto_promote: false
+  auto_demote: false
+  levels:
+    - level: 0
+      label: "test_65"
+      target_capital_usd: 65
+      min_closed_trades: 30
+      min_live_days: 14
+      min_profit_factor: 1.15
+      min_net_pnl_usd: 0.5
+      max_drawdown_pct: 10.0
+      min_maker_fill_ratio_pct: 70.0
+    - level: 1
+      label: "step_250"
+      target_capital_usd: 250
+      min_closed_trades: 30
+      min_live_days: 14
+      min_profit_factor: 1.15
+      min_net_pnl_usd: 2.0
+      max_drawdown_pct: 10.0
+      min_maker_fill_ratio_pct: 70.0
+    - level: 2
+      label: "step_500"
+      target_capital_usd: 500
+      min_closed_trades: 35
+      min_live_days: 14
+      min_profit_factor: 1.15
+      min_net_pnl_usd: 4.0
+      max_drawdown_pct: 10.0
+      min_maker_fill_ratio_pct: 68.0
+    - level: 3
+      label: "step_1500"
+      target_capital_usd: 1500
+      min_closed_trades: 40
+      min_live_days: 21
+      min_profit_factor: 1.18
+      min_net_pnl_usd: 10.0
+      max_drawdown_pct: 9.0
+      min_maker_fill_ratio_pct: 65.0
+    - level: 4
+      label: "step_3000"
+      target_capital_usd: 3000
+      min_closed_trades: 40
+      min_live_days: 21
+      min_profit_factor: 1.18
+      min_net_pnl_usd: 20.0
+      max_drawdown_pct: 9.0
+      min_maker_fill_ratio_pct: 65.0
+    - level: 5
+      label: "step_5000"
+      target_capital_usd: 5000
+      min_closed_trades: 50
+      min_live_days: 30
+      min_profit_factor: 1.20
+      min_net_pnl_usd: 35.0
+      max_drawdown_pct: 8.5
+      min_maker_fill_ratio_pct: 62.0
+    - level: 6
+      label: "step_10000"
+      target_capital_usd: 10000
+      min_closed_trades: 60
+      min_live_days: 30
+      min_profit_factor: 1.20
+      min_net_pnl_usd: 70.0
+      max_drawdown_pct: 8.0
+      min_maker_fill_ratio_pct: 60.0
 
 # -----------------------------------------------------------------------------
 # Environment

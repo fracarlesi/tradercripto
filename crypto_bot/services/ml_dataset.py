@@ -27,7 +27,8 @@ __all__ = ["generate_dataset"]
 logger = logging.getLogger(__name__)
 
 RATE_LIMIT_SLEEP = 0.25
-MAX_FORWARD_BARS = 100
+DEFAULT_MAX_FORWARD_BARS = 24  # 6 hours on 15m, matching live max_hold
+DEFAULT_SLIPPAGE_PCT = 0.0005  # 0.05% adverse slippage on entry
 
 
 def _label_signal(
@@ -36,6 +37,8 @@ def _label_signal(
     direction: int,
     tp_pct: float,
     sl_pct: float,
+    max_forward_bars: int = DEFAULT_MAX_FORWARD_BARS,
+    slippage_pct: float = DEFAULT_SLIPPAGE_PCT,
 ) -> int | None:
     """Simulate forward from entry bar to determine TP/SL outcome.
 
@@ -43,15 +46,23 @@ def _label_signal(
         candles: Full candle list.
         entry_idx: Index of the signal bar (entry at close price).
         direction: 1 for LONG, -1 for SHORT.
-        tp_pct: Take-profit distance as fraction (e.g. 0.016 for 1.6%).
-        sl_pct: Stop-loss distance as fraction (e.g. 0.008 for 0.8%).
+        tp_pct: Take-profit distance as fraction (e.g. 0.025 for 2.5%).
+        sl_pct: Stop-loss distance as fraction (e.g. 0.01 for 1.0%).
+        max_forward_bars: Max bars to look ahead (default 24 = 6h on 15m).
+        slippage_pct: Adverse slippage on entry (default 0.05%).
 
     Returns:
-        1 if TP hit first, 0 if SL hit first, None if neither within MAX_FORWARD_BARS.
+        1 if TP hit first, 0 if SL hit first, None if neither within max_forward_bars.
     """
-    entry_price = candles[entry_idx]["c"]
-    if entry_price <= 0:
+    raw_price = candles[entry_idx]["c"]
+    if raw_price <= 0:
         return None
+
+    # Apply slippage to entry price
+    if direction == 1:  # LONG: buy at slightly higher price
+        entry_price = raw_price * (1 + slippage_pct)
+    else:  # SHORT: sell at slightly lower price
+        entry_price = raw_price * (1 - slippage_pct)
 
     # Fee-adjusted TP/SL levels: subtract round-trip fees (maker+taker ~0.09%)
     fee_per_side = 0.00045  # 0.045% per side
@@ -64,7 +75,7 @@ def _label_signal(
         tp_price = entry_price * (1 - tp_pct + fee_roundtrip)
         sl_price = entry_price * (1 + sl_pct - fee_roundtrip)
 
-    end_idx = min(entry_idx + MAX_FORWARD_BARS + 1, len(candles))
+    end_idx = min(entry_idx + max_forward_bars + 1, len(candles))
 
     for i in range(entry_idx + 1, end_idx):
         high = candles[i]["h"]
@@ -81,10 +92,8 @@ def _label_signal(
             if low <= tp_price:
                 return 1
 
-    # Timeout: classify by final P&L (recover ~30% of previously discarded signals)
-    final_close = candles[end_idx - 1]["c"]
-    final_pnl = (final_close - entry_price) / entry_price * direction
-    return 1 if final_pnl > fee_roundtrip else 0  # profitable after fees
+    # Timeout: dead trade = loss (neither TP nor SL hit within max hold period)
+    return 0
 
 
 def _extract_features(
@@ -224,6 +233,32 @@ def _extract_features(
             dir_1h = 1.0 if ind_1h["ema9"][idx] > ind_1h["ema21"][idx] else -1.0
             tf_alignment = 1.0 if dir_15m == dir_1h else -1.0
 
+    # --- Tier 3: log_volume_24h, bb_width, adx_slope, funding_rate ---
+    import math
+
+    # log_volume_24h: log10(sum of last 96 bars volume * close price)
+    lookback_vol = min(96, idx + 1)
+    vol_slice = volumes[idx - lookback_vol + 1: idx + 1]
+    close_slice = ind["closes"][idx - lookback_vol + 1: idx + 1]
+    vol_usd_24h = float(np.nansum(vol_slice * close_slice))
+    log_volume_24h = math.log10(max(vol_usd_24h, 1.0))
+
+    # bb_width: (bb_upper - bb_lower) / bb_mid * 100
+    bb_width = 0.0
+    if not np.isnan(bu) and not np.isnan(bl):
+        bb_mid = (bu + bl) / 2.0
+        if bb_mid > 0:
+            bb_width = (bu - bl) / bb_mid * 100
+
+    # adx_slope: (adx[i] - adx[i-4]) / max(adx[i-4], 1.0)
+    if idx >= 4 and not np.isnan(ind["adx"][idx - 4]):
+        adx_slope = (adx_val - ind["adx"][idx - 4]) / max(ind["adx"][idx - 4], 1.0)
+    else:
+        adx_slope = 0.0
+
+    # funding_rate: not available in historical candle data
+    funding_rate = 0.0
+
     return {
         "adx": float(adx_val) if not np.isnan(adx_val) else 0.0,
         "rsi": float(ind["rsi"][idx]),
@@ -250,6 +285,11 @@ def _extract_features(
         "tf_alignment": tf_alignment,
         "rsi_1h": rsi_1h,
         "adx_1h": adx_1h,
+        # Tier 3
+        "log_volume_24h": log_volume_24h,
+        "bb_width": bb_width,
+        "adx_slope": adx_slope,
+        "funding_rate": funding_rate,
     }
 
 
@@ -257,22 +297,54 @@ def generate_dataset(
     symbols: list[str],
     days: int = 90,
     cfg: BacktestConfig | None = None,
+    asset_volumes: dict[str, float] | None = None,
+    min_volume_24h: float = 500_000,
+    label_tp_pct: float | None = None,
+    label_sl_pct: float | None = None,
+    label_max_forward_bars: int | None = None,
+    label_slippage_pct: float | None = None,
 ) -> pd.DataFrame:
     """Generate labeled ML dataset from historical candle data.
-
-    For each symbol, downloads candles, computes indicators, finds EMA
-    crossover signals, and labels each by forward TP/SL simulation.
 
     Args:
         symbols: List of asset symbols to process.
         days: Number of days of history to fetch.
         cfg: Backtest config (loaded from trading.yaml if None).
+        asset_volumes: Dict of asset name -> 24h USD volume (for filtering).
+        min_volume_24h: Minimum 24h volume in USD to include asset (default 500K).
+        label_tp_pct: Override TP for labeling (fraction, e.g. 0.025 for 2.5%).
+        label_sl_pct: Override SL for labeling (fraction, e.g. 0.01 for 1.0%).
+        label_max_forward_bars: Override max forward bars (default 24).
+        label_slippage_pct: Override slippage (fraction, default 0.0005).
 
     Returns:
         DataFrame with feature columns, 'label', 'symbol', 'timestamp'.
     """
     if cfg is None:
         cfg = load_config()
+
+    # Resolve labeling parameters: explicit overrides > cfg > defaults
+    eff_tp_pct = label_tp_pct if label_tp_pct is not None else cfg.tp_pct
+    eff_sl_pct = label_sl_pct if label_sl_pct is not None else cfg.sl_pct
+    eff_max_bars = label_max_forward_bars if label_max_forward_bars is not None else DEFAULT_MAX_FORWARD_BARS
+    eff_slippage = label_slippage_pct if label_slippage_pct is not None else DEFAULT_SLIPPAGE_PCT
+    logger.info(
+        "Labeling params: TP=%.2f%% SL=%.2f%% max_bars=%d slippage=%.3f%%",
+        eff_tp_pct * 100, eff_sl_pct * 100, eff_max_bars, eff_slippage * 100,
+    )
+
+    # --- Volume filter: skip low-volume assets ---
+    if asset_volumes is not None:
+        original_count = len(symbols)
+        symbols = [
+            s for s in symbols
+            if asset_volumes.get(s, 0) >= min_volume_24h
+        ]
+        filtered_out = original_count - len(symbols)
+        logger.info(
+            "Volume filter: %d/%d assets pass >= $%.0f 24h volume (%d filtered out)",
+            len(symbols), original_count, min_volume_24h, filtered_out,
+        )
 
     end_ms = int(time.time() * 1000)
     start_ms = int((time.time() - days * 86400) * 1000)
@@ -338,7 +410,7 @@ def generate_dataset(
             if sig == 0:
                 continue
 
-            label = _label_signal(candles, idx, sig, cfg.tp_pct, cfg.sl_pct)
+            label = _label_signal(candles, idx, sig, eff_tp_pct, eff_sl_pct, eff_max_bars, eff_slippage)
             if label is None:
                 continue
 
@@ -367,7 +439,7 @@ def generate_dataset(
             if sig == 0:
                 continue
 
-            label = _label_signal(candles, idx, sig, cfg.tp_pct, cfg.sl_pct)
+            label = _label_signal(candles, idx, sig, eff_tp_pct, eff_sl_pct, eff_max_bars, eff_slippage)
             if label is None:
                 continue
 
@@ -395,7 +467,7 @@ def generate_dataset(
             if sig == 0:
                 continue
 
-            label = _label_signal(candles, idx, sig, cfg.tp_pct, cfg.sl_pct)
+            label = _label_signal(candles, idx, sig, eff_tp_pct, eff_sl_pct, eff_max_bars, eff_slippage)
             if label is None:
                 continue
 

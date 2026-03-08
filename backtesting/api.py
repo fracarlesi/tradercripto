@@ -35,6 +35,33 @@ def get_all_assets() -> list[str]:
     return names
 
 
+def get_asset_volumes() -> dict[str, float]:
+    """Fetch 24h USD volume for all assets from Hyperliquid.
+
+    Calls the metaAndAssetCtxs endpoint and extracts dayNtlVlm.
+    Returns dict mapping asset name -> 24h notional volume in USD.
+    """
+    for attempt in range(5):
+        resp = requests.post(API_URL, json={"type": "metaAndAssetCtxs"}, timeout=10)
+        if resp.status_code == 429:
+            wait = 10 * (attempt + 1)
+            print(f"  Rate limited (429), waiting {wait}s... (attempt {attempt+1}/5)")
+            time.sleep(wait)
+            continue
+        resp.raise_for_status()
+        break
+    else:
+        resp.raise_for_status()
+    data = resp.json()
+    universe = data[0]["universe"]  # meta part
+    asset_ctxs = data[1]           # asset contexts list (same order as universe)
+    volumes: dict[str, float] = {}
+    for meta, ctx in zip(universe, asset_ctxs):
+        name = meta["name"]
+        volumes[name] = float(ctx.get("dayNtlVlm", 0))
+    return volumes
+
+
 def get_candles(asset: str, interval: str, start_ms: int,
                 end_ms: int) -> list[dict]:
     """Fetch OHLCV candles with retry on 429."""

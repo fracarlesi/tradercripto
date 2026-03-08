@@ -14,6 +14,12 @@ import argparse
 import time
 from pathlib import Path
 
+# Fix libomp conflict: import lightgbm BEFORE xgboost on macOS ARM64
+try:
+    import lightgbm  # noqa: F401
+except ImportError:
+    pass
+
 import numpy as np
 
 from backtesting.api import fetch_all_candles, get_all_assets_with_info
@@ -85,6 +91,10 @@ def _print_replay_summary(
     print(f"Trail ATR:   {cfg.trailing_atr_mult}x")
     print(f"MomFade:     min_profit={cfg.momentum_exit_min_profit_pct*100:.1f}%  "
           f"rsi_slope_thresh={cfg.momentum_rsi_slope_threshold}")
+    if cfg.max_hold_hours > 0:
+        print(f"MaxHold:     {cfg.max_hold_hours}h (dead trade < {cfg.max_hold_dead_pnl_pct*100:.1f}%)")
+    else:
+        print(f"MaxHold:     OFF")
     print(f"Cooldown:    {cfg.cooldown_minutes}min (SL: {cfg.cooldown_after_sl_minutes}min)")
     print(f"Max/sym/day: {cfg.max_trades_per_symbol_per_day}")
     print(f"Signals:     {n_signals_raw} raw -> {n_signals_dedup} deduped")
@@ -111,7 +121,7 @@ def _print_replay_summary(
         print("-" * 30)
         total_exits = sum(sim.exit_reasons.values())
         for reason in ["SL", "TP", "TRAIL", "BREAKEVEN", "ROI", "MOM_FADE",
-                        "REGIME", "CLOSE"]:
+                        "REGIME", "MAX_HOLD", "CLOSE"]:
             count = sim.exit_reasons.get(reason, 0)
             if count > 0:
                 pct = count / total_exits * 100
@@ -119,10 +129,17 @@ def _print_replay_summary(
         # Any remaining reasons
         for reason, count in sorted(sim.exit_reasons.items()):
             if reason not in {"SL", "TP", "TRAIL", "BREAKEVEN", "ROI",
-                              "MOM_FADE", "REGIME", "CLOSE"}:
+                              "MOM_FADE", "REGIME", "MAX_HOLD", "CLOSE"}:
                 pct = count / total_exits * 100
                 print(f"  {reason:<13} {count:>6} {pct:>6.1f}%")
         print(f"  {'TOTAL':<13} {total_exits:>6}")
+
+    # Execution friction stats
+    if hasattr(sim, "maker_fills"):
+        print()
+        print(f"{'Maker fills':<25} {sim.maker_fills:>12}")
+        print(f"{'Taker fallbacks':<25} {sim.taker_fallbacks:>12}")
+        print(f"{'Skipped entries':<25} {sim.skipped_entries:>12}")
 
     # Top/bottom trades
     if result.trades:
@@ -182,6 +199,18 @@ def run(args: argparse.Namespace) -> None:
     if cli_trail is not None:
         cfg.trailing_atr_mult = cli_trail
 
+    cli_max_hold = getattr(args, "max_hold_hours", None)
+    if cli_max_hold is not None:
+        cfg.max_hold_hours = cli_max_hold
+
+    cli_maker_rate = getattr(args, "maker_fill_rate", None)
+    if cli_maker_rate is not None:
+        cfg.maker_fill_rate = cli_maker_rate
+
+    cli_maker_action = getattr(args, "maker_fail_action", None)
+    if cli_maker_action is not None:
+        cfg.maker_fail_action = cli_maker_action
+
     warmup = {"5m": 650, "15m": 200, "1h": 200}.get(tf, 200)
     cfg.warmup_bars = warmup
     tf_scale = {"5m": 3, "15m": 1, "1h": 1}.get(tf, 1)
@@ -235,6 +264,16 @@ def run(args: argparse.Namespace) -> None:
     signal_cutoff_ms = now_ms - days * 86_400_000
 
     assets, leverage_caps = get_all_assets_with_info()
+
+    # Volume filter: restrict to assets with min 24h volume
+    min_volume = getattr(args, "min_volume", None)
+    if min_volume is not None and min_volume > 0:
+        from backtesting.api import get_asset_volumes
+        volumes = get_asset_volumes()
+        before = len(assets)
+        assets = [a for a in assets if volumes.get(a, 0) >= min_volume]
+        print(f"Volume filter: {len(assets)}/{before} assets >= ${min_volume:,.0f} 24h volume")
+
     asset_candles, _, _ = fetch_all_candles(
         assets, tf, start_ms, now_ms, cfg.exclude_symbols, warmup)
 

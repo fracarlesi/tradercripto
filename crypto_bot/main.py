@@ -334,6 +334,7 @@ class ConservativeBot:
         "whatsapp",              # Notifications (non-critical)
         "performance_monitor",   # Trade performance tracking
         "counterfactual_logger", # Rejected trade analysis
+        "capital_ladder",        # Progressive scale-up tracking
     ]
 
     def __init__(
@@ -454,6 +455,22 @@ class ConservativeBot:
 
             filtered = [s for s in all_symbols if s not in cfg.exclude_symbols]
             logger.info("After exclusion filter: %d symbols", len(filtered))
+
+            # Apply min_volume_24h filter at startup (not just during scan)
+            min_vol = cfg.min_volume_24h
+            if min_vol > 0:
+                volumes = await self._exchange._get_asset_data(
+                    "dayNtlVlm", "volumes_startup", ttl=300.0,
+                )
+                before = len(filtered)
+                filtered = [
+                    s for s in filtered
+                    if volumes.get(s, 0) >= min_vol
+                ]
+                logger.info(
+                    "After volume filter (min $%.0f): %d symbols (dropped %d)",
+                    min_vol, len(filtered), before - len(filtered),
+                )
 
             object.__setattr__(cfg, "assets", filtered)
 
@@ -604,9 +621,17 @@ class ConservativeBot:
             take_profit_pct=cfg.take_profit_pct, stop_loss_pct=cfg.stop_loss_pct,
         )
 
+        # Capital Ladder — progressive scale-up tracking
+        from .services.capital_ladder import CapitalLadderService
+        perf_mon = self._services.get("performance_monitor")
+        self._services["capital_ladder"] = CapitalLadderService(
+            bus=self._bus, config=self._raw_config,
+            whatsapp=whatsapp_svc, performance_monitor=perf_mon,
+            exchange=self._exchange,
+        )
+
         # Wire performance_monitor into risk_manager for cooldown trade history
         risk_mgr = self._services.get("risk_manager")
-        perf_mon = self._services.get("performance_monitor")
         if risk_mgr and perf_mon:
             risk_mgr._performance_monitor = perf_mon
 

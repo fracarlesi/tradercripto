@@ -83,6 +83,17 @@ class BacktestConfig:
     # ML model
     ml_threshold: float = 0.58  # ml_model.min_probability from trading.yaml
 
+    # Max hold time — matches live bot's _check_max_hold_time()
+    max_hold_hours: float = 4.0        # 0 = disabled
+    max_hold_dead_pnl_pct: float = 0.003  # 0.3% — abs(pnl) below this = "dead trade"
+
+    # Execution friction — simulates maker fill failures
+    maker_fill_rate: float = 1.0       # 1.0 = perfect fills (original), 0.7 = 70% maker success
+    maker_fail_action: str = "taker"   # "taker" = fallback with extra cost, "skip" = skip trade
+    taker_entry_fee_pct: float = 0.00045   # 0.045% taker fee
+    maker_entry_fee_pct: float = 0.00015   # 0.015% maker fee (rebate)
+    taker_extra_slippage_pct: float = 0.0005  # 0.05% extra slippage on taker fallback
+
     # CLI overridable
     timeframe: str = "15m"
     lookback_days: int = 7

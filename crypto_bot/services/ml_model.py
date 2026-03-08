@@ -36,6 +36,14 @@ logger = logging.getLogger(__name__)
 class MLTradeModel:
     """XGBoost model for trade selection. Replaces all filters + LLM."""
 
+    # Features with known data-source mismatches between training and live:
+    # - log_volume_24h: training uses sum(candle_volume * close) over 96 bars;
+    #   live uses exchange API dayNtlVlm.  Both approximate 24h USD notional
+    #   (candle v is in base units), so they should be close in practice.
+    # - funding_rate: training always 0.0 (not available from candle data);
+    #   live uses actual exchange funding rate from meta_and_asset_ctxs.
+    MISMATCHED_FEATURES = ["log_volume_24h", "funding_rate"]
+
     FEATURES = [
         "adx",
         "rsi",
@@ -62,6 +70,18 @@ class MLTradeModel:
         "tf_alignment",     # 1h vs 15m direction: +1=agree, -1=disagree
         "rsi_1h",           # RSI(56) — 1h equivalent
         "adx_1h",           # ADX(56) — 1h equivalent
+        # --- Tier 3 (v4) ---
+        "log_volume_24h",   # log10(24h USD volume) — liquidity proxy
+        "bb_width",         # (bb_upper - bb_lower) / bb_mid * 100 — volatility width
+        "adx_slope",        # (adx[i] - adx[i-4]) / max(adx[i-4], 1.0) — trend acceleration
+        "funding_rate",     # funding rate (0.0 default, wired later for live)
+    ]
+
+    # FEATURES minus data-source mismatched columns (25 features).
+    # Use this list when retraining to exclude features that differ
+    # between training (candle-based) and live (exchange API) pipelines.
+    FEATURES_DEPLOYABLE = [
+        f for f in FEATURES if f not in ("log_volume_24h", "funding_rate")
     ]
 
     _DEFAULT_PARAMS: dict = {
@@ -81,6 +101,7 @@ class MLTradeModel:
         self._lgb_model: Optional[object] = None  # LightGBM classifier
         self._feature_importances: dict[str, float] = {}
         self._optimal_threshold: Optional[float] = None
+        self._train_features: list[str] = list(self.FEATURES)
 
     @property
     def optimal_threshold(self) -> Optional[float]:
@@ -90,8 +111,19 @@ class MLTradeModel:
     # Training
     # ------------------------------------------------------------------
 
-    def train(self, df: pd.DataFrame) -> dict:
+    def train(
+        self,
+        df: pd.DataFrame,
+        exclude_features: list[str] | None = None,
+    ) -> dict:
         """Train XGBoost + LightGBM ensemble on DataFrame with FEATURES + 'label'.
+
+        Args:
+            df: DataFrame with feature columns + 'label'.
+            exclude_features: Feature names to drop before training (e.g.
+                MISMATCHED_FEATURES).  The full FEATURES list is still required
+                in df columns for validation, but excluded columns are removed
+                from X before fitting.
 
         Pipeline:
         1. Data preparation and 3-way split.
@@ -110,7 +142,20 @@ class MLTradeModel:
         if "label" not in df.columns:
             raise ValueError("DataFrame must contain a 'label' column")
 
-        X = df[self.FEATURES].astype(float)
+        # Determine effective feature set (full 27 or reduced)
+        if exclude_features:
+            train_features = [f for f in self.FEATURES if f not in exclude_features]
+            logger.info(
+                "Excluding %d features: %s → training with %d features",
+                len(exclude_features), exclude_features, len(train_features),
+            )
+        else:
+            train_features = list(self.FEATURES)
+
+        # Store the training feature list for save/load consistency
+        self._train_features = train_features
+
+        X = df[train_features].astype(float)
         y = df["label"].astype(int)
 
         n_positive = int(y.sum())
@@ -270,7 +315,7 @@ class MLTradeModel:
         importances = self._model.feature_importances_
         self._feature_importances = {
             name: round(float(imp), 4)
-            for name, imp in zip(self.FEATURES, importances)
+            for name, imp in zip(train_features, importances)
         }
 
         # In-sample metrics (for reporting only; CV score is the real metric)
@@ -289,14 +334,17 @@ class MLTradeModel:
             "n_negative": n_negative,
             "optimal_threshold": self._optimal_threshold,
             "ensemble": "xgb+lgb" if self._lgb_model is not None else "xgb",
+            "n_features": len(train_features),
+            "excluded_features": exclude_features or [],
         }
 
         logger.info(
-            "Model trained: %d samples (%d pos / %d neg), "
+            "Model trained: %d samples (%d pos / %d neg), %d features, "
             "CV AUC=%.4f +/- %.4f, WF AUC=%.4f, optimal_threshold=%.4f, ensemble=%s",
             len(df),
             n_positive,
             n_negative,
+            len(train_features),
             metrics["cv_auc_mean"],
             metrics["cv_auc_std"],
             metrics["wf_auc"],
@@ -375,7 +423,10 @@ class MLTradeModel:
         if self._model is None:
             raise RuntimeError("Model not loaded. Call load() or train() first.")
 
-        row = pd.DataFrame([features])[self.FEATURES].astype(float)
+        # Use the feature list the model was trained with (may be a subset
+        # of FEATURES if --exclude-features was used during retraining).
+        train_feats = self._train_features
+        row = pd.DataFrame([features])[train_feats].astype(float)
 
         # Backward compat: if model was trained with fewer features, use only
         # the features the model knows about (e.g. 14-feature model + 25 FEATURES)
@@ -501,6 +552,27 @@ class MLTradeModel:
         else:
             tf_alignment = 0.0  # unknown
 
+        # --- Tier 3: log_volume_24h, bb_width, adx_slope, funding_rate ---
+        import math
+
+        # log_volume_24h: log10 of 24h USD volume (use actual if available)
+        volume_24h = float(state.volume_24h) if getattr(state, "volume_24h", None) else 0.0
+        log_volume_24h = math.log10(max(volume_24h, 1.0))
+
+        # bb_width: (bb_upper - bb_lower) / bb_mid * 100
+        bb_width = 0.0
+        if state.bb_upper is not None and state.bb_lower is not None:
+            bb_mid = (float(state.bb_upper) + float(state.bb_lower)) / 2.0
+            if bb_mid > 0:
+                bb_width = (float(state.bb_upper) - float(state.bb_lower)) / bb_mid * 100
+
+        # adx_slope: (adx[i] - adx[i-4]) / max(adx[i-4], 1.0)
+        # In live, we only have the current ADX; use 0.0 as default
+        adx_slope = float(state.adx_slope) if getattr(state, "adx_slope", None) is not None else 0.0
+
+        # funding_rate: placeholder, will be wired for live later
+        funding_rate = float(state.funding_rate) if getattr(state, "funding_rate", None) is not None else 0.0
+
         return {
             "adx": float(state.adx),
             "rsi": float(state.rsi),
@@ -527,6 +599,11 @@ class MLTradeModel:
             "tf_alignment": tf_alignment,
             "rsi_1h": rsi_1h,
             "adx_1h": adx_1h,
+            # Tier 3
+            "log_volume_24h": log_volume_24h,
+            "bb_width": bb_width,
+            "adx_slope": adx_slope,
+            "funding_rate": funding_rate,
         }
 
     # ------------------------------------------------------------------
@@ -543,6 +620,7 @@ class MLTradeModel:
             "lgb_model": self._lgb_model,
             "feature_importances": self._feature_importances,
             "optimal_threshold": self._optimal_threshold,
+            "train_features": getattr(self, "_train_features", list(self.FEATURES)),
         }
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         joblib.dump(payload, path)
@@ -557,6 +635,7 @@ class MLTradeModel:
             self._lgb_model = payload.get("lgb_model", None)
             self._feature_importances = payload.get("feature_importances", {})
             self._optimal_threshold = payload.get("optimal_threshold", None)
+            self._train_features = payload.get("train_features", list(self.FEATURES))
 
             # Warn if saved model was trained with different features
             model_features = set(self._feature_importances.keys())

@@ -65,6 +65,18 @@ def build_parser() -> argparse.ArgumentParser:
                            help="Breakeven threshold %% (e.g. 1.0 for 1.0%%, 99 to disable)")
     sp_replay.add_argument("--trailing", type=float, default=None,
                            help="Trailing ATR multiplier (0 to disable)")
+    sp_replay.add_argument("--max-hold-hours", type=float, default=None,
+                           dest="max_hold_hours",
+                           help="Max hold time in hours (0 to disable, default: 4)")
+    sp_replay.add_argument("--min-volume", type=float, default=None,
+                           dest="min_volume",
+                           help="Min 24h USD volume to include asset (default: no filter)")
+    sp_replay.add_argument("--maker-fill-rate", type=float, default=None,
+                           dest="maker_fill_rate",
+                           help="Maker fill rate 0-1 (default: 1.0 = ideal)")
+    sp_replay.add_argument("--maker-fail-action", type=str, default=None,
+                           dest="maker_fail_action", choices=["taker", "skip"],
+                           help="Action on maker fill failure (default: taker)")
 
     return parser
 

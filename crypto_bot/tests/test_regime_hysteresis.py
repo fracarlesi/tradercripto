@@ -129,6 +129,7 @@ class TestLevelHysteresis:
         """ADX=26 (between exit=22 and entry=28) should NOT enter TREND."""
         svc = _make_service()
         regime = _detect(svc, "BTC", adx=26.0)
+        # ADX=26 > range_adx_max=20 but < entry=28 → CHAOS
         assert regime == Regime.CHAOS
 
     def test_entry_at_exact_threshold(self) -> None:
@@ -161,7 +162,8 @@ class TestLevelHysteresis:
         _detect(svc, "BTC", adx=30.0)
         assert svc._confirmed_regime["BTC"] == Regime.TREND
 
-        # ADX drops to 21 — below exit threshold, should become CHAOS after 1 bar
+        # ADX drops to 21 — below exit threshold and <= range_adx_max=20?
+        # No, 21 > 20, so it becomes CHAOS after 1 bar
         regime = _detect(svc, "BTC", adx=21.0)
         assert regime == Regime.CHAOS
 
@@ -187,10 +189,11 @@ class TestLevelHysteresis:
         assert svc._confirmed_regime["BTC"] == Regime.TREND
 
         # Drop below exit threshold — leaves TREND
+        # ADX=15 <= range_adx_max=20 so regime becomes RANGE (not CHAOS)
         _detect(svc, "BTC", adx=15.0)
-        assert svc._confirmed_regime["BTC"] == Regime.CHAOS
+        assert svc._confirmed_regime["BTC"] == Regime.RANGE
 
-        # ADX=25 — above old threshold but below new entry threshold
+        # ADX=25 — above range_adx_max but below entry threshold = CHAOS
         regime = _detect(svc, "BTC", adx=25.0)
         assert regime == Regime.CHAOS
 
@@ -272,37 +275,40 @@ class TestConfirmationBars:
         svc = _make_service(confirmation_bars=3)
         _detect(svc, "BTC", adx=30.0)
 
+        # ADX=15 <= range_adx_max=20 so this transitions to RANGE (not CHAOS)
         _detect(svc, "BTC", adx=15.0)  # bar 1
         _detect(svc, "BTC", adx=15.0)  # bar 2
         regime = _detect(svc, "BTC", adx=15.0)  # bar 3 — confirmed
-        assert regime == Regime.CHAOS
+        assert regime == Regime.RANGE
 
     def test_interrupted_confirmation_resets(self) -> None:
         """If a confirming sequence is interrupted, counter resets."""
         svc = _make_service(confirmation_bars=3)
         _detect(svc, "BTC", adx=30.0)
 
-        _detect(svc, "BTC", adx=15.0)  # bar 1 — pending CHAOS
-        _detect(svc, "BTC", adx=15.0)  # bar 2 — pending CHAOS
+        # ADX=15 <= range_adx_max=20 → pending RANGE (not CHAOS)
+        _detect(svc, "BTC", adx=15.0)  # bar 1 — pending RANGE
+        _detect(svc, "BTC", adx=15.0)  # bar 2 — pending RANGE
         _detect(svc, "BTC", adx=30.0)  # back to TREND — resets counter
 
         # Need 3 more consecutive bars
         _detect(svc, "BTC", adx=15.0)  # bar 1
         _detect(svc, "BTC", adx=15.0)  # bar 2
         regime = _detect(svc, "BTC", adx=15.0)  # bar 3
-        assert regime == Regime.CHAOS
+        assert regime == Regime.RANGE
 
     def test_different_pending_regime_resets_counter(self) -> None:
         """If pending regime changes (CHAOS -> RANGE), counter resets to 1."""
         svc = _make_service(confirmation_bars=3)
         _detect(svc, "BTC", adx=30.0)
 
-        _detect(svc, "BTC", adx=21.0, choppiness=50.0)  # CHAOS pending
-        _detect(svc, "BTC", adx=21.0, choppiness=50.0)  # CHAOS bar 2
+        # ADX=21 > range_adx_max=20 → CHAOS pending
+        _detect(svc, "BTC", adx=21.0)  # CHAOS pending
+        _detect(svc, "BTC", adx=21.0)  # CHAOS bar 2
 
-        # Now switch to RANGE conditions — different regime, resets counter
-        _detect(svc, "BTC", adx=18.0, choppiness=70.0)  # RANGE bar 1
-        regime = _detect(svc, "BTC", adx=18.0, choppiness=70.0)  # RANGE bar 2
+        # Now ADX=18 <= range_adx_max=20 → RANGE (different regime, resets counter)
+        _detect(svc, "BTC", adx=18.0)  # RANGE bar 1
+        regime = _detect(svc, "BTC", adx=18.0)  # RANGE bar 2
         assert regime == Regime.TREND  # Not yet confirmed (only 2 of 3)
 
 
@@ -344,7 +350,8 @@ class TestInitConfirmedRegime:
     def test_without_init_first_reading_becomes_confirmed(self) -> None:
         """Without init, first reading becomes confirmed immediately (the bug)."""
         svc = _make_service(confirmation_bars=3)
-        # No init — first reading at ADX=24 becomes CHAOS immediately
+        # No init — first reading at ADX=24 (> range_adx_max=20, < entry=28)
+        # becomes CHAOS immediately
         regime = _detect(svc, "BTC", adx=24.0)
         assert regime == Regime.CHAOS  # Immediately confirmed as CHAOS
 
@@ -454,8 +461,8 @@ class TestConfigDefaults:
 class TestRegimeLifecycle:
     """End-to-end regime lifecycle with hysteresis and confirmation."""
 
-    def test_full_lifecycle_trend_to_chaos_and_back(self) -> None:
-        """Full lifecycle: enter TREND -> stay -> exit to CHAOS -> re-enter."""
+    def test_full_lifecycle_trend_to_range_and_back(self) -> None:
+        """Full lifecycle: enter TREND -> stay -> exit to RANGE -> re-enter."""
         svc = _make_service(confirmation_bars=2)
 
         # 1. Enter TREND with ADX=30
@@ -467,20 +474,22 @@ class TestRegimeLifecycle:
         assert r == Regime.TREND
 
         # 3. ADX drops to 15 — first bar below exit threshold
+        #    ADX=15 <= range_adx_max=20 → pending RANGE
         r = _detect(svc, "BTC", adx=15.0)
         assert r == Regime.TREND  # Only 1 of 2 bars
 
-        # 4. Second bar at ADX=15 — confirmed CHAOS
+        # 4. Second bar at ADX=15 — confirmed RANGE
         r = _detect(svc, "BTC", adx=15.0)
-        assert r == Regime.CHAOS
+        assert r == Regime.RANGE
 
-        # 5. ADX=25 — above old threshold but below entry=28
+        # 5. ADX=25 — above range_adx_max but below entry=28 → CHAOS
+        #    1 of 2 bars for CHAOS confirmation
         r = _detect(svc, "BTC", adx=25.0)
-        assert r == Regime.CHAOS
+        assert r == Regime.RANGE  # Not yet confirmed
 
-        # 6. ADX=29 — above entry threshold, first bar
+        # 6. ADX=29 — above entry threshold, pending TREND (resets counter from CHAOS)
         r = _detect(svc, "BTC", adx=29.0)
-        assert r == Regime.CHAOS  # 1 of 2 bars
+        assert r == Regime.RANGE  # 1 of 2 bars
 
         # 7. Second bar at ADX=29 — confirmed TREND
         r = _detect(svc, "BTC", adx=29.0)
@@ -494,9 +503,9 @@ class TestRegimeLifecycle:
         _detect(svc, "BTC", adx=30.0)
         assert svc._confirmed_regime["BTC"] == Regime.TREND
 
-        # ETH stays in CHAOS
+        # ETH stays in RANGE (ADX=15 <= range_adx_max=20)
         _detect(svc, "ETH", adx=15.0)
-        assert svc._confirmed_regime["ETH"] == Regime.CHAOS
+        assert svc._confirmed_regime["ETH"] == Regime.RANGE
 
         # BTC regime unaffected by ETH
         r = _detect(svc, "BTC", adx=24.0)

@@ -101,47 +101,69 @@ def calculate_rsi(prices: np.ndarray, period: int = 14) -> np.ndarray:
 
 
 def calculate_adx(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
-    """Calculate Average Directional Index (ADX)."""
-    # Calculate +DM and -DM
-    up_move = high[1:] - high[:-1]
-    down_move = low[:-1] - low[1:]
+    """Calculate Average Directional Index (ADX).
 
-    plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
-    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
+    Algorithm matches backtesting/indicators.py calc_adx() exactly:
+    - TR, +DM, -DM computed per bar (starting at index 1)
+    - Wilder's smoothing on TR, +DM, -DM (running sums, not separate ATR)
+    - DI+/DI- = 100 * smoothed_DM / smoothed_TR
+    - DX = 100 * |DI+ - DI-| / (DI+ + DI-)
+    - ADX = Wilder's smoothing of DX
 
-    # Calculate ATR for DI normalization
-    atr = calculate_atr(high, low, close, period)
+    Returns array of length (len(close) - 1) to match original signature.
+    NaN-padded positions are returned as 0.0 for backward compat.
+    """
+    n = len(close)
+    if n < 2:
+        return np.zeros(max(n - 1, 0))
 
-    # Smooth DM values
-    plus_dm_smooth = np.zeros(len(plus_dm))
-    minus_dm_smooth = np.zeros(len(minus_dm))
+    # Work in the full-length (n) space, matching indicators.py exactly
+    tr = np.zeros(n)
+    plus_dm = np.zeros(n)
+    minus_dm = np.zeros(n)
+    for i in range(1, n):
+        h_diff = high[i] - high[i - 1]
+        l_diff = low[i - 1] - low[i]
+        tr[i] = max(high[i] - low[i],
+                    abs(high[i] - close[i - 1]),
+                    abs(low[i] - close[i - 1]))
+        plus_dm[i] = h_diff if (h_diff > l_diff and h_diff > 0) else 0.0
+        minus_dm[i] = l_diff if (l_diff > h_diff and l_diff > 0) else 0.0
 
-    plus_dm_smooth[period - 1] = np.sum(plus_dm[:period])
-    minus_dm_smooth[period - 1] = np.sum(minus_dm[:period])
+    atr_arr = np.zeros(n)
+    atr_arr[period] = np.sum(tr[1: period + 1])
+    s_plus = np.sum(plus_dm[1: period + 1])
+    s_minus = np.sum(minus_dm[1: period + 1])
+    plus_di = np.zeros(n)
+    minus_di = np.zeros(n)
+    if atr_arr[period] > 0:
+        plus_di[period] = 100.0 * s_plus / atr_arr[period]
+        minus_di[period] = 100.0 * s_minus / atr_arr[period]
+    for i in range(period + 1, n):
+        atr_arr[i] = atr_arr[i - 1] - atr_arr[i - 1] / period + tr[i]
+        s_plus = s_plus - s_plus / period + plus_dm[i]
+        s_minus = s_minus - s_minus / period + minus_dm[i]
+        if atr_arr[i] > 0:
+            plus_di[i] = 100.0 * s_plus / atr_arr[i]
+            minus_di[i] = 100.0 * s_minus / atr_arr[i]
 
-    for i in range(period, len(plus_dm)):
-        plus_dm_smooth[i] = plus_dm_smooth[i - 1] - (plus_dm_smooth[i - 1] / period) + plus_dm[i]
-        minus_dm_smooth[i] = minus_dm_smooth[i - 1] - (minus_dm_smooth[i - 1] / period) + minus_dm[i]
+    dx = np.zeros(n)
+    for i in range(period, n):
+        denom = plus_di[i] + minus_di[i]
+        if denom > 0:
+            dx[i] = 100.0 * abs(plus_di[i] - minus_di[i]) / denom
 
-    # Calculate DI+ and DI- - use np.divide with where parameter to avoid RuntimeWarning
-    atr_scaled = atr * period
-    plus_di = np.divide(100 * plus_dm_smooth, atr_scaled, out=np.zeros_like(atr_scaled, dtype=float), where=atr_scaled != 0)
-    minus_di = np.divide(100 * minus_dm_smooth, atr_scaled, out=np.zeros_like(atr_scaled, dtype=float), where=atr_scaled != 0)
+    adx_full = np.zeros(n)
+    start_idx = period * 2
+    if start_idx < n:
+        adx_full[start_idx] = np.mean(dx[period + 1: start_idx + 1])
+        for i in range(start_idx + 1, n):
+            adx_full[i] = (adx_full[i - 1] * (period - 1) + dx[i]) / period
 
-    # Calculate DX - use np.divide with where parameter to avoid RuntimeWarning for division by zero
-    di_sum = plus_di + minus_di
-    di_diff = 100 * np.abs(plus_di - minus_di)
-    dx = np.divide(di_diff, di_sum, out=np.zeros_like(di_sum, dtype=float), where=di_sum != 0)
-
-    # Smooth DX to get ADX
-    adx = np.zeros(len(dx))
-    start_idx = 2 * period - 1
-    if start_idx < len(dx):
-        adx[start_idx] = np.mean(dx[period:start_idx + 1])
-        for i in range(start_idx + 1, len(dx)):
-            adx[i] = (adx[i - 1] * (period - 1) + dx[i]) / period
-
-    return adx
+    # Return array of length (n-1) to keep the same output shape as before
+    # (callers pass high[1:], low[1:] style arrays and expect len(close)-1).
+    # Map: full-index i -> output index (i-1).
+    return adx_full[1:]
 
 
 def calculate_bollinger_bands(prices: np.ndarray, period: int = 20, std_mult: float = 2.0):
@@ -505,21 +527,39 @@ class MarketStateService(BaseService):
             ema9 = calculate_ema(close, 9)
             ema21 = calculate_ema(close, 21)
 
-            # EMA slopes (4-bar lookback, matching ml_dataset formula)
-            ema9_slope, ema21_slope = self._compute_ema_slopes(
-                symbol, float(ema9[-1]), float(ema21[-1])
-            )
+            # EMA slopes (4-bar lookback from candle history, matching training)
+            # slope = (ema[i] - ema[i-4]) / ema[i-4]
+            if len(ema9) >= 5 and ema9[-5] > 0:
+                ema9_slope = Decimal(str((ema9[-1] - ema9[-5]) / ema9[-5]))
+            else:
+                ema9_slope = Decimal("0")
+            if len(ema21) >= 5 and ema21[-5] > 0:
+                ema21_slope = Decimal(str((ema21[-1] - ema21[-5]) / ema21[-5]))
+            else:
+                ema21_slope = Decimal("0")
 
             # ADX
             adx_values = calculate_adx(high, low, close, 14)
             adx = Decimal(str(max(0, min(100, adx_values[-1]))))
 
+            # ADX slope (4-bar lookback, matching training: (adx[i] - adx[i-4]) / max(adx[i-4], 1.0))
+            if len(adx_values) >= 5:
+                adx_4ago = adx_values[-5]
+                adx_slope_val = (adx_values[-1] - adx_4ago) / max(adx_4ago, 1.0)
+                adx_slope = Decimal(str(adx_slope_val))
+            else:
+                adx_slope = Decimal("0")
+
             # RSI
             rsi_values = calculate_rsi(close, 14)
             rsi = Decimal(str(max(0, min(100, rsi_values[-1]))))
 
-            # RSI slope (2-bar lookback)
-            rsi_slope = self._compute_rsi_slope(symbol, float(rsi))
+            # RSI slope (2-bar lookback from candle history, matching training)
+            # slope = rsi[i] - rsi[i-2]
+            if len(rsi_values) >= 3:
+                rsi_slope = Decimal(str(rsi_values[-1] - rsi_values[-3]))
+            else:
+                rsi_slope = Decimal("0")
 
             # Bollinger Bands
             bb_lower, bb_mid, bb_upper = calculate_bollinger_bands(close, 20, 2.0)
@@ -613,6 +653,7 @@ class MarketStateService(BaseService):
                 ema9_slope=ema9_slope,
                 ema21_slope=ema21_slope,
                 rsi_slope=rsi_slope,
+                adx_slope=adx_slope,
                 prev_open=prev_open,
                 prev_high=prev_high,
                 prev_low=prev_low,
@@ -817,16 +858,15 @@ class MarketStateService(BaseService):
         """
         Detect market regime with level hysteresis.
 
-        Level hysteresis prevents whipsaw:
-        - Entering TREND requires ADX >= trend_adx_entry_min (stricter)
-        - Staying in TREND only requires ADX >= trend_adx_exit_min (lenient)
-        - RANGE: ADX <= range_adx_max and choppiness >= choppiness_range_min
-        - CHAOS: Everything else
+        Matches backtesting/indicators.py compute_regime_series() + ml_dataset
+        regime_encoded logic exactly:
+        - TREND uses ADX hysteresis (entry/exit thresholds + N-bar confirmation)
+        - RANGE: not TREND and ADX <= range_adx_max (no choppiness check)
+        - CHAOS: everything else (not TREND and ADX > range_adx_max)
 
-        Note: ema200_slope is intentionally NOT used for regime classification.
-        Direction is captured by EMA9/21 crossover (the ML entry signal).
-        The ema200_slope parameter is kept in the signature for backward
-        compatibility but is ignored.
+        Note: ema200_slope and choppiness parameters are kept in the signature
+        for backward compatibility but are NOT used for regime classification,
+        matching the training/replay reference implementation.
 
         Hysteresis: Regime only changes after N consecutive bars confirm.
         """
@@ -840,7 +880,7 @@ class MarketStateService(BaseService):
             # Already in TREND — use lower exit threshold (stay in TREND longer)
             if adx >= cfg.trend_adx_exit_min:
                 raw_regime = Regime.TREND
-            elif adx <= cfg.range_adx_max and choppiness >= cfg.choppiness_range_min:
+            elif adx <= cfg.range_adx_max:
                 raw_regime = Regime.RANGE
             else:
                 raw_regime = Regime.CHAOS
@@ -848,7 +888,7 @@ class MarketStateService(BaseService):
             # Not in TREND — use stricter entry threshold
             if adx >= cfg.trend_adx_entry_min:
                 raw_regime = Regime.TREND
-            elif adx <= cfg.range_adx_max and choppiness >= cfg.choppiness_range_min:
+            elif adx <= cfg.range_adx_max:
                 raw_regime = Regime.RANGE
             else:
                 raw_regime = Regime.CHAOS

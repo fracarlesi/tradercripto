@@ -160,6 +160,32 @@ def _extract_features(
             dir_1h = 1.0 if ind_1h["ema9"][idx] > ind_1h["ema21"][idx] else -1.0
             tf_alignment = 1.0 if dir_15m == dir_1h else -1.0
 
+    # --- Tier 3: log_volume_24h, bb_width, adx_slope, funding_rate ---
+    import math
+
+    # log_volume_24h: log10(sum of last 96 bars volume * close price)
+    lookback_vol = min(96, idx + 1)
+    vol_slice = ind["volumes"][idx - lookback_vol + 1: idx + 1]
+    close_slice = ind["closes"][idx - lookback_vol + 1: idx + 1]
+    vol_usd_24h = float(np.nansum(vol_slice * close_slice))
+    log_volume_24h = math.log10(max(vol_usd_24h, 1.0))
+
+    # bb_width: (bb_upper - bb_lower) / bb_mid * 100
+    bb_width = 0.0
+    if not np.isnan(bu) and not np.isnan(bl):
+        bb_mid = (bu + bl) / 2.0
+        if bb_mid > 0:
+            bb_width = (bu - bl) / bb_mid * 100
+
+    # adx_slope: (adx[i] - adx[i-4]) / max(adx[i-4], 1.0)
+    if idx >= 4 and not np.isnan(ind["adx"][idx - 4]):
+        adx_slope = (adx_val - ind["adx"][idx - 4]) / max(ind["adx"][idx - 4], 1.0)
+    else:
+        adx_slope = 0.0
+
+    # funding_rate: not available in historical candle data
+    funding_rate = 0.0
+
     return {
         "adx": float(adx_val),
         "rsi": float(rsi_val),
@@ -186,6 +212,11 @@ def _extract_features(
         "tf_alignment": tf_alignment,
         "rsi_1h": rsi_1h,
         "adx_1h": adx_1h,
+        # Tier 3
+        "log_volume_24h": log_volume_24h,
+        "bb_width": bb_width,
+        "adx_slope": adx_slope,
+        "funding_rate": funding_rate,
     }
 
 

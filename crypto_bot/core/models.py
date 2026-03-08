@@ -116,6 +116,9 @@ class MarketState(BaseModel):
     # RSI slope (2-bar lookback: RSI[current] - RSI[2 bars ago])
     rsi_slope: Decimal = Field(default=Decimal("0"), description="RSI slope: RSI[i] - RSI[i-2]")
 
+    # ADX slope (4-bar lookback: (adx[i] - adx[i-4]) / max(adx[i-4], 1.0))
+    adx_slope: Decimal = Field(default=Decimal("0"), description="ADX slope: (adx[i] - adx[i-4]) / max(adx[i-4], 1.0)")
+
     # Multi-timeframe indicators (1h-equivalent computed from 15m bars)
     rsi_1h: Optional[Decimal] = Field(None, ge=0, le=100, description="RSI(56) — 1h equivalent")
     adx_1h: Optional[Decimal] = Field(None, ge=0, le=100, description="ADX(56) — 1h equivalent")

@@ -1,6 +1,8 @@
-"""Canonical indicator implementations (NaN-padded, full-length arrays).
+"""Canonical indicator implementations (full-length arrays).
 
-Source of truth: backtest_sizing.py (NaN-seeded EMA with SMA warmup).
+Aligned with live bot (crypto_bot/services/market_state.py):
+- EMA uses ema[0]=closes[0] initialization (not SMA-seeded)
+- Bollinger Bands use EMA(20) middle band (not SMA)
 All functions return np.ndarray of same length as input closes.
 """
 
@@ -14,13 +16,19 @@ from backtesting.config import BacktestConfig
 # ── EMA ──────────────────────────────────────────────────────────────────────
 
 def calc_ema(closes: np.ndarray, period: int) -> np.ndarray:
-    """EMA with SMA-seeded warmup, NaN for pre-warmup bars."""
-    ema = np.full_like(closes, np.nan)
-    if len(closes) < period:
-        return ema
-    ema[period - 1] = np.mean(closes[:period])
+    """EMA with ema[0]=closes[0] initialization (matches live bot).
+
+    Live bot (market_state.py calculate_ema) uses:
+        ema[0] = prices[0]
+        ema[i] = alpha * prices[i] + (1 - alpha) * ema[i-1]
+    No SMA seed, no NaN values.
+    """
+    if len(closes) == 0:
+        return np.array([], dtype=float)
+    ema = np.zeros_like(closes, dtype=float)
+    ema[0] = closes[0]
     k = 2.0 / (period + 1)
-    for i in range(period, len(closes)):
+    for i in range(1, len(closes)):
         ema[i] = closes[i] * k + ema[i - 1] * (1 - k)
     return ema
 
@@ -140,8 +148,12 @@ def calc_sma(closes: np.ndarray, period: int) -> np.ndarray:
 
 def calc_bollinger(closes: np.ndarray, period: int = 20,
                    num_std: float = 2.0) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Bollinger Bands: (middle, upper, lower)."""
-    mid = calc_sma(closes, period)
+    """Bollinger Bands: (middle, upper, lower).
+
+    Uses EMA(period) as middle band to match live bot
+    (market_state.py calculate_bollinger_bands uses calculate_ema).
+    """
+    mid = calc_ema(closes, period)
     upper = np.full_like(closes, np.nan)
     lower = np.full_like(closes, np.nan)
     for i in range(period - 1, len(closes)):
@@ -268,12 +280,18 @@ def compute_indicators(candles: list[dict], cfg: BacktestConfig,
     n = len(closes)
 
     # RSI slope: RSI[i] - RSI[i-2] (matches live bot momentum fade + ML feature)
+    # NOTE: In live bot, rsi_slope uses scan-cycle intervals (4h apart),
+    # not candle intervals (15m apart). This creates a train/serve skew.
+    # The backtesting version (2 candles = 30m) is used for training.
     rsi_slope = np.full(n, np.nan)
     for i in range(2, n):
         if not np.isnan(rsi[i]) and not np.isnan(rsi[i - 2]):
             rsi_slope[i] = rsi[i] - rsi[i - 2]
 
     # EMA9 slope: 4-bar lookback (matches ML feature extraction)
+    # NOTE: In live bot, ema_slope uses scan-cycle intervals (4h apart),
+    # not candle intervals (15m apart). This creates a train/serve skew.
+    # The backtesting version (4 candles = 1h) is used for training.
     ema9_slope = np.full(n, np.nan)
     ema21_slope = np.full(n, np.nan)
     for i in range(slope_lookback, n):

@@ -5,6 +5,7 @@ Promoted from backtest_sizing.py with BacktestConfig instead of globals.
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timezone
 
 from backtesting.config import BacktestConfig
@@ -161,7 +162,9 @@ class PortfolioSimulator:
             gross = (exit_price - pos["entry"]) * qty
         else:
             gross = (pos["entry"] - exit_price) * qty
-        fees = pos["notional"] * (self.cfg.entry_fee_pct + self.cfg.exit_fee_pct)
+        # Use per-position entry fee if set (execution friction), else config default
+        entry_fee = pos.get("entry_fee_pct", self.cfg.entry_fee_pct)
+        fees = pos["notional"] * (entry_fee + self.cfg.exit_fee_pct)
         net = gross - fees
         self.equity += net
         self.equity_curve.append(self.equity)
@@ -172,6 +175,9 @@ class PortfolioSimulator:
             "net": net, "reason": reason,
             "t_entry": pos["t_entry"], "t_exit": t_exit,
             "effective_leverage": min(self._lev, self._leverage_caps.get(symbol, self._lev)),
+            "fill_type": pos.get("fill_type", "maker"),
+            "intended_entry": pos.get("intended_entry", pos["entry"]),
+            "slippage_cost": pos.get("slippage_cost", 0.0),
         })
 
 
@@ -256,6 +262,10 @@ class ReplaySimulator(PortfolioSimulator):
         self._symbol_day_counts: dict[str, int] = {}
         # Exit reason counters
         self.exit_reasons: dict[str, int] = {}
+        # Execution friction tracking
+        self.skipped_entries: int = 0
+        self.maker_fills: int = 0
+        self.taker_fallbacks: int = 0
 
     # ------------------------------------------------------------------
     # check_exits — full 7-stage exit pipeline
@@ -400,6 +410,20 @@ class ReplaySimulator(PortfolioSimulator):
             self._close_replay(symbol, exit_price, "REGIME", candle["t"])
             return
 
+        # --- 8. Max hold time (dead trade cleanup) ---
+        # Matches live bot: close if held > N hours AND abs(pnl%) < 0.3%
+        max_hold_h = self.cfg.max_hold_hours
+        if max_hold_h > 0:
+            hold_minutes = (candle["t"] - pos["t_entry"]) / 60_000
+            if hold_minutes >= max_hold_h * 60:
+                if abs(unrealized_pct) < self.cfg.max_hold_dead_pnl_pct:
+                    if d == 1:
+                        exit_price = close * (1 - slip)
+                    else:
+                        exit_price = close * (1 + slip)
+                    self._close_replay(symbol, exit_price, "MAX_HOLD", candle["t"])
+                    return
+
     # ------------------------------------------------------------------
     # try_open — enriched entry with cooldowns, daily cap, correlation
     # ------------------------------------------------------------------
@@ -453,10 +477,9 @@ class ReplaySimulator(PortfolioSimulator):
         effective_lev = min(self._lev, self._leverage_caps.get(symbol, self._lev))
 
         if self._use_kelly and ml_proba > 0.5:
-            # Kelly fraction: f* = (p*(b+1) - 1) / b  where b = tp/sl ratio
             b = self.cfg.tp_pct / self.cfg.sl_pct if self.cfg.sl_pct > 0 else 2.0
             kelly_f = (ml_proba * (b + 1) - 1) / b
-            kelly_f = max(0.01, min(kelly_f, self._pct))  # Clamp to [1%, position_pct]
+            kelly_f = max(0.01, min(kelly_f, self._pct))
             notional = self.equity * kelly_f * effective_lev
         else:
             notional = self.equity * self._pct * effective_lev
@@ -464,12 +487,42 @@ class ReplaySimulator(PortfolioSimulator):
         if notional <= 0 or entry_price <= 0:
             return False
 
-        # Adverse slippage on entry
-        slip = self.cfg.slippage_pct
+        intended_entry = entry_price
+
+        # --- Execution friction: simulate maker fill probability ---
+        fill_rate = self.cfg.maker_fill_rate
+        if fill_rate < 1.0:
+            # Deterministic pseudo-random based on trade identity
+            h = hashlib.md5(f"{symbol}:{bar_time}:{direction}".encode()).digest()
+            roll = int.from_bytes(h[:4], "big") / 0xFFFFFFFF
+            maker_filled = roll < fill_rate
+        else:
+            maker_filled = True
+
+        if maker_filled:
+            # Maker fill: lower fee, normal slippage
+            slip = self.cfg.slippage_pct
+            entry_fee_pct = self.cfg.maker_entry_fee_pct
+            fill_type = "maker"
+            self.maker_fills += 1
+        else:
+            # Maker failed
+            if self.cfg.maker_fail_action == "skip":
+                self.skipped_entries += 1
+                return False
+            else:
+                # Taker fallback: higher fee + extra slippage
+                slip = self.cfg.slippage_pct + self.cfg.taker_extra_slippage_pct
+                entry_fee_pct = self.cfg.taker_entry_fee_pct
+                fill_type = "taker"
+                self.taker_fallbacks += 1
+
         if direction == 1:
             entry_price *= (1 + slip)
         else:
             entry_price *= (1 - slip)
+
+        slippage_cost = abs(entry_price - intended_entry) * (notional / entry_price)
 
         tp_pct = self.cfg.tp_pct
         sl_pct = self.cfg.sl_pct
@@ -495,6 +548,10 @@ class ReplaySimulator(PortfolioSimulator):
             "entry_regime": entry_regime,
             "entry_atr_pct": entry_atr_pct,
             "ml_proba": ml_proba,
+            "entry_fee_pct": entry_fee_pct,
+            "fill_type": fill_type,
+            "intended_entry": intended_entry,
+            "slippage_cost": slippage_cost,
         }
 
         self.daily_counts[day] = self.daily_counts.get(day, 0) + 1
