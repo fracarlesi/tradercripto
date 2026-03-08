@@ -395,15 +395,8 @@ class CounterfactualLoggerService(BaseService):
             f"Still pending: {len(self._pending)}"
         )
 
-        try:
-            await self._whatsapp._send_message(
-                report,
-                title="Counterfactual Report",
-                tags="mag",
-            )
-            self._logger.info("Counterfactual daily report sent")
-        except Exception as e:
-            self._logger.error("Failed to send counterfactual report: %s", e)
+        # Ntfy notification disabled — counterfactual data is logged only.
+        self._logger.info("Counterfactual daily report: %s", report.replace("\n", " | "))
 
         self._last_report_time = now
 

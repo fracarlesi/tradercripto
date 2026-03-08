@@ -610,6 +610,7 @@ class ConservativeBot:
         from .services.performance_monitor import PerformanceMonitorService
         self._services["performance_monitor"] = PerformanceMonitorService(
             bus=self._bus, config=self._raw_config, whatsapp=whatsapp_svc,
+            exchange=self._exchange,
         )
 
         # Protection Manager
@@ -633,6 +634,10 @@ class ConservativeBot:
             whatsapp=whatsapp_svc, performance_monitor=perf_mon,
             exchange=self._exchange,
         )
+
+        # Wire capital_ladder back into performance_monitor for Account Snapshot
+        if perf_mon:
+            perf_mon._capital_ladder = self._services.get("capital_ladder")
 
         # Wire performance_monitor into risk_manager for cooldown trade history
         risk_mgr = self._services.get("risk_manager")

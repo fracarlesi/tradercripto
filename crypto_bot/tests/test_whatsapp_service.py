@@ -339,7 +339,6 @@ class TestOrderEvents:
         await service._on_order_event(msg)
         service._send_message.assert_called_once()
         text = service._send_message.call_args[0][0]
-        assert "Trade Opened" in text
         assert "BTC" in text
         assert "LONG" in text
 
@@ -428,7 +427,7 @@ class TestFillEvents:
         await service._on_fill_event(msg)
         service._send_message.assert_called_once()
         text = service._send_message.call_args[0][0]
-        assert "Position Closed" in text
+        assert "BTC" in text
         assert "+$42.50" in text
 
     @pytest.mark.asyncio
@@ -452,7 +451,7 @@ class TestFillEvents:
         await service._on_fill_event(msg)
         service._send_message.assert_called_once()
         text = service._send_message.call_args[0][0]
-        assert "Position Closed" in text
+        assert "BTC" in text
         assert "$-18.30" in text
 
 

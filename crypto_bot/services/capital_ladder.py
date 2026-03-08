@@ -346,14 +346,18 @@ class CapitalLadderService(BaseService):
         # Send deduped notification
         status_hash = self._compute_status_hash(metrics)
 
-        if self._state.status != old_status or status_hash != self._state.last_status_sent_hash:
+        # Only send ntfy on meaningful state changes (READY_TO_SCALE, REGRESS).
+        # TRACKING/HOLD are visible in Account Snapshot — no separate notifications.
+        if self._state.status != old_status:
             if self._state.status == "READY_TO_SCALE":
                 await self._send_scale_up_ready(level_cfg, metrics)
             elif self._state.status == "REGRESS":
                 await self._send_do_not_scale(level_cfg, metrics, regress_reasons)
-            else:
-                await self._send_ladder_status(level_cfg, metrics, blockers)
 
+            self._state.last_status_sent_hash = status_hash
+            self._save_state()
+        elif status_hash != self._state.last_status_sent_hash:
+            # Metrics changed but status didn't — just persist, no notification
             self._state.last_status_sent_hash = status_hash
             self._save_state()
 

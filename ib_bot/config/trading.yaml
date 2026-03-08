@@ -59,10 +59,25 @@ risk:
   max_trades_per_day: 2
   consecutive_stops_halt: 2    # Halt after N consecutive stops
 
+# EMA Momentum Strategy (used when strategy.name: "ema_momentum")
+ema_strategy:
+  ema_fast: 9
+  ema_slow: 21
+  rsi_period: 14
+  rsi_long_min: 30.0
+  rsi_long_max: 65.0
+  rsi_short_min: 35.0
+  rsi_short_max: 70.0
+  atr_stop_multiplier: 2.0
+  reward_risk_ratio: "1.5"
+  max_trades_per_day: 4
+  max_entry_time: "15:00"
+  allow_short: true
+
 # Notifications
 notifications:
   enabled: true
-  ntfy_topic: "${NTFY_TOPIC:}"
+  ntfy_topic: "${NTFY_TOPIC_IB:}"
 
 # ATR Filter (skip extreme volatility days)
 atr_filter:
@@ -70,6 +85,24 @@ atr_filter:
   lookback_days: 20            # Rolling window of daily ATR values
   low_percentile: 20.0         # Skip if ATR below this percentile
   high_percentile: 80.0        # Skip if ATR above this percentile
+
+# Regime Detection (observation-only, does not block trades)
+regime:
+  enabled: true
+  atr_lookback: 20
+  price_window: 10
+  high_vol_multiplier: 1.5
+  low_vol_multiplier: 0.5
+
+# Paper-Trading Scorecard
+scorecard:
+  enabled: true
+  halt_dd_usd: 400
+  halt_5s_loss_usd: 150
+  candidate_pf: 1.2
+  candidate_min_trades: 30
+  candidate_max_dd: 300
+  candidate_min_wr: 35.0
 
 # Logging
 logging:

@@ -79,6 +79,8 @@ class PerformanceMonitorService(BaseService):
         bus: Optional[MessageBus] = None,
         config: Optional[Dict[str, Any]] = None,
         whatsapp: Optional[Any] = None,
+        exchange: Optional[Any] = None,
+        capital_ladder: Optional[Any] = None,
     ) -> None:
         super().__init__(
             name="performance_monitor",
@@ -88,6 +90,8 @@ class PerformanceMonitorService(BaseService):
         )
 
         self._whatsapp = whatsapp
+        self._exchange = exchange
+        self._capital_ladder = capital_ladder
 
         # Trade history (loaded from disk)
         self._trades: List[TradeRecord] = []
@@ -180,76 +184,110 @@ class PerformanceMonitorService(BaseService):
     # =========================================================================
 
     async def _send_scheduled_report(self) -> None:
-        """Send scheduled 12h performance report via ntfy."""
+        """Send Account Snapshot via ntfy (replaces old Performance Report)."""
         if not self._whatsapp:
             return
 
         now = datetime.now(timezone.utc)
         now_rome = now.astimezone(REPORT_TIMEZONE)
 
-        # Last 12 hours trades
-        cutoff_12h = now - timedelta(hours=REPORT_WINDOW_HOURS)
-        recent = [
+        # Get equity from exchange
+        equity_str = "N/A"
+        try:
+            if self._exchange and hasattr(self._exchange, "get_account_state"):
+                acct = await self._exchange.get_account_state()
+                equity = acct.get("equity", 0)
+                equity_str = f"${equity:,.2f}" if equity else "N/A"
+        except Exception:
+            pass
+
+        # Today's trades (midnight UTC)
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        today_trades = [
             t for t in self._trades
-            if datetime.fromisoformat(t.closed_at).replace(tzinfo=timezone.utc) >= cutoff_12h
+            if datetime.fromisoformat(t.closed_at).replace(tzinfo=timezone.utc) >= today_start
         ]
 
-        # --- Build 12h section ---
-        recent_count = len(recent)
-        if recent_count > 0:
-            recent_wins = [t for t in recent if t.is_win]
-            recent_losses = [t for t in recent if not t.is_win]
-            recent_wr = len(recent_wins) / recent_count * 100
-            recent_pnl = sum(t.realized_pnl for t in recent)
-            recent_avg_win = (
-                sum(t.realized_pnl for t in recent_wins) / len(recent_wins)
-                if recent_wins else 0
-            )
-            recent_avg_loss = (
-                sum(t.realized_pnl for t in recent_losses) / len(recent_losses)
-                if recent_losses else 0
-            )
-            recent_tp = sum(1 for t in recent if t.exit_reason == "take_profit")
-            recent_sl = sum(1 for t in recent if t.exit_reason == "stop_loss")
-            total_fees = sum(t.fee for t in recent)
-            gross_pnl = sum(t.gross_pnl for t in recent) if any(t.gross_pnl for t in recent) else recent_pnl + total_fees
-            gp_sign = "+" if gross_pnl >= 0 else ""
-            rp_sign = "+" if recent_pnl >= 0 else ""
+        today_count = len(today_trades)
+        today_wins = sum(1 for t in today_trades if t.is_win)
+        today_pnl = sum(t.realized_pnl for t in today_trades)
+        tp_sign = "+" if today_pnl >= 0 else ""
 
-            recent_section = (
-                f"Last 12h: {recent_count} trades\n"
-                f"Win rate: {recent_wr:.0f}% ({len(recent_wins)}W/{len(recent_losses)}L)\n"
-                f"Gross: {gp_sign}${gross_pnl:.2f} | Fees: -${total_fees:.2f} | Net: {rp_sign}${recent_pnl:.2f}\n"
-                f"Avg win: +${recent_avg_win:.2f} | Avg loss: ${recent_avg_loss:.2f}\n"
-                f"TP: {recent_tp} | SL: {recent_sl}"
-            )
-        else:
-            recent_section = "Last 12h: no trades"
+        # Rolling metrics (30 days)
+        window = self._get_rolling_trades()
+        total = len(window)
+        wins = sum(1 for t in window if t.is_win)
+        win_rate = (wins / total * 100) if total else 0
+        gross_wins = sum(t.realized_pnl for t in window if t.realized_pnl > 0)
+        gross_losses = abs(sum(t.realized_pnl for t in window if t.realized_pnl < 0))
+        pf = gross_wins / gross_losses if gross_losses > 0 else float("inf")
 
-        # --- Compose ---
-        period = "notte" if now_rome.hour == 8 else "giorno"
-        time_str = now_rome.strftime("%H:%M")
+        # Open positions
+        open_positions = "none"
+        try:
+            if self._exchange and hasattr(self._exchange, "get_positions"):
+                positions = await self._exchange.get_positions()
+                if positions:
+                    open_positions = ", ".join(
+                        f"{p.get('coin', '?')} {p.get('szi', '?')}" for p in positions[:5]
+                    )
+        except Exception:
+            pass
+
+        # Top symbols by P&L
+        sym_pnl: Dict[str, float] = {}
+        for t in window:
+            sym_pnl[t.symbol] = sym_pnl.get(t.symbol, 0.0) + t.realized_pnl
+        sorted_syms = sorted(sym_pnl.items(), key=lambda x: x[1], reverse=True)[:5]
+        sym_lines = ", ".join(f"{s} {v:+.2f}" for s, v in sorted_syms) if sorted_syms else "none"
+
+        # Ladder status
+        ladder_line = ""
+        if self._capital_ladder:
+            state = getattr(self._capital_ladder, "_state", None)
+            if state:
+                ladder_line = f"Ladder: L{state.current_level} [{state.status}]"
+
+        # Max drawdown
+        max_dd = 0.0
+        if window:
+            running = 0.0
+            peak = 0.0
+            for t in window:
+                running += t.realized_pnl
+                peak = max(peak, running)
+                dd = peak - running
+                max_dd = max(max_dd, dd)
+
+        time_str = now_rome.strftime("%H:%M %d/%m")
 
         report = (
-            f"Report {period} — {time_str}\n"
-            f"{recent_section}"
+            f"ACCOUNT SNAPSHOT\n"
+            f"Time: {time_str}\n"
+            f"Equity: {equity_str}\n"
+            f"Net P&L today: {tp_sign}${today_pnl:.2f} ({today_count} trades)\n"
+            f"Today: {today_wins}W/{today_count - today_wins}L\n"
+            f"---\n"
+            f"Win rate (30d): {win_rate:.0f}% ({total} trades)\n"
+            f"Profit factor: {pf:.2f}\n"
+            f"Max DD: ${max_dd:.2f}\n"
+            f"Open: {open_positions}\n"
+            f"Top symbols: {sym_lines}\n"
+            f"{ladder_line}"
         )
 
         try:
             await self._whatsapp._send_message(
                 report,
-                title=f"Performance Report ({period})",
+                title=f"Account Snapshot — {time_str}",
                 tags="chart_with_upwards_trend",
             )
-            self._logger.info("Scheduled performance report sent (%s)", period)
+            self._logger.info("Account Snapshot sent")
         except Exception as e:
-            self._logger.error("Failed to send performance report: %s", e)
+            self._logger.error("Failed to send Account Snapshot: %s", e)
 
     async def _check_win_rate_alert(self) -> None:
-        """Alert if win rate is below threshold after enough trades."""
-        if not self._whatsapp:
-            return
-
+        """Log win rate warning (ntfy alert disabled — covered by Account Snapshot)."""
         window = self._get_rolling_trades()
         total = len(window)
 
@@ -260,23 +298,7 @@ class PerformanceMonitorService(BaseService):
         win_rate = wins / total
 
         if win_rate < WIN_RATE_ALERT_THRESHOLD:
-            alert = (
-                f"ALERT: Low Win Rate\n"
-                f"Win rate {win_rate:.1%} ({wins}/{total}) — "
-                f"below {WIN_RATE_ALERT_THRESHOLD:.0%} threshold\n"
-                f"Expected: ~50%. Check strategy conditions."
-            )
-
-            try:
-                await self._whatsapp._send_message(
-                    alert,
-                    title="Low Win Rate Alert",
-                    priority=True,
-                    tags="warning",
-                )
-                self._logger.warning("Win rate alert sent: %.1f%%", win_rate * 100)
-            except Exception as e:
-                self._logger.error("Failed to send win rate alert: %s", e)
+            self._logger.warning("Low win rate: %.1f%% (%d/%d)", win_rate * 100, wins, total)
 
     # =========================================================================
     # Data Helpers

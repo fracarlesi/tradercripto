@@ -215,9 +215,9 @@ class OpeningRangeConfig(BaseConfig):
 class StrategyConfig(BaseConfig):
     """ORB strategy parameters."""
 
-    name: Literal["orb"] = Field(
+    name: Literal["orb", "ema_momentum"] = Field(
         default="orb",
-        description="Strategy name",
+        description="Strategy name (orb or ema_momentum)",
     )
     breakout_buffer_ticks: int = Field(
         default=2,
@@ -278,6 +278,82 @@ class StopsConfig(BaseConfig):
     )
 
 
+class EMAStrategyConfig(BaseConfig):
+    """EMA Momentum strategy parameters."""
+
+    ema_fast: int = Field(
+        default=9,
+        ge=2,
+        le=50,
+        description="Fast EMA period",
+    )
+    ema_slow: int = Field(
+        default=21,
+        ge=5,
+        le=200,
+        description="Slow EMA period",
+    )
+    rsi_period: int = Field(
+        default=14,
+        ge=5,
+        le=50,
+        description="RSI lookback period",
+    )
+    rsi_long_min: float = Field(
+        default=30.0,
+        ge=0.0,
+        le=100.0,
+        description="Minimum RSI for long entry",
+    )
+    rsi_long_max: float = Field(
+        default=65.0,
+        ge=0.0,
+        le=100.0,
+        description="Maximum RSI for long entry",
+    )
+    rsi_short_min: float = Field(
+        default=35.0,
+        ge=0.0,
+        le=100.0,
+        description="Minimum RSI for short entry",
+    )
+    rsi_short_max: float = Field(
+        default=70.0,
+        ge=0.0,
+        le=100.0,
+        description="Maximum RSI for short entry",
+    )
+    atr_stop_multiplier: float = Field(
+        default=2.0,
+        ge=0.5,
+        le=10.0,
+        description="ATR multiplier for stop distance",
+    )
+    reward_risk_ratio: str = Field(
+        default="1.5",
+        description="Reward-to-risk ratio (string for Decimal compatibility)",
+    )
+
+    @field_validator("reward_risk_ratio", mode="before")
+    @classmethod
+    def coerce_rr_to_str(cls, v: object) -> str:
+        return str(v) if not isinstance(v, str) else v
+    max_trades_per_day: int = Field(
+        default=4,
+        ge=1,
+        le=20,
+        description="Maximum EMA trades per day",
+    )
+    max_entry_time: str = Field(
+        default="15:00",
+        description="No new EMA entries after this time (ET)",
+    )
+    allow_short: bool = Field(
+        default=True,
+        description="Allow short entries",
+    )
+
+
 class RiskConfig(BaseConfig):
     """Risk management configuration."""
 
@@ -334,7 +410,7 @@ class NotificationsConfig(BaseConfig):
     @property
     def ntfy_topic_resolved(self) -> str:
         """Get ntfy topic, falling back to env var."""
-        return self.ntfy_topic or os.environ.get("NTFY_TOPIC", "")
+        return self.ntfy_topic or os.environ.get("NTFY_TOPIC_IB", "")
 
 
 class ATRFilterConfig(BaseConfig):
@@ -377,6 +453,84 @@ class ATRFilterConfig(BaseConfig):
         return self
 
 
+class RegimeConfig(BaseConfig):
+    """Regime detection configuration."""
+
+    enabled: bool = Field(
+        default=True,
+        description="Enable regime detection (observation-only by default)",
+    )
+    atr_lookback: int = Field(
+        default=20,
+        ge=5,
+        le=100,
+        description="ATR history for average calculation",
+    )
+    price_window: int = Field(
+        default=10,
+        ge=5,
+        le=50,
+        description="Bars for trend/chop detection",
+    )
+    high_vol_multiplier: float = Field(
+        default=1.5,
+        ge=1.0,
+        le=5.0,
+        description="ATR multiplier for high volatility classification",
+    )
+    low_vol_multiplier: float = Field(
+        default=0.5,
+        ge=0.1,
+        le=1.0,
+        description="ATR multiplier for low volatility classification",
+    )
+
+
+class ScorecardConfig(BaseConfig):
+    """Paper-trading scorecard configuration."""
+
+    enabled: bool = Field(
+        default=True,
+        description="Enable EOD scorecard evaluation",
+    )
+    halt_dd_usd: int = Field(
+        default=400,
+        ge=50,
+        le=10000,
+        description="Max drawdown (USD) before HALT state",
+    )
+    halt_5s_loss_usd: int = Field(
+        default=150,
+        ge=25,
+        le=5000,
+        description="5-session loss (USD) before HALT state",
+    )
+    candidate_pf: float = Field(
+        default=1.2,
+        ge=0.5,
+        le=5.0,
+        description="Min profit factor (20-session) for CANDIDATE",
+    )
+    candidate_min_trades: int = Field(
+        default=30,
+        ge=5,
+        le=200,
+        description="Min trades for CANDIDATE promotion",
+    )
+    candidate_max_dd: int = Field(
+        default=300,
+        ge=50,
+        le=5000,
+        description="Max drawdown (USD) for CANDIDATE",
+    )
+    candidate_min_wr: float = Field(
+        default=35.0,
+        ge=10.0,
+        le=80.0,
+        description="Min win rate (%) for CANDIDATE",
+    )
+
+
 class LoggingConfig(BaseConfig):
     """Logging configuration."""
 
@@ -410,9 +564,12 @@ class TradingConfig(BaseConfig):
     opening_range: OpeningRangeConfig = Field(default_factory=OpeningRangeConfig)
     strategy: StrategyConfig = Field(default_factory=StrategyConfig)
     stops: StopsConfig = Field(default_factory=StopsConfig)
+    ema_strategy: EMAStrategyConfig = Field(default_factory=EMAStrategyConfig)
     risk: RiskConfig = Field(default_factory=RiskConfig)
     atr_filter: ATRFilterConfig = Field(default_factory=ATRFilterConfig)
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
+    regime: RegimeConfig = Field(default_factory=RegimeConfig)
+    scorecard: ScorecardConfig = Field(default_factory=ScorecardConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
     @property

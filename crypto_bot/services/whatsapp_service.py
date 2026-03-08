@@ -171,22 +171,11 @@ class WhatsAppService(BaseService):
             self._server,
         )
 
-        await self._send_message(
-            f"{self.EMOJI['startup']} HLQuantBot Started\n"
-            f"Trading bot is now active.\n"
-            f"Time: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}",
-            title="HLQuantBot Started",
-        )
+        # Startup/shutdown notifications disabled to reduce noise.
+        # Bot status is visible in Account Snapshot reports.
 
     async def _on_stop(self) -> None:
         """Cleanup HTTP session."""
-        if self._enabled:
-            await self._send_message(
-                f"{self.EMOJI['shutdown']} HLQuantBot Stopped\n"
-                f"Trading bot has been shut down.\n"
-                f"Messages sent: {self._messages_sent}",
-                title="HLQuantBot Stopped",
-            )
 
         if self._session:
             await self._session.close()
@@ -220,17 +209,15 @@ class WhatsAppService(BaseService):
 
             side = signal.get("direction", "unknown")
             emoji = self.EMOJI["trade_open_long"] if side == "long" else self.EMOJI["trade_open_short"]
+            sym = signal.get("symbol", "N/A")
 
             text = (
-                f"{emoji} Trade Opened\n"
-                f"Symbol: {signal.get('symbol', 'N/A')}\n"
-                f"Side: {side.upper()}\n"
-                f"Size: {order.get('size', 'N/A')}\n"
+                f"{emoji} {sym} {side.upper()}\n"
                 f"Entry: ${order.get('price', 'N/A')}\n"
-                f"Strategy: {signal.get('strategy', 'N/A')}\n"
-                f"TP: ${signal.get('tp_price', 'N/A')} | SL: ${signal.get('sl_price', 'N/A')}"
+                f"TP: ${signal.get('tp_price', 'N/A')} | SL: ${signal.get('sl_price', 'N/A')}\n"
+                f"{signal.get('strategy', '')}"
             )
-            await self._send_message(text, title=f"{emoji} Trade {side.upper()} {signal.get('symbol', '')}")
+            await self._send_message(text, title=f"{emoji} {side.upper()} {sym}")
 
         elif event_type == "order_error" and "error" in self._alert_on:
             error = payload.get("error", "Unknown error")
@@ -277,51 +264,28 @@ class WhatsAppService(BaseService):
                 self._logger.debug("Skipping duplicate close notification for %s", symbol)
                 return
 
-            if isinstance(pnl, (int, float, Decimal)):
-                emoji = self.EMOJI["trade_close_profit"] if pnl >= 0 else self.EMOJI["trade_close_loss"]
-                pnl_sign = "+" if pnl >= 0 else ""
-            else:
-                emoji = self.EMOJI["fill"]
-                pnl_sign = ""
+            pnl_f = float(pnl) if isinstance(pnl, Decimal) else pnl
+            emoji = self.EMOJI["trade_close_profit"] if pnl_f >= 0 else self.EMOJI["trade_close_loss"]
+            pnl_sign = "+" if pnl_f >= 0 else ""
 
-            # Daily stats summary
-            daily_wins = payload.get("daily_wins")
-            daily_trades = payload.get("daily_trades")
-            daily_pnl = payload.get("daily_pnl")
+            # Daily stats
+            daily_wins = payload.get("daily_wins", 0) or 0
+            daily_trades = payload.get("daily_trades", 0) or 0
+            daily_losses = daily_trades - daily_wins
+            daily_pnl = payload.get("daily_pnl", 0) or 0
+            dp_sign = "+" if daily_pnl >= 0 else ""
 
-            daily_line = ""
-            if daily_trades is not None and daily_trades > 0:
-                wr = (daily_wins / daily_trades) * 100
-                dp_sign = "+" if daily_pnl >= 0 else ""
-                daily_line = f"\n---\nToday: {daily_wins}W/{daily_trades - daily_wins}L ({wr:.0f}%) | {dp_sign}${daily_pnl:.2f}"
-
-            equity = payload.get("equity", 0)
-            equity_line = ""
-            if equity > 0:
-                # Expected daily P&L: +$1.03/day (from grid replay: +$93/90d)
-                expected_daily = 1.03
-                dp = daily_pnl if daily_pnl is not None else 0
-                pace = "ahead" if dp >= expected_daily else "behind" if dp < 0 else "on track"
-                equity_line = f"\nBalance: ${equity:.2f} | {pace}"
+            equity = payload.get("equity", 0) or 0
 
             text = (
-                f"{emoji} Position Closed\n"
-                f"Symbol: {symbol}\n"
-                f"Side: {side.upper()}\n"
-                f"Entry: ${entry:.2f} -> Exit: ${exit_price:.2f}\n"
-                f"P&L: {pnl_sign}${pnl:.2f} ({pnl_sign}{pnl_pct:.2f}%)"
-                f"{daily_line}"
-                f"{equity_line}"
+                f"{emoji} {symbol} {side.upper()} closed\n"
+                f"${entry:.2f} -> ${exit_price:.2f}\n"
+                f"P&L: {pnl_sign}${pnl_f:.2f} ({pnl_sign}{float(pnl_pct):.2f}%)\n"
+                f"---\n"
+                f"Today: {daily_wins}W/{daily_losses}L | {dp_sign}${daily_pnl:.2f}\n"
+                f"Balance: ${equity:.2f}"
             )
-            await self._send_message(text, title=f"{emoji} Closed {symbol} {pnl_sign}${pnl:.2f}")
-
-        elif event_type == "fill" and "fill" in self._alert_on:
-            symbol = payload.get("symbol", "N/A")
-            size = payload.get("size", 0)
-            price = payload.get("price", 0)
-
-            text = f"{self.EMOJI['fill']} Fill: {symbol} {size} @ ${price}"
-            await self._queue_message(text)
+            await self._send_message(text, title=f"{emoji} {symbol} {pnl_sign}${pnl_f:.2f}")
 
     async def _on_risk_alert(self, message: Message) -> None:
         """Handle risk alerts (kill switch, warnings)."""
