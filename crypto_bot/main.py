@@ -1412,6 +1412,83 @@ class ConservativeBot:
                 logger.info("Started: %s", name)
         logger.info("All services started")
 
+    async def _startup_safety_check(self) -> None:
+        """Check for config mismatches with existing positions at startup.
+
+        Emits warnings (log + ntfy) but does NOT close positions or modify
+        orders — the operator decides what to do.
+
+        Checks:
+        1. Open positions > max_positions
+        2. Leverage mismatch between config and exchange
+        3. Duplicate reduce-only orders
+        """
+        execution = self._services.get("execution")
+        if not execution:
+            return
+
+        positions = execution.active_positions
+        if not positions:
+            return
+
+        warnings: list[str] = []
+
+        # 1. Position count vs max_positions
+        max_pos = self.config.max_positions
+        if len(positions) > max_pos:
+            msg = (
+                f"POSITION OVERFLOW: {len(positions)} open positions "
+                f"but max_positions={max_pos}. "
+                f"Symbols: {list(positions.keys())}"
+            )
+            logger.warning(msg)
+            warnings.append(msg)
+
+        # 2. Leverage mismatch
+        configured_leverage = self.config.leverage
+        for symbol, pos in positions.items():
+            pos_leverage = getattr(pos, "leverage", None)
+            if pos_leverage and pos_leverage != configured_leverage:
+                msg = (
+                    f"LEVERAGE MISMATCH: {symbol} has {pos_leverage}x "
+                    f"but config says {configured_leverage}x"
+                )
+                logger.warning(msg)
+                warnings.append(msg)
+
+        # 3. Duplicate reduce-only orders
+        try:
+            open_orders = await self._exchange.get_open_orders()
+            for symbol in positions:
+                sym_reduce = [
+                    o for o in open_orders
+                    if o.get("symbol") == symbol and o.get("reduceOnly")
+                ]
+                if len(sym_reduce) > 2:
+                    msg = (
+                        f"DUPLICATE TP/SL: {symbol} has {len(sym_reduce)} "
+                        f"reduce-only orders (expected 2)"
+                    )
+                    logger.warning(msg)
+                    warnings.append(msg)
+        except Exception as e:
+            logger.warning("Could not check orders for safety audit: %s", e)
+
+        # Send ntfy alert if any warnings found
+        if warnings:
+            ntfy = self._services.get("ntfy") or self._services.get("whatsapp")
+            alert_text = "STARTUP SAFETY CHECK\n" + "\n".join(warnings)
+            logger.warning("=" * 60)
+            logger.warning(alert_text)
+            logger.warning("=" * 60)
+            if ntfy and hasattr(ntfy, "send_custom_alert"):
+                try:
+                    await ntfy.send_custom_alert(alert_text, emoji="kill_switch")
+                except Exception:
+                    pass
+        else:
+            logger.info("Startup safety check: all clear")
+
     async def _init_regime_for_open_positions(self) -> None:
         """Initialize confirmed regime to TREND for symbols with open positions.
 
@@ -1471,6 +1548,9 @@ class ConservativeBot:
             self._init_services()
 
             await self._start_services()
+
+            # SAFETY: Check for config mismatches with existing positions
+            await self._startup_safety_check()
 
             # Initialize confirmed regime for open positions to prevent
             # false regime changes after restart (Problem 4 fix)

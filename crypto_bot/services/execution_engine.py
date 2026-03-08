@@ -410,21 +410,25 @@ class ExecutionEngineService(BaseService):
     async def _on_start(self) -> None:
         """Initialize service and subscribe to topics."""
         self._logger.info("Starting ExecutionEngine service")
-        
+
         # Subscribe to trade intents (from risk manager)
         await self.subscribe(Topic.TRADE_INTENT, self._handle_signal)
 
         # Subscribe to regime changes (close positions on regime invalidation)
         await self.subscribe(Topic.REGIME, self._handle_regime_change)
 
-        # Start background tasks
+        # SAFETY: Cancel orphan non-reduce-only orders from previous instances
+        # before syncing positions or starting the monitor loop.
+        await self._cancel_orphan_orders_on_startup()
+
+        # Sync existing positions from exchange
+        await self._sync_positions_from_exchange()
+
+        # Start background tasks AFTER initial sync completes
         self._position_monitor_task = asyncio.create_task(
             self._monitor_positions(),
             name="execution_position_monitor"
         )
-        
-        # Sync existing positions from exchange
-        await self._sync_positions_from_exchange()
 
         self._logger.info(
             "ExecutionEngine started: %d active positions",
@@ -450,6 +454,56 @@ class ExecutionEngineService(BaseService):
             len(self.active_positions)
         )
     
+    async def _cancel_orphan_orders_on_startup(self) -> None:
+        """Cancel non-reduce-only orders left by previous bot instances.
+
+        At startup, the exchange may have residual limit orders from a
+        crashed/restarted instance.  If these fill during the restart gap,
+        they create "ghost" positions the bot never intended to open.
+
+        This method cancels ALL non-reduce-only open orders.  Reduce-only
+        orders (TP/SL) are preserved — they protect existing positions.
+        """
+        try:
+            open_orders = await self.client.get_open_orders()
+            orphan_orders = [
+                o for o in open_orders if not o.get("reduceOnly", False)
+            ]
+            if not orphan_orders:
+                self._logger.info("Startup: no orphan orders found")
+                return
+
+            cancelled = 0
+            for order in orphan_orders:
+                oid = order.get("orderId")
+                symbol = order.get("symbol", "?")
+                side = order.get("side", "?")
+                price = order.get("price", 0)
+                try:
+                    await self.client.cancel_order(symbol, int(oid))
+                    cancelled += 1
+                    self._logger.warning(
+                        "Startup: cancelled orphan order %s (%s %s @ %.4f)",
+                        oid, side, symbol, price,
+                    )
+                except Exception as e:
+                    self._logger.error(
+                        "Startup: failed to cancel orphan order %s for %s: %s",
+                        oid, symbol, e,
+                    )
+
+            self._logger.info(
+                "Startup orphan cleanup: cancelled %d/%d non-reduce-only orders",
+                cancelled, len(orphan_orders),
+            )
+            if cancelled > 0:
+                await self._send_alert(
+                    f"Startup: cancelled {cancelled} orphan orders from previous instance"
+                )
+
+        except Exception as e:
+            self._logger.error("Startup orphan order cleanup failed: %s", e)
+
     async def _run_iteration(self) -> None:
         """No-op: position sync is handled exclusively by _monitor_positions().
 
@@ -1386,10 +1440,11 @@ class ExecutionEngineService(BaseService):
 
     async def _ensure_tp_sl_for_position(self, position: ExecutionPosition) -> None:
         """
-        Ensure a position has TP and SL orders set.
+        Ensure a position has exactly 1 TP and 1 SL order on the exchange.
 
         Called for positions discovered on exchange that may not have protection.
-        Uses default percentages from config.
+        If duplicates are found, cancels the extras before confirming.
+        Uses default percentages from config when no orders exist.
 
         Args:
             position: Position to protect
@@ -1411,28 +1466,65 @@ class ExecutionEngineService(BaseService):
         try:
             open_orders = await self.client.get_open_orders()
             symbol_orders = [o for o in open_orders if o.get("symbol") == symbol]
-
-            # If there are reduce-only orders, assume TP/SL are set
             reduce_only_orders = [o for o in symbol_orders if o.get("reduceOnly")]
+
             if len(reduce_only_orders) >= 2:
-                # Recover TP/SL prices from exchange orders to prevent
-                # _sync_positions_from_exchange re-triggering this method
-                prices = sorted(
-                    [float(o.get("limitPx", o.get("price", 0))) for o in reduce_only_orders]
+                # Reconcile: keep exactly 1 TP + 1 SL, cancel duplicates
+                tp_orders, sl_orders = self._classify_tp_sl_orders(
+                    reduce_only_orders, position
                 )
-                if position.side == "short":
-                    position.tp_price = prices[0]   # Lower price = TP for short
-                    position.sl_price = prices[-1]   # Higher price = SL for short
-                else:  # long
-                    position.tp_price = prices[-1]   # Higher price = TP for long
-                    position.sl_price = prices[0]    # Lower price = SL for long
-                self._logger.info(
-                    "%s has %d reduce-only orders — recovered TP=%.6f SL=%.6f",
-                    symbol, len(reduce_only_orders),
-                    position.tp_price, position.sl_price,
+
+                # Cancel duplicate TPs (keep the one closest to config TP%)
+                tp_pct = self._bot_config.risk.take_profit_pct / 100
+                expected_tp = entry_price * (1 - tp_pct) if not is_long else entry_price * (1 + tp_pct)
+                tp_orders.sort(key=lambda o: abs(float(o.get("price", 0)) - expected_tp))
+                for dup in tp_orders[1:]:
+                    await self._cancel_duplicate_order(dup, symbol, "TP")
+
+                # Cancel duplicate SLs (keep the one closest to config SL%)
+                sl_pct = self._bot_config.risk.stop_loss_pct / 100
+                expected_sl = entry_price * (1 + sl_pct) if not is_long else entry_price * (1 - sl_pct)
+                sl_orders.sort(key=lambda o: abs(float(o.get("price", 0)) - expected_sl))
+                for dup in sl_orders[1:]:
+                    await self._cancel_duplicate_order(dup, symbol, "SL")
+
+                # Recover prices from the kept orders
+                kept_tp = tp_orders[0] if tp_orders else None
+                kept_sl = sl_orders[0] if sl_orders else None
+                if kept_tp:
+                    position.tp_price = float(kept_tp.get("price", 0))
+                    position.tp_order_id = str(kept_tp.get("orderId", ""))
+                if kept_sl:
+                    position.sl_price = float(kept_sl.get("price", 0))
+                    position.sl_order_id = str(kept_sl.get("orderId", ""))
+
+                total_cancelled = max(0, len(tp_orders) - 1) + max(0, len(sl_orders) - 1)
+                if total_cancelled > 0:
+                    self._logger.warning(
+                        "%s: reconciled TP/SL — cancelled %d duplicate orders, "
+                        "kept TP=%.6f SL=%.6f",
+                        symbol, total_cancelled,
+                        position.tp_price or 0, position.sl_price or 0,
+                    )
+                    await self._send_alert(
+                        f"TP/SL reconciled for {symbol}: cancelled {total_cancelled} duplicates"
+                    )
+                else:
+                    self._logger.info(
+                        "%s has 2 reduce-only orders — recovered TP=%.6f SL=%.6f",
+                        symbol, position.tp_price or 0, position.sl_price or 0,
+                    )
+
+                if kept_tp and kept_sl:
+                    self._tp_sl_confirmed.add(symbol)
+                    return
+
+            elif len(reduce_only_orders) == 1:
+                # Only 1 order — need to place the missing one
+                self._logger.warning(
+                    "%s has only 1 reduce-only order — will place missing TP or SL",
+                    symbol,
                 )
-                self._tp_sl_confirmed.add(symbol)
-                return
 
         except Exception as e:
             self._logger.warning("Could not check existing orders for %s: %s", symbol, e)
@@ -1540,6 +1632,57 @@ class ExecutionEngineService(BaseService):
 
         # Record size for partial fill detection
         self._tp_sl_placed_size[symbol] = float(size)
+
+    def _classify_tp_sl_orders(
+        self,
+        reduce_only_orders: List[Dict],
+        position: ExecutionPosition,
+    ) -> tuple:
+        """Classify reduce-only orders into TP and SL lists.
+
+        For a **long** position: orders with price > entry are TP, < entry are SL.
+        For a **short** position: orders with price < entry are TP, > entry are SL.
+
+        Returns:
+            Tuple of (tp_orders, sl_orders)
+        """
+        entry = position.entry_price
+        is_long = position.side == "long"
+        tp_orders: List[Dict] = []
+        sl_orders: List[Dict] = []
+
+        for o in reduce_only_orders:
+            price = float(o.get("limitPx", o.get("price", 0)))
+            if is_long:
+                if price >= entry:
+                    tp_orders.append(o)
+                else:
+                    sl_orders.append(o)
+            else:
+                if price <= entry:
+                    tp_orders.append(o)
+                else:
+                    sl_orders.append(o)
+
+        return tp_orders, sl_orders
+
+    async def _cancel_duplicate_order(
+        self, order: Dict, symbol: str, label: str
+    ) -> None:
+        """Cancel a single duplicate reduce-only order."""
+        oid = order.get("orderId")
+        price = float(order.get("price", order.get("limitPx", 0)))
+        try:
+            await self.client.cancel_order(symbol, int(oid))
+            self._logger.warning(
+                "Cancelled duplicate %s order %s for %s @ %.6f",
+                label, oid, symbol, price,
+            )
+        except Exception as e:
+            self._logger.error(
+                "Failed to cancel duplicate %s order %s for %s: %s",
+                label, oid, symbol, e,
+            )
 
     def _validate_stop_distance(
         self,
@@ -2238,12 +2381,9 @@ class ExecutionEngineService(BaseService):
                         continue
 
                     entry_px = pos.get("entryPrice", 0)
-                    # Use a conservative past timestamp for synced positions.
-                    # The exchange API doesn't provide an open timestamp, so we
-                    # default to 1 hour ago.  This avoids blocking exits with
-                    # artificially fresh grace periods (momentum_fade min_age,
-                    # regime-change grace, etc.) after a bot restart.
-                    synced_opened_at = datetime.now(timezone.utc) - timedelta(hours=1)
+                    # Recover real open time from fills API, or fall back to
+                    # 1 hour ago if unavailable.
+                    synced_opened_at = await self._get_position_open_time(symbol)
                     new_pos = ExecutionPosition(
                         symbol=symbol,
                         side=pos.get("side", "long"),
@@ -2287,6 +2427,46 @@ class ExecutionEngineService(BaseService):
         except Exception as e:
             self._logger.error("Failed to sync positions: %s", e)
     
+    async def _get_position_open_time(self, symbol: str) -> datetime:
+        """Recover the real open time for a position from the fills API.
+
+        Scans recent fills for the earliest *opening* fill on ``symbol``
+        (direction contains "Open").  Falls back to ``now - 1h`` if no
+        matching fill is found, and logs a warning so the operator knows
+        the timestamp is estimated.
+        """
+        fallback = datetime.now(timezone.utc) - timedelta(hours=1)
+        try:
+            fills = await self.client.get_fills(limit=200)
+            # Filter to opening fills for this symbol, oldest first
+            open_fills = [
+                f for f in fills
+                if f.get("symbol") == symbol
+                and isinstance(f.get("dir"), str)
+                and "Open" in f["dir"]
+            ]
+            if open_fills:
+                # The fills API returns newest-first; pick the earliest
+                earliest = min(open_fills, key=lambda f: f.get("time") or fallback)
+                real_time = earliest.get("time")
+                if real_time:
+                    self._logger.info(
+                        "Recovered real opened_at for %s: %s (from fill %s)",
+                        symbol, real_time.isoformat(), earliest.get("fillId"),
+                    )
+                    return real_time
+
+            self._logger.warning(
+                "No opening fill found for %s — using fallback opened_at=%s",
+                symbol, fallback.isoformat(),
+            )
+        except Exception as e:
+            self._logger.warning(
+                "Failed to recover opened_at for %s: %s — using fallback",
+                symbol, e,
+            )
+        return fallback
+
     async def _check_closed_positions(self) -> None:
         """Check for positions whose price crossed TP or SL.
 
