@@ -113,11 +113,7 @@ class TestCooldownStateModel:
 # =============================================================================
 
 class TestStoplossStreakCooldown:
-    """Tests for stoploss streak cooldown trigger.
-
-    Note: _get_recent_trades is now stubbed to return [].
-    Cooldown checks based on trade history will always return no cooldown.
-    """
+    """Tests for stoploss streak cooldown trigger."""
 
     @pytest.mark.asyncio
     async def test_no_cooldown_on_zero_losses(self, risk_manager):
@@ -134,6 +130,72 @@ class TestStoplossStreakCooldown:
 
         assert is_cooldown is False
         assert state is None
+
+
+class TestCountConsecutiveStoplosses:
+    """Unit tests for _count_consecutive_stoplosses logic.
+
+    Validates that only stoploss exits with negative PnL count toward
+    the consecutive loss streak that triggers cooldown.
+    """
+
+    def test_three_sl_negative_pnl_triggers(self, risk_manager):
+        """3 consecutive SL with negative PnL → count = 3 (cooldown triggers)."""
+        trades = [
+            {"notes": "stop_loss", "net_pnl": -0.67},
+            {"notes": "stop_loss", "net_pnl": -0.65},
+            {"notes": "stop_loss", "net_pnl": -0.14},
+        ]
+        assert risk_manager._count_consecutive_stoplosses(trades) == 3
+
+    def test_sl_breakeven_breaks_streak(self, risk_manager):
+        """2 SL negative + 1 SL breakeven/profit → count = 0 (breakeven is most recent)."""
+        trades = [
+            {"notes": "stop_loss", "net_pnl": 0.006},   # breakeven SL (most recent)
+            {"notes": "stop_loss", "net_pnl": -0.65},
+            {"notes": "stop_loss", "net_pnl": -0.14},
+        ]
+        # Breakeven SL is most recent → breaks the streak immediately
+        assert risk_manager._count_consecutive_stoplosses(trades) == 0
+
+    def test_sl_profit_does_not_count(self, risk_manager):
+        """SL with positive PnL (moved to profit) should not count."""
+        trades = [
+            {"notes": "stop_loss", "net_pnl": 0.50},    # SL in profit
+            {"notes": "stop_loss", "net_pnl": -0.65},
+        ]
+        assert risk_manager._count_consecutive_stoplosses(trades) == 0
+
+    def test_non_sl_exit_breaks_streak(self, risk_manager):
+        """Non-SL exit reason breaks the streak."""
+        trades = [
+            {"notes": "stop_loss", "net_pnl": -0.67},
+            {"notes": "take_profit", "net_pnl": 1.30},  # TP breaks streak
+            {"notes": "stop_loss", "net_pnl": -0.14},
+        ]
+        assert risk_manager._count_consecutive_stoplosses(trades) == 1
+
+    def test_mixed_sl_negative_then_breakeven(self, risk_manager):
+        """2 SL losses then 1 SL breakeven → count = 2."""
+        trades = [
+            {"notes": "stop_loss", "net_pnl": -0.67},
+            {"notes": "stop_loss", "net_pnl": -0.65},
+            {"notes": "stop_loss", "net_pnl": 0.01},    # breakeven, breaks streak
+        ]
+        assert risk_manager._count_consecutive_stoplosses(trades) == 2
+
+    def test_empty_trades(self, risk_manager):
+        """Empty trade list → count = 0."""
+        assert risk_manager._count_consecutive_stoplosses([]) == 0
+
+    def test_none_pnl_treated_as_zero(self, risk_manager):
+        """Trade with None PnL should not count as loss."""
+        trades = [
+            {"notes": "stop_loss", "net_pnl": None},
+            {"notes": "stop_loss", "net_pnl": -0.50},
+        ]
+        # None → 0 → not < 0 → breaks streak
+        assert risk_manager._count_consecutive_stoplosses(trades) == 0
 
 
 # =============================================================================

@@ -892,12 +892,23 @@ class RiskManagerService(BaseService):
             )
 
     def _count_consecutive_stoplosses(self, trades: List[Dict]) -> int:
-        """Count consecutive stoploss exits from most recent trade."""
+        """Count consecutive stoploss exits with negative PnL from most recent trade.
+
+        Only counts trades where BOTH conditions are true:
+        1. exit_reason contains "stop" or "sl" (actual stoploss exit)
+        2. realized_pnl < 0 (actual loss, not breakeven/profit)
+
+        A stoploss that hits breakeven or profit (e.g. after SL was moved up)
+        should NOT count toward the consecutive loss streak.
+        """
         consecutive = 0
         for trade in trades:
             notes = trade.get("notes", "") or ""
-            # Check if trade was closed by stoploss
-            if "stop" in notes.lower() or "sl" in notes.lower():
+            pnl = trade.get("net_pnl", 0) or 0
+            # Count only stoploss exits that resulted in actual losses
+            is_stoploss = "stop" in notes.lower() or "sl" in notes.lower()
+            is_loss = float(pnl) < 0
+            if is_stoploss and is_loss:
                 consecutive += 1
             else:
                 break
