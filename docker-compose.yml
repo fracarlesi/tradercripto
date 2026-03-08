@@ -3,6 +3,7 @@ services:
     build: .
     container_name: hlquantbot_crypto
     command: ["python", "-m", "crypto_bot.main"]
+    stop_grace_period: 30s
     env_file:
       - .env
     volumes:

@@ -40,10 +40,12 @@ Author: HLQuantBot
 """
 
 import asyncio
+import json
 import logging
 import os
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import aiohttp
@@ -52,6 +54,11 @@ from .base import BaseService
 from .message_bus import Message, MessageBus, Topic
 
 logger = logging.getLogger(__name__)
+
+# Persistent dedup store
+_DEDUP_DIR = Path(os.environ.get("HLQUANTBOT_DATA_DIR", str(Path.home() / ".hlquantbot")))
+_DEDUP_FILE = _DEDUP_DIR / "ntfy_dedup.json"
+_DEDUP_TTL_SECONDS = 3600  # 1 hour
 
 # Default ntfy server
 DEFAULT_NTFY_SERVER = "https://ntfy.sh"
@@ -131,8 +138,9 @@ class WhatsAppService(BaseService):
         self._messages_sent = 0
         self._messages_failed = 0
 
-        # Dedup: prevent duplicate close notifications (e.g. during deploy overlap)
-        self._recent_close_keys: set[str] = set()
+        # Persistent dedup: survives restarts to prevent duplicates during deploy overlap
+        self._dedup_keys: Dict[str, float] = {}  # key -> expiry_timestamp
+        self._load_dedup()
 
         # Validate config
         if self._enabled and not self._topic:
@@ -256,23 +264,18 @@ class WhatsAppService(BaseService):
 
         if event_type == "position_closed" and "trade_close" in self._alert_on:
             symbol = payload.get("symbol", "N/A")
-            timestamp = payload.get("timestamp", "")
-
-            # Dedup: skip if we already notified this close recently
-            dedup_key = f"close_{symbol}_{timestamp}"
-            if dedup_key in self._recent_close_keys:
-                self._logger.debug("Skipping duplicate close notification for %s", symbol)
-                return
-            self._recent_close_keys.add(dedup_key)
-            # Keep set bounded (max 50 entries)
-            if len(self._recent_close_keys) > 50:
-                self._recent_close_keys.clear()
-
             pnl = payload.get("realized_pnl", 0)
             pnl_pct = payload.get("pnl_pct", 0)
             side = payload.get("side", "unknown")
             entry = payload.get("entry_price", 0)
             exit_price = payload.get("exit_price", 0)
+
+            # Dedup: stable key from trade identity (survives restarts)
+            pnl_f = float(pnl) if isinstance(pnl, Decimal) else pnl
+            dedup_key = f"close_{symbol}_{side}_{entry}_{pnl_f:.2f}"
+            if self._is_duplicate(dedup_key):
+                self._logger.debug("Skipping duplicate close notification for %s", symbol)
+                return
 
             if isinstance(pnl, (int, float, Decimal)):
                 emoji = self.EMOJI["trade_close_profit"] if pnl >= 0 else self.EMOJI["trade_close_loss"]
@@ -371,6 +374,43 @@ class WhatsAppService(BaseService):
                 priority=True,
                 tags="warning,robot",
             )
+
+    # =========================================================================
+    # Persistent Dedup
+    # =========================================================================
+
+    def _load_dedup(self) -> None:
+        """Load dedup keys from disk (survives restarts)."""
+        try:
+            if _DEDUP_FILE.exists():
+                with open(_DEDUP_FILE, "r") as f:
+                    data = json.load(f)
+                now = datetime.now(timezone.utc).timestamp()
+                # Only keep non-expired keys
+                self._dedup_keys = {
+                    k: v for k, v in data.items() if v > now
+                }
+        except Exception:
+            self._dedup_keys = {}
+
+    def _save_dedup(self) -> None:
+        """Persist dedup keys to disk."""
+        try:
+            _DEDUP_DIR.mkdir(parents=True, exist_ok=True)
+            with open(_DEDUP_FILE, "w") as f:
+                json.dump(self._dedup_keys, f)
+        except Exception as e:
+            self._logger.debug("Failed to save dedup state: %s", e)
+
+    def _is_duplicate(self, key: str) -> bool:
+        """Check if key was already sent recently. If not, mark it as sent."""
+        now = datetime.now(timezone.utc).timestamp()
+        expiry = self._dedup_keys.get(key)
+        if expiry and expiry > now:
+            return True
+        self._dedup_keys[key] = now + _DEDUP_TTL_SECONDS
+        self._save_dedup()
+        return False
 
     # =========================================================================
     # ntfy.sh API

@@ -55,7 +55,7 @@ fi
 echo "[4/6] Stopping and rebuilding..."
 case $MODE in
     crypto)
-        ssh $VPS_USER@$VPS_IP "cd $DEPLOY_DIR && docker compose stop crypto_bot && docker compose rm -f crypto_bot && docker compose build crypto_bot --no-cache && docker compose up -d crypto_bot"
+        ssh $VPS_USER@$VPS_IP "cd $DEPLOY_DIR && docker compose stop -t 30 crypto_bot && docker compose rm -f crypto_bot && docker compose build crypto_bot --no-cache && docker compose up -d crypto_bot"
         ;;
     paper)
         ssh $VPS_USER@$VPS_IP "cd $DEPLOY_DIR && docker compose --profile paper stop crypto_bot_paper && docker compose --profile paper rm -f crypto_bot_paper && docker compose --profile paper build crypto_bot_paper --no-cache && docker compose --profile paper up -d crypto_bot_paper"

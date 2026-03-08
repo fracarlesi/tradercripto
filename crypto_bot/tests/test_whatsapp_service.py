@@ -65,6 +65,14 @@ def disabled_config():
     }
 
 
+@pytest.fixture(autouse=True)
+def _isolate_dedup_global(tmp_path, monkeypatch):
+    """Redirect dedup file to temp dir for ALL tests (prevents cross-test pollution)."""
+    import crypto_bot.services.whatsapp_service as ws_mod
+    monkeypatch.setattr(ws_mod, "_DEDUP_DIR", tmp_path)
+    monkeypatch.setattr(ws_mod, "_DEDUP_FILE", tmp_path / "ntfy_dedup.json")
+
+
 @pytest.fixture
 def service(mock_bus, enabled_config):
     """Create a WhatsAppService instance."""
@@ -576,3 +584,100 @@ class TestStats:
         stats = service.stats
         assert stats["messages_sent"] == 5
         assert stats["messages_failed"] == 1
+
+
+# =============================================================================
+# Persistent Dedup Tests
+# =============================================================================
+
+class TestPersistentDedup:
+    """Test file-backed dedup that survives restarts."""
+
+    def _make_service(self, mock_bus, enabled_config):
+        return WhatsAppService(bus=mock_bus, config=enabled_config)
+
+    def test_duplicate_trade_close_blocked(self, mock_bus, enabled_config):
+        """Same trade identity should be deduped."""
+        svc = self._make_service(mock_bus, enabled_config)
+        key = "close_BTC_long_95000_42.50"
+        assert svc._is_duplicate(key) is False  # First time → not duplicate
+        assert svc._is_duplicate(key) is True   # Second time → duplicate
+
+    def test_different_trades_not_blocked(self, mock_bus, enabled_config):
+        """Different trades should not be deduped."""
+        svc = self._make_service(mock_bus, enabled_config)
+        assert svc._is_duplicate("close_BTC_long_95000_42.50") is False
+        assert svc._is_duplicate("close_ETH_short_3100_-18.30") is False
+
+    def test_dedup_survives_reload(self, mock_bus, enabled_config):
+        """Dedup state persists to disk and is reloaded."""
+        svc = self._make_service(mock_bus, enabled_config)
+        key = "close_BTC_long_95000_42.50"
+        svc._is_duplicate(key)
+
+        # Create new service instance (simulates restart)
+        new_service = self._make_service(mock_bus, enabled_config)
+        assert new_service._is_duplicate(key) is True
+
+    def test_dedup_ttl_expiry(self, mock_bus, enabled_config):
+        """Expired keys should not block."""
+        svc = self._make_service(mock_bus, enabled_config)
+        key = "close_BTC_long_95000_42.50"
+        # Set key with expiry in the past
+        svc._dedup_keys[key] = datetime.now(timezone.utc).timestamp() - 1
+        assert svc._is_duplicate(key) is False  # Expired → allows re-send
+
+    @pytest.mark.asyncio
+    async def test_duplicate_fill_event_blocked(self, mock_bus, enabled_config):
+        """Sending the same position_closed event twice should only notify once."""
+        svc = self._make_service(mock_bus, enabled_config)
+        svc._send_message = AsyncMock(return_value=True)
+
+        msg = Message(
+            topic=Topic.FILLS,
+            payload={
+                "event": "position_closed",
+                "symbol": "GRASS",
+                "realized_pnl": -0.45,
+                "pnl_pct": -0.80,
+                "side": "long",
+                "entry_price": 2.10,
+                "exit_price": 2.08,
+            },
+            source="execution",
+        )
+
+        await svc._on_fill_event(msg)
+        await svc._on_fill_event(msg)  # Duplicate
+
+        assert svc._send_message.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_no_duplicate_after_restart(self, mock_bus, enabled_config):
+        """After restart, same trade should still be deduped."""
+        svc = self._make_service(mock_bus, enabled_config)
+        svc._send_message = AsyncMock(return_value=True)
+
+        msg = Message(
+            topic=Topic.FILLS,
+            payload={
+                "event": "position_closed",
+                "symbol": "BTC",
+                "realized_pnl": 42.50,
+                "pnl_pct": 0.85,
+                "side": "long",
+                "entry_price": 95000,
+                "exit_price": 95800,
+            },
+            source="execution",
+        )
+
+        await svc._on_fill_event(msg)
+        assert svc._send_message.call_count == 1
+
+        # Simulate restart
+        new_service = self._make_service(mock_bus, enabled_config)
+        new_service._send_message = AsyncMock(return_value=True)
+
+        await new_service._on_fill_event(msg)
+        new_service._send_message.assert_not_called()  # Deduped across restart

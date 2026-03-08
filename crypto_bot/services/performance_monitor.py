@@ -92,7 +92,7 @@ class PerformanceMonitorService(BaseService):
         # Trade history (loaded from disk)
         self._trades: List[TradeRecord] = []
 
-        # Track which scheduled reports have been sent (to avoid duplicates)
+        # Track which scheduled reports have been sent (persisted to avoid duplicates across restarts)
         self._last_report_date_hour: Optional[str] = None
 
     # =========================================================================
@@ -304,12 +304,14 @@ class PerformanceMonitorService(BaseService):
                 self._trades = [
                     TradeRecord(**t) for t in data.get("trades", [])
                 ]
+                self._last_report_date_hour = data.get("last_report_date_hour")
 
                 # Trim old trades
                 self._trim_old_trades()
 
                 self._logger.info(
-                    "Loaded %d trades from %s", len(self._trades), DATA_FILE
+                    "Loaded %d trades from %s (last_report=%s)",
+                    len(self._trades), DATA_FILE, self._last_report_date_hour,
                 )
         except Exception as e:
             self._logger.warning("Failed to load performance data: %s", e)
@@ -323,6 +325,7 @@ class PerformanceMonitorService(BaseService):
             data = {
                 "trades": [asdict(t) for t in self._trades],
                 "last_updated": datetime.now(timezone.utc).isoformat(),
+                "last_report_date_hour": self._last_report_date_hour,
             }
 
             with open(DATA_FILE, "w") as f:
