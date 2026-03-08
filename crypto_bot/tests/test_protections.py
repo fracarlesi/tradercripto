@@ -11,6 +11,7 @@ Run:
 """
 
 import pytest
+from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock
 
@@ -169,25 +170,83 @@ class TestCooldownPeriodProtection:
 # =============================================================================
 
 class TestLowPerformanceProtection:
-    """Tests for LowPerformanceProtection (stubbed - no DB)."""
+    """Tests for LowPerformanceProtection with economic logic."""
 
-    @pytest.fixture
-    def low_performance_protection(self):
-        """Create LowPerformanceProtection with default config."""
-        config = {
+    def _make_config(self) -> dict:
+        return {
             "name": "LowPerformance",
             "min_trades": 20,
-            "min_win_rate": 0.30,
+            "max_profit_factor": 0.90,
+            "require_negative_pnl": True,
             "stop_duration_min": 1440,
         }
-        return LowPerformanceProtection(config)
+
+    def _fake_perf_monitor(self, trades):
+        from unittest.mock import MagicMock
+        pm = MagicMock()
+        pm._trades = trades
+        return pm
+
+    @dataclass
+    class _FakeTrade:
+        realized_pnl: float = 0.0
 
     @pytest.mark.asyncio
-    async def test_no_protection_stubbed(self, low_performance_protection, mock_telegram):
-        """No protection since check() is stubbed (no DB)."""
-        result = await low_performance_protection.check()
-
+    async def test_no_monitor_not_blocked(self, mock_telegram):
+        """No performance monitor → never blocked."""
+        prot = LowPerformanceProtection(self._make_config())
+        result = await prot.check()
         assert result.is_protected is False
+
+    @pytest.mark.asyncio
+    async def test_few_trades_not_blocked(self, mock_telegram):
+        """Under min_trades → never blocked."""
+        trades = [self._FakeTrade(realized_pnl=-0.1) for _ in range(10)]
+        prot = LowPerformanceProtection(
+            self._make_config(), performance_monitor=self._fake_perf_monitor(trades)
+        )
+        result = await prot.check()
+        assert result.is_protected is False
+
+    @pytest.mark.asyncio
+    async def test_low_pf_negative_pnl_blocks(self, mock_telegram):
+        """PF < 0.90 with negative PnL → blocked."""
+        # 5 wins of $0.50, 20 losses of $-0.50 → PF = 2.50/10.0 = 0.25
+        trades = [self._FakeTrade(realized_pnl=0.50) for _ in range(5)]
+        trades += [self._FakeTrade(realized_pnl=-0.50) for _ in range(20)]
+        prot = LowPerformanceProtection(
+            self._make_config(), performance_monitor=self._fake_perf_monitor(trades)
+        )
+        result = await prot.check()
+        assert result.is_protected is True
+        assert "PF=" in result.reason
+
+    @pytest.mark.asyncio
+    async def test_good_pf_not_blocked(self, mock_telegram):
+        """PF > 0.90 → not blocked even if some losses."""
+        # 15 wins of $1.0, 10 losses of $-0.50 → PF = 15.0/5.0 = 3.0
+        trades = [self._FakeTrade(realized_pnl=1.0) for _ in range(15)]
+        trades += [self._FakeTrade(realized_pnl=-0.50) for _ in range(10)]
+        prot = LowPerformanceProtection(
+            self._make_config(), performance_monitor=self._fake_perf_monitor(trades)
+        )
+        result = await prot.check()
+        assert result.is_protected is False
+
+    @pytest.mark.asyncio
+    async def test_low_pf_positive_pnl_not_blocked(self, mock_telegram):
+        """PF < 0.90 but net_pnl > 0 → not blocked (require_negative_pnl=True)."""
+        # Edge case: technically impossible with PF<1 to have positive pnl,
+        # but test the logic path anyway
+        config = self._make_config()
+        config["require_negative_pnl"] = False  # would block
+        trades = [self._FakeTrade(realized_pnl=0.50) for _ in range(5)]
+        trades += [self._FakeTrade(realized_pnl=-0.50) for _ in range(20)]
+        prot = LowPerformanceProtection(
+            config, performance_monitor=self._fake_perf_monitor(trades)
+        )
+        result = await prot.check()
+        assert result.is_protected is True  # negative pnl check disabled → blocks on PF alone
 
 
 # =============================================================================

@@ -390,10 +390,13 @@ class ExecutionEngineService(BaseService):
         # Configuration shortcuts
         self._exec_config = self._bot_config.services.execution_engine
         
+        stops_cfg = getattr(self._bot_config, "stops", None)
+        max_hold_h = getattr(stops_cfg, "max_hold_hours", 6.0) if stops_cfg else 6.0
         self._logger.info(
-            "ExecutionEngine initialized: order_type=%s, max_slippage=%.2f%%",
+            "ExecutionEngine initialized: order_type=%s, max_slippage=%.2f%%, max_hold=%.1fh",
             self._exec_config.order_type,
             self._exec_config.max_slippage_pct,
+            max_hold_h,
         )
     
     def update_market_states(self, states: Dict[str, Any]) -> None:
@@ -2469,12 +2472,14 @@ class ExecutionEngineService(BaseService):
                 )
 
     async def _check_max_hold_time(self) -> None:
-        """Close dead trades that have been open longer than 4 hours with negligible P&L.
+        """Close dead trades that have been open longer than max_hold_hours with negligible P&L.
 
-        A "dead trade" is one where abs(pnl_pct) < 0.3% after 4 hours — it's going
-        nowhere and just consuming a position slot.
+        A "dead trade" is one where abs(pnl_pct) < 0.3% after the configured
+        hold time — it's going nowhere and just consuming a position slot.
+        Profitable or losing trades are NOT force-closed.
         """
-        MAX_HOLD_HOURS = 4
+        stops_cfg = getattr(self._bot_config, "stops", None)
+        max_hold = getattr(stops_cfg, "max_hold_hours", 6.0) if stops_cfg else 6.0
         DEAD_TRADE_PNL_PCT = 0.003  # 0.3%
 
         now = datetime.now(timezone.utc)
@@ -2490,7 +2495,7 @@ class ExecutionEngineService(BaseService):
                 continue
 
             age_hours = (now - position.opened_at).total_seconds() / 3600.0
-            if age_hours < MAX_HOLD_HOURS:
+            if age_hours < max_hold:
                 continue
 
             # Calculate P&L percentage

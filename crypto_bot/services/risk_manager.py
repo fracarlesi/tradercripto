@@ -703,12 +703,15 @@ class RiskManagerService(BaseService):
 
         await self.publish(Topic.TRADE_INTENT, intent.model_dump())
 
+        effective_risk = float(intent.notional_value) * float(self._config.stop_loss_pct) / 100
         self._logger.info(
-            "Published TRADE_INTENT: %s %s, size=%.4f, risk=$%.2f",
+            "Published TRADE_INTENT: %s %s, size=%.4f, notional=$%.2f, risk_budget=$%.2f, effective_risk=$%.2f",
             intent.direction.value,
             intent.symbol,
             float(intent.position_size),
+            float(intent.notional_value),
             float(intent.risk_amount),
+            effective_risk,
         )
 
     # =========================================================================

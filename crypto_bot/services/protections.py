@@ -172,19 +172,75 @@ class CooldownPeriodProtection(Protection):
 
 class LowPerformanceProtection(Protection):
     """
-    Blocks trading if win rate is too low on recent trades.
-    
+    Blocks trading when economic performance is poor.
+
+    Uses profit factor (gross_wins / gross_losses) rather than win rate,
+    because a strategy can have low win rate but high R:R and still be profitable.
+
     Configuration:
         {
             "name": "LowPerformance",
-            "min_trades": 20,           # Need at least 20 trades
-            "min_win_rate": 0.30,       # If win rate < 30%...
-            "stop_duration_min": 1440   # ...block trading for 24 hours
+            "min_trades": 20,               # Need 20+ trades before judging
+            "max_profit_factor": 0.90,      # Block if PF < 0.90
+            "require_negative_pnl": true,   # Only block if net_pnl < 0
+            "stop_duration_min": 1440       # Pause 24h
         }
     """
-    
+
+    def __init__(self, config: Dict[str, Any], performance_monitor: Any = None) -> None:
+        super().__init__(config)
+        self._perf_monitor = performance_monitor
+        self._blocked_until: Optional[datetime] = None
+
     async def check(self) -> ProtectionResult:
-        """Check if recent performance is acceptable. Stubbed - no DB."""
+        """Check if recent performance warrants a trading pause."""
+        now = datetime.now(timezone.utc)
+
+        # If currently blocked, check expiry
+        if self._blocked_until and now < self._blocked_until:
+            remaining = (self._blocked_until - now).total_seconds() / 60
+            return ProtectionResult(
+                is_protected=True,
+                protection_name=self.name,
+                reason=f"Low performance pause ({remaining:.0f}min remaining)",
+                protected_until=self._blocked_until,
+            )
+        self._blocked_until = None
+
+        # No performance monitor → can't evaluate
+        if not self._perf_monitor:
+            return ProtectionResult(is_protected=False, protection_name=self.name)
+
+        trades = getattr(self._perf_monitor, "_trades", [])
+        min_trades = self.config.get("min_trades", 20)
+        if len(trades) < min_trades:
+            return ProtectionResult(is_protected=False, protection_name=self.name)
+
+        # Calculate economic metrics
+        gross_wins = sum(t.realized_pnl for t in trades if t.realized_pnl > 0)
+        gross_losses = abs(sum(t.realized_pnl for t in trades if t.realized_pnl < 0))
+        net_pnl = sum(t.realized_pnl for t in trades)
+
+        profit_factor = gross_wins / gross_losses if gross_losses > 0 else float("inf")
+
+        max_pf = self.config.get("max_profit_factor", 0.90)
+        require_neg = self.config.get("require_negative_pnl", True)
+
+        if profit_factor < max_pf and (not require_neg or net_pnl < 0):
+            duration_min = self.config.get("stop_duration_min", 1440)
+            self._blocked_until = now + timedelta(minutes=duration_min)
+            reason = (
+                f"PF={profit_factor:.2f} < {max_pf} with net_pnl=${net_pnl:.2f} "
+                f"over {len(trades)} trades → pausing {duration_min}min"
+            )
+            self._logger.warning("LowPerformance triggered: %s", reason)
+            return ProtectionResult(
+                is_protected=True,
+                protection_name=self.name,
+                reason=reason,
+                protected_until=self._blocked_until,
+            )
+
         return ProtectionResult(is_protected=False, protection_name=self.name)
 
 
@@ -216,6 +272,7 @@ class ProtectionManager:
         self,
         config: Dict[str, Any],
         telegram: Any = None,
+        performance_monitor: Any = None,
     ) -> None:
         """
         Initialize ProtectionManager.
@@ -223,12 +280,14 @@ class ProtectionManager:
         Args:
             config: Full trading config dict (expects 'protections' key)
             telegram: TelegramService instance (optional)
+            performance_monitor: PerformanceMonitorService for LowPerformance checks
         """
         self.config = config
         self.telegram = telegram
+        self._performance_monitor = performance_monitor
         self.protections: List[Protection] = []
         self._logger = logging.getLogger("hlquantbot.protections.manager")
-        
+
         # Initialize protections from config
         self._init_protections()
     
@@ -247,7 +306,10 @@ class ProtectionManager:
             
             if prot_class:
                 try:
-                    protection = prot_class(prot_conf)
+                    if prot_class is LowPerformanceProtection:
+                        protection = prot_class(prot_conf, performance_monitor=self._performance_monitor)
+                    else:
+                        protection = prot_class(prot_conf)
                     self.protections.append(protection)
                     self._logger.info(
                         "Initialized protection: %s",

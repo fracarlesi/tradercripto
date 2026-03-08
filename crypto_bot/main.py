@@ -157,6 +157,7 @@ class ConservativeConfig:
     stop_loss_pct: float
     take_profit_pct: float
     breakeven_threshold_pct: float
+    max_hold_hours: float
 
     # Regime (for MarketStateService indicator computation)
     trend_adx_entry_min: float
@@ -267,6 +268,7 @@ class ConservativeConfig:
             stop_loss_pct=stops.get("stop_loss_pct", 0.8),
             take_profit_pct=stops.get("take_profit_pct", 1.6),
             breakeven_threshold_pct=stops.get("breakeven_threshold_pct", 1.2),
+            max_hold_hours=stops.get("max_hold_hours", 6.0),
             trend_adx_entry_min=regime.get("trend_adx_entry_min", 28.0),
             trend_adx_exit_min=regime.get("trend_adx_exit_min", 22.0),
             range_adx_max=regime.get("range_adx_max", 20.0),
@@ -572,6 +574,7 @@ class ConservativeBot:
                 self.initial_atr_mult = cfg.initial_atr_mult
                 self.trailing_atr_mult = cfg.trailing_atr_mult
                 self.minimal_roi = cfg.minimal_roi
+                self.max_hold_hours = cfg.max_hold_hours
 
         class _ServicesConfig:
             def __init__(self, exec_cfg: _ExecConfig):
@@ -601,17 +604,18 @@ class ConservativeBot:
             client=self._exchange,
         )
 
-        # Protection Manager
-        self._services["protection_manager"] = ProtectionManager(
-            config=self._raw_config, telegram=telegram_service,
-        )
-
-        # Performance Monitor
+        # Performance Monitor (must init before ProtectionManager — LowPerformance needs it)
         whatsapp_svc = self._services.get("whatsapp")
 
         from .services.performance_monitor import PerformanceMonitorService
         self._services["performance_monitor"] = PerformanceMonitorService(
             bus=self._bus, config=self._raw_config, whatsapp=whatsapp_svc,
+        )
+
+        # Protection Manager
+        self._services["protection_manager"] = ProtectionManager(
+            config=self._raw_config, telegram=telegram_service,
+            performance_monitor=self._services["performance_monitor"],
         )
 
         # Counterfactual Logger

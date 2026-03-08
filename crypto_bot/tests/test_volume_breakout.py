@@ -295,6 +295,7 @@ def _make_config():
         momentum_exit_min_profit_pct=0.1,
         momentum_exit_rsi_slope_threshold=1.0,
         breakeven_threshold_pct=1.2,
+        max_hold_hours=6.0,
         entry_mode="taker",
         limit_timeout_seconds=60,
         maker_reprice_interval_seconds=10,

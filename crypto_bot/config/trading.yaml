@@ -93,18 +93,22 @@ timeframes:
 # Risk Management
 # -----------------------------------------------------------------------------
 risk:
+  # --- Position sizing (Kelly fallback + hard caps) ---
+  # per_trade_pct is the Kelly fallback risk fraction when ML confidence is missing.
+  # In practice, max_position_pct is ALWAYS the binding constraint on small accounts:
+  #   $65 equity × 85% cap = $55.25 max notional → effective risk = $0.55/trade (0.85% equity)
   per_trade_pct: 25.0
-  max_per_trade_pct: 30.0
+  max_per_trade_pct: 30.0       # Kelly clamp (half-Kelly capped here)
 
-  max_positions: 1          # Validation mode: single position
-  max_exposure_pct: 375     # 3 pos × 25% × 10x × 1.5 buffer
-  max_position_pct: 85      # 25% equity × 10x leverage needs room
+  max_positions: 1              # Validation mode: single position
+  max_exposure_pct: 100         # 1 position × 85% max = 85% (ceiling, not target)
+  max_position_pct: 85          # Hard cap: max notional = 85% of equity ($55 on $65 acct)
 
-  leverage: 3               # Validation mode: conservative leverage
+  leverage: 3                   # Validation mode: conservative leverage
   max_leverage: 5
 
   correlation_limit: 0.7
-  max_daily_trades: 3   # Validation mode: conservative trade cap
+  max_daily_trades: 3           # Validation mode: conservative trade cap
 
 # -----------------------------------------------------------------------------
 # Kill Switch
@@ -131,6 +135,11 @@ stops:
   take_profit_pct: 2.5     # v7 target-aligned: TP=2.5% labeling + replay
   breakeven_threshold_pct: 99.0  # DISABLED — destroys profitability in replay
   # Note: TP/SL are always server-side trigger orders (hardcoded in execution_engine)
+
+  # Max hold: close "dead trades" (abs(pnl) < 0.3%) after this many hours.
+  # Profitable/losing trades beyond this threshold are NOT force-closed.
+  # Aligned with training labels (24 bars × 15m = 6h).
+  max_hold_hours: 6
 
   # ATR multipliers — used ONLY by the trailing stop system (after breakeven).
   # NOT used for initial TP/SL placement (which always uses stop_loss_pct / take_profit_pct above).
@@ -272,9 +281,10 @@ protections:
 
 
   - name: "LowPerformance"
-    min_trades: 20
-    min_win_rate: 0.25
-    stop_duration_min: 1440
+    min_trades: 20              # Need 20+ trades before judging
+    max_profit_factor: 0.90     # Block if PF < 0.90 (losing money after fees)
+    require_negative_pnl: true  # Only block if net_pnl < 0 (confirms real loss)
+    stop_duration_min: 1440     # Pause 24h
 
 # -----------------------------------------------------------------------------
 # Performance Metrics
