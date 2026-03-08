@@ -215,3 +215,21 @@ __marimo__/
 
 # Deploy secrets (VPS IP, SSH user, paths)
 deploy.env
+
+# Backtesting cache (regenerable candle data)
+backtesting/cache/
+ib_bot/backtesting/cache/
+
+# IB bot runtime data
+ib_bot/data/
+ib_bot/ibc/
+ib_bot/logs/
+
+# Serena IDE config
+.serena/
+
+# Model backups (only models/trade_model.joblib is tracked)
+models/trade_model_*backup*
+models/trade_model_v*.joblib
+models/trade_model_paper.joblib
+crypto_bot/models/
