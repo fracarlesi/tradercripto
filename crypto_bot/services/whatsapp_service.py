@@ -295,6 +295,12 @@ class WhatsAppService(BaseService):
         payload = message.payload
         alert_type = payload.get("type") or payload.get("alert_type", "")
 
+        self._logger.info(
+            "Risk alert received: alert_type=%r, payload_keys=%s, source=%s",
+            alert_type, list(payload.keys()) if isinstance(payload, dict) else type(payload).__name__,
+            getattr(message, 'source', 'unknown'),
+        )
+
         # --- Kill switch events (from KillSwitchService) ---
         if alert_type == "kill_switch" and "kill_switch_trigger" in self._alert_on:
             trigger = payload.get("trigger_type", "unknown")
@@ -450,7 +456,7 @@ class WhatsAppService(BaseService):
                 if resp.status == 200:
                     self._messages_sent += 1
                     self._message_timestamps.append(datetime.now(timezone.utc))
-                    self._logger.debug("Push notification sent")
+                    self._logger.info("Push notification SENT: title=%r, body=%.80s", title, text)
                     return True
                 else:
                     error_text = await resp.text()
