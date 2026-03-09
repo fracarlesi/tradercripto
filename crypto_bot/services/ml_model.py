@@ -563,8 +563,9 @@ class MLTradeModel:
         # --- Tier 3: log_volume_24h, bb_width, adx_slope, funding_rate ---
         import math
 
-        # log_volume_24h: log10 of 24h USD volume (use actual if available)
-        volume_24h = float(state.volume_24h) if getattr(state, "volume_24h", None) else 0.0
+        # log_volume_24h: log10 of 24h USD volume from exchange API (dayNtlVlm).
+        # Use `is not None` (not truthiness) so Decimal('0') is handled correctly.
+        volume_24h = float(state.volume_24h) if state.volume_24h is not None else 0.0
         log_volume_24h = math.log10(max(volume_24h, 1.0))
 
         # bb_width: (bb_upper - bb_lower) / bb_mid * 100
@@ -578,8 +579,10 @@ class MLTradeModel:
         # In live, we only have the current ADX; use 0.0 as default
         adx_slope = float(state.adx_slope) if getattr(state, "adx_slope", None) is not None else 0.0
 
-        # funding_rate: placeholder, will be wired for live later
-        funding_rate = float(state.funding_rate) if getattr(state, "funding_rate", None) is not None else 0.0
+        # funding_rate: from exchange API (meta_and_asset_ctxs).
+        # Note: training data always has 0.0 (not available from candle data),
+        # so there is a data-source mismatch — see MISMATCHED_FEATURES.
+        funding_rate = float(state.funding_rate) if state.funding_rate is not None else 0.0
 
         return {
             "adx": float(state.adx),

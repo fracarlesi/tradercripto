@@ -74,6 +74,13 @@ BREAKEVEN_THRESHOLD_PCT = 1.2  # Default fallback; overridden by config.risk.bre
 BREAKEVEN_OFFSET_PCT = 0.25  # 0.25% offset prevents stop-hunting near entry
 
 
+def _ensure_aware(dt: datetime) -> datetime:
+    """Return a timezone-aware datetime; assume UTC if naive."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 # =============================================================================
 # Data Classes
 # =============================================================================
@@ -737,7 +744,7 @@ class ExecutionEngineService(BaseService):
         # Grace period: skip regime-close for very new positions
         grace_minutes = self._regime_exit_grace_minutes
         age_minutes = (
-            datetime.now(timezone.utc) - position.opened_at
+            datetime.now(timezone.utc) - _ensure_aware(position.opened_at)
         ).total_seconds() / 60.0
         if age_minutes < grace_minutes:
             self._logger.info(
@@ -2450,6 +2457,7 @@ class ExecutionEngineService(BaseService):
                 earliest = min(open_fills, key=lambda f: f.get("time") or fallback)
                 real_time = earliest.get("time")
                 if real_time:
+                    real_time = _ensure_aware(real_time)
                     self._logger.info(
                         "Recovered real opened_at for %s: %s (from fill %s)",
                         symbol, real_time.isoformat(), earliest.get("fillId"),
@@ -2674,7 +2682,7 @@ class ExecutionEngineService(BaseService):
             if position.entry_price <= 0:
                 continue
 
-            age_hours = (now - position.opened_at).total_seconds() / 3600.0
+            age_hours = (now - _ensure_aware(position.opened_at)).total_seconds() / 3600.0
             if age_hours < max_hold:
                 continue
 
@@ -2883,7 +2891,7 @@ class ExecutionEngineService(BaseService):
         
         # Calculate time in trade (minutes)
         now = datetime.now(timezone.utc)
-        time_in_trade_seconds = (now - position.opened_at).total_seconds()
+        time_in_trade_seconds = (now - _ensure_aware(position.opened_at)).total_seconds()
         time_in_trade_min = time_in_trade_seconds / 60
         
         # Find current ROI target based on time elapsed
@@ -2947,7 +2955,7 @@ class ExecutionEngineService(BaseService):
                     # Calculate time in trade for logging
                     time_in_trade_str = "unknown"
                     if position.opened_at:
-                        time_in_trade_sec = (datetime.now(timezone.utc) - position.opened_at).total_seconds()
+                        time_in_trade_sec = (datetime.now(timezone.utc) - _ensure_aware(position.opened_at)).total_seconds()
                         hours = int(time_in_trade_sec // 3600)
                         minutes = int((time_in_trade_sec % 3600) // 60)
                         time_in_trade_str = f"{hours}h {minutes}m"
@@ -3025,7 +3033,7 @@ class ExecutionEngineService(BaseService):
             # Guard: position age
             if not position.opened_at:
                 continue
-            age_minutes = (now - position.opened_at).total_seconds() / 60.0
+            age_minutes = (now - _ensure_aware(position.opened_at)).total_seconds() / 60.0
             if age_minutes < min_age:
                 continue
 

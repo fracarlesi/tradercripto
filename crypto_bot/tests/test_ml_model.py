@@ -419,6 +419,58 @@ class TestFeatureExtraction:
         for feat in MLTradeModel.FEATURES:
             assert feat in features
 
+    def test_extract_features_log_volume_24h(
+        self, trained_model: MLTradeModel, sample_market_state: MarketState
+    ) -> None:
+        """log_volume_24h should be log10 of volume_24h from MarketState."""
+        import math
+        # sample_market_state has volume_24h=5_000_000
+        features = trained_model.extract_features(sample_market_state)
+        expected = math.log10(5_000_000)
+        assert features["log_volume_24h"] == pytest.approx(expected)
+
+    def test_extract_features_log_volume_24h_none(
+        self, trained_model: MLTradeModel, sample_market_state: MarketState
+    ) -> None:
+        """log_volume_24h should default to 0.0 when volume_24h is None."""
+        sample_market_state.volume_24h = None
+        features = trained_model.extract_features(sample_market_state)
+        # log10(max(0.0, 1.0)) = log10(1.0) = 0.0
+        assert features["log_volume_24h"] == pytest.approx(0.0)
+
+    def test_extract_features_log_volume_24h_zero(
+        self, trained_model: MLTradeModel, sample_market_state: MarketState
+    ) -> None:
+        """log_volume_24h should handle Decimal('0') without truthiness bug."""
+        sample_market_state.volume_24h = Decimal("0")
+        features = trained_model.extract_features(sample_market_state)
+        # log10(max(0.0, 1.0)) = 0.0
+        assert features["log_volume_24h"] == pytest.approx(0.0)
+
+    def test_extract_features_funding_rate(
+        self, trained_model: MLTradeModel, sample_market_state: MarketState
+    ) -> None:
+        """funding_rate should be read from MarketState."""
+        # sample_market_state has funding_rate=Decimal("0.0001")
+        features = trained_model.extract_features(sample_market_state)
+        assert features["funding_rate"] == pytest.approx(0.0001)
+
+    def test_extract_features_funding_rate_none(
+        self, trained_model: MLTradeModel, sample_market_state: MarketState
+    ) -> None:
+        """funding_rate should default to 0.0 when None."""
+        sample_market_state.funding_rate = None
+        features = trained_model.extract_features(sample_market_state)
+        assert features["funding_rate"] == 0.0
+
+    def test_extract_features_funding_rate_negative(
+        self, trained_model: MLTradeModel, sample_market_state: MarketState
+    ) -> None:
+        """Negative funding rates should be propagated correctly."""
+        sample_market_state.funding_rate = Decimal("-0.0003")
+        features = trained_model.extract_features(sample_market_state)
+        assert features["funding_rate"] == pytest.approx(-0.0003)
+
 
 # ── Optimal Threshold Tests ──────────────────────────────────────────────
 
@@ -521,7 +573,7 @@ class TestOptimalThreshold:
 class TestEMASlopeComputation:
     """Tests for MarketStateService._compute_ema_slopes."""
 
-    def _make_service(self) -> "MarketStateService":
+    def _make_service(self):  # type: ignore[no-untyped-def]
         """Create a minimal MarketStateService for testing slopes."""
         from crypto_bot.services.market_state import MarketStateService
         return MarketStateService(name="test_market_state", bus=None)
@@ -540,6 +592,8 @@ class TestEMASlopeComputation:
         ema9_values = [100.0, 101.0, 102.0, 103.0, 104.0]
         ema21_values = [200.0, 200.5, 201.0, 201.5, 202.0]
 
+        ema9_slope = Decimal("0")
+        ema21_slope = Decimal("0")
         for i in range(5):
             ema9_slope, ema21_slope = svc._compute_ema_slopes(
                 "BTC", ema9_values[i], ema21_values[i]
@@ -557,6 +611,7 @@ class TestEMASlopeComputation:
         svc = self._make_service()
         values = [100.0, 101.0, 102.0, 103.0, 104.0, 108.0]
 
+        ema9_slope = Decimal("0")
         for val in values:
             ema9_slope, _ = svc._compute_ema_slopes("BTC", val, val)
 
@@ -573,6 +628,7 @@ class TestEMASlopeComputation:
             svc._compute_ema_slopes("BTC", val, val)
 
         # ETH has only 3 bars
+        eth_slope = Decimal("0")
         for val in [50.0, 51.0, 52.0]:
             eth_slope, _ = svc._compute_ema_slopes("ETH", val, val)
 
@@ -587,6 +643,7 @@ class TestEMASlopeComputation:
         svc = self._make_service()
         values = [100.0, 99.0, 98.0, 97.0, 96.0]
 
+        ema9_slope = Decimal("0")
         for val in values:
             ema9_slope, _ = svc._compute_ema_slopes("BTC", val, val)
 
