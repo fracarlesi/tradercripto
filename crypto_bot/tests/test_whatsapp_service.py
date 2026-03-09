@@ -465,6 +465,7 @@ class TestRiskAlerts:
         msg = Message(
             topic=Topic.RISK_ALERTS,
             payload={
+                "type": "kill_switch",
                 "trigger_type": "daily_loss",
                 "trigger_value": 8.5,
                 "threshold": 8.0,
@@ -482,6 +483,46 @@ class TestRiskAlerts:
         text = call_kwargs[0][0]
         assert "KILL SWITCH" in text
         assert "DAILY_LOSS" in text
+
+    @pytest.mark.asyncio
+    async def test_scan_errors_alert(self, service):
+        """Scan error alerts should use the scan_errors format, not kill switch."""
+        service._send_message = AsyncMock(return_value=True)
+
+        msg = Message(
+            topic=Topic.RISK_ALERTS,
+            payload={
+                "type": "scan_errors",
+                "alert_type": "scan_errors",
+                "message": "5 consecutive scan errors.\nError: ValueError: feature mismatch",
+                "consecutive_errors": 5,
+            },
+            source="main",
+        )
+
+        await service._on_risk_alert(msg)
+        service._send_message.assert_called_once()
+        text = service._send_message.call_args[0][0]
+        assert "SCAN ERRORS" in text
+        assert "5" in text
+        assert "KILL SWITCH" not in text
+
+    @pytest.mark.asyncio
+    async def test_unknown_risk_alert_ignored(self, service):
+        """Non-kill-switch RISK_ALERTS without a known type should be ignored."""
+        service._send_message = AsyncMock(return_value=True)
+
+        msg = Message(
+            topic=Topic.RISK_ALERTS,
+            payload={
+                "type": "some_unknown_type",
+                "message": "Something happened",
+            },
+            source="unknown",
+        )
+
+        await service._on_risk_alert(msg)
+        service._send_message.assert_not_called()
 
 
 # =============================================================================

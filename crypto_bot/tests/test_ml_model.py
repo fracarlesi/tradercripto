@@ -19,7 +19,7 @@ from crypto_bot.core.models import MarketState, Regime, Direction
 
 @pytest.fixture
 def mock_dataset() -> pd.DataFrame:
-    """Create a synthetic dataset for testing (23 features)."""
+    """Create a synthetic dataset for testing (27 features)."""
     np.random.seed(42)
     n = 200
     # Generate timestamps spanning 30 days for time-weighted training
@@ -51,6 +51,11 @@ def mock_dataset() -> pd.DataFrame:
         "tf_alignment": np.random.choice([-1.0, 0.0, 1.0], n),
         "rsi_1h": np.random.uniform(20, 80, n),
         "adx_1h": np.random.uniform(15, 60, n),
+        # Tier 3
+        "log_volume_24h": np.random.uniform(4, 9, n),
+        "bb_width": np.random.uniform(0.5, 5.0, n),
+        "adx_slope": np.random.uniform(-2, 2, n),
+        "funding_rate": np.random.uniform(-0.001, 0.001, n),
         # Labels + metadata
         "label": np.random.randint(0, 2, n),
         "timestamp": timestamps,
@@ -108,6 +113,9 @@ def sample_market_state() -> MarketState:
         ema9_1h=Decimal("50050"),
         ema21_1h=Decimal("49850"),
         funding_rate=Decimal("0.0001"),
+        atr_percentile=Decimal("0.65"),
+        volume_24h=Decimal("5000000"),
+        open_interest=Decimal("10000000"),
         regime=Regime.TREND,
         trend_direction=Direction.LONG,
     )
@@ -150,18 +158,31 @@ class TestMLTraining:
         assert 0.0 <= metrics["auc"] <= 1.0
         assert 0.0 <= metrics["cv_auc_mean"] <= 1.0
 
-    def test_feature_count_is_23(self) -> None:
-        """FEATURES should have exactly 23 entries (v4: session/is_weekend, no ema_spread_pct/funding_rate)."""
-        assert len(MLTradeModel.FEATURES) == 23
+    def test_feature_count_is_27(self) -> None:
+        """FEATURES should have exactly 27 entries (tier 0-3, including funding_rate)."""
+        assert len(MLTradeModel.FEATURES) == 27
         assert "spread_pct" not in MLTradeModel.FEATURES
         assert "hour_of_day" not in MLTradeModel.FEATURES
         assert "day_of_week" not in MLTradeModel.FEATURES
         assert "ema_spread_pct" not in MLTradeModel.FEATURES
-        assert "funding_rate" not in MLTradeModel.FEATURES
+        # Tier 3 features ARE present
+        assert "funding_rate" in MLTradeModel.FEATURES
+        assert "bb_width" in MLTradeModel.FEATURES
+        assert "adx_slope" in MLTradeModel.FEATURES
+        assert "log_volume_24h" in MLTradeModel.FEATURES
+        # Core features
         assert "session" in MLTradeModel.FEATURES
         assert "is_weekend" in MLTradeModel.FEATURES
         assert "signal_type" in MLTradeModel.FEATURES
         assert "candle_body_pct" in MLTradeModel.FEATURES
+
+    def test_features_deployable_is_25(self) -> None:
+        """FEATURES_DEPLOYABLE should have 25 entries (excludes log_volume_24h, funding_rate)."""
+        assert len(MLTradeModel.FEATURES_DEPLOYABLE) == 25
+        assert "log_volume_24h" not in MLTradeModel.FEATURES_DEPLOYABLE
+        assert "funding_rate" not in MLTradeModel.FEATURES_DEPLOYABLE
+        assert "bb_width" in MLTradeModel.FEATURES_DEPLOYABLE
+        assert "adx_slope" in MLTradeModel.FEATURES_DEPLOYABLE
 
     def test_train_uses_early_stopping(self, mock_dataset: pd.DataFrame) -> None:
         """Final model should use early stopping (n_estimators may be < 100)."""
@@ -189,6 +210,8 @@ class TestMLPrediction:
             "signed_ema_spread": 0.5, "direction": 1.0,
             "btc_trend": 1.0, "btc_rsi": 50.0, "btc_ema9_slope": 0.0,
             "tf_alignment": 1.0, "rsi_1h": 50.0, "adx_1h": 30.0,
+            "log_volume_24h": 7.0, "bb_width": 2.0,
+            "adx_slope": 0.5, "funding_rate": 0.0001,
         }
         prob, explanation = trained_model.predict(features)
 
@@ -215,15 +238,18 @@ class TestFeatureExtraction:
     def test_extract_features_no_removed_features(
         self, trained_model: MLTradeModel, sample_market_state: MarketState
     ) -> None:
-        """Verify removed/dropped features are not present."""
+        """Verify removed/dropped features are not present (tier 3 ARE present)."""
         features = trained_model.extract_features(sample_market_state)
         assert "direction_encoded" not in features
         assert "hour_utc" not in features
         assert "hour_of_day" not in features
         assert "day_of_week" not in features
         assert "ema_spread_pct" not in features
-        assert "funding_rate" not in features
         assert "spread_pct" not in features
+        # Tier 3 features ARE present now
+        assert "funding_rate" in features
+        assert "bb_width" in features
+        assert "adx_slope" in features
 
     def test_extract_features_values_reasonable(
         self, trained_model: MLTradeModel, sample_market_state: MarketState
@@ -587,6 +613,8 @@ class TestMLPersistence:
             "signed_ema_spread": 0.5, "direction": 1.0,
             "btc_trend": 1.0, "btc_rsi": 50.0, "btc_ema9_slope": 0.0,
             "tf_alignment": 1.0, "rsi_1h": 50.0, "adx_1h": 30.0,
+            "log_volume_24h": 7.0, "bb_width": 2.0,
+            "adx_slope": 0.5, "funding_rate": 0.0001,
         }
         prob_before, _ = trained_model.predict(features)
 

@@ -423,19 +423,27 @@ class MLTradeModel:
         if self._model is None:
             raise RuntimeError("Model not loaded. Call load() or train() first.")
 
-        # Use the feature list the model was trained with (may be a subset
-        # of FEATURES if --exclude-features was used during retraining).
-        train_feats = self._train_features
-        row = pd.DataFrame([features])[train_feats].astype(float)
+        # Use the booster's feature_names as authoritative source of truth.
+        # _train_features may be stale if model was saved with an older feature list.
+        booster = self._model.get_booster()
+        model_feature_names = booster.feature_names if booster else None
 
-        # Backward compat: if model was trained with fewer features, use only
-        # the features the model knows about (e.g. 14-feature model + 25 FEATURES)
-        n_model_features = getattr(self._model, "n_features_in_", row.shape[1])
-        if row.shape[1] > n_model_features:
-            booster = self._model.get_booster()
-            model_feature_names = booster.feature_names if booster else None
-            if model_feature_names:
-                row = row[[f for f in model_feature_names if f in row.columns]]
+        if model_feature_names:
+            # Build DataFrame with exactly the features the booster expects,
+            # falling back to 0.0 for any feature missing from the input dict.
+            missing = [f for f in model_feature_names if f not in features]
+            if missing:
+                logger.warning(
+                    "ML predict: %d features missing from input, defaulting to 0.0: %s "
+                    "(model expects %d features: %s)",
+                    len(missing), missing,
+                    len(model_feature_names), model_feature_names,
+                )
+            row_data = {f: features.get(f, 0.0) for f in model_feature_names}
+            row = pd.DataFrame([row_data]).astype(float)
+        else:
+            # Fallback: use _train_features (legacy path)
+            row = pd.DataFrame([features])[self._train_features].astype(float)
 
         xgb_proba = float(self._model.predict_proba(row)[:, 1][0])
 

@@ -288,13 +288,15 @@ class WhatsAppService(BaseService):
             await self._send_message(text, title=f"{emoji} {symbol} {pnl_sign}${pnl_f:.2f}")
 
     async def _on_risk_alert(self, message: Message) -> None:
-        """Handle risk alerts (kill switch, warnings)."""
+        """Handle risk alerts (kill switch, scan errors, LLM failures)."""
         if not self._enabled:
             return
 
         payload = message.payload
+        alert_type = payload.get("type") or payload.get("alert_type", "")
 
-        if "kill_switch_trigger" in self._alert_on:
+        # --- Kill switch events (from KillSwitchService) ---
+        if alert_type == "kill_switch" and "kill_switch_trigger" in self._alert_on:
             trigger = payload.get("trigger_type", "unknown")
             trigger_value = payload.get("trigger_value", 0)
             threshold = payload.get("threshold", 0)
@@ -317,9 +319,26 @@ class WhatsAppService(BaseService):
                 tags="warning,skull",
             )
 
-        # LLM failure alert
-        alert_type = payload.get("alert_type", "")
-        if alert_type == "llm_failure":
+        # --- Consecutive scan errors ---
+        elif alert_type == "scan_errors":
+            n_errors = payload.get("consecutive_errors", 0)
+            msg = payload.get("message", "Unknown scan error")
+
+            text = (
+                f"{self.EMOJI['error']} SCAN ERRORS\n\n"
+                f"Consecutive failures: {n_errors}\n"
+                f"{msg}\n\n"
+                f"Bot is retrying every 60s."
+            )
+            await self._send_message(
+                text,
+                title=f"Scan Error (x{n_errors})",
+                priority=True,
+                tags="warning",
+            )
+
+        # --- LLM failure alert ---
+        elif alert_type == "llm_failure":
             reason = payload.get("failure_reason", "unknown")
             msg = payload.get("message", "LLM non-functional")
             calls = payload.get("calls_today", 0)
@@ -338,6 +357,16 @@ class WhatsAppService(BaseService):
                 priority=True,
                 tags="warning,robot",
             )
+
+        # --- Kill switch resume ---
+        elif alert_type == "kill_switch_resume":
+            prev = payload.get("previous_status", "unknown")
+            text = (
+                f"{self.EMOJI['startup']} KILL SWITCH RESUMED\n\n"
+                f"Previous status: {prev}\n"
+                f"Trading is now active."
+            )
+            await self._send_message(text, title="Kill Switch Resumed")
 
     # =========================================================================
     # Persistent Dedup

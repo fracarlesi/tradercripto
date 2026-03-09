@@ -275,13 +275,14 @@ class TelegramService(BaseService):
             await self._queue_message(text)
 
     async def _on_risk_alert(self, message: Message) -> None:
-        """Handle risk alerts (kill switch, warnings)."""
+        """Handle risk alerts (kill switch, scan errors)."""
         if not self._enabled:
             return
 
         payload = message.payload
+        alert_type = payload.get("type") or payload.get("alert_type", "")
 
-        if "kill_switch_trigger" in self._alert_on:
+        if alert_type == "kill_switch" and "kill_switch_trigger" in self._alert_on:
             trigger = payload.get("trigger_type", "unknown")
             trigger_value = payload.get("trigger_value", 0)
             threshold = payload.get("threshold", 0)

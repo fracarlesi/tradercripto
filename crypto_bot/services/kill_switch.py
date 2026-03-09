@@ -302,7 +302,7 @@ class KillSwitchService(BaseService):
         )
         self._events.append(event)
 
-        await self._halt_trading()
+        await self._halt_trading(event)
         await self._send_alert(event)
 
         self._logger.critical(
@@ -328,7 +328,7 @@ class KillSwitchService(BaseService):
         )
         self._events.append(event)
 
-        await self._halt_trading()
+        await self._halt_trading(event)
         await self._send_alert(event)
 
         self._logger.critical(
@@ -352,7 +352,7 @@ class KillSwitchService(BaseService):
         )
         self._events.append(event)
 
-        await self._halt_trading()
+        await self._halt_trading(event)
         await self._send_alert(event)
 
         self._logger.critical(
@@ -364,16 +364,26 @@ class KillSwitchService(BaseService):
     # Actions
     # =========================================================================
 
-    async def _halt_trading(self) -> None:
+    async def _halt_trading(self, event: Optional[KillSwitchEvent] = None) -> None:
         """Halt all trading activity."""
-        # Publish halt message
+        # Publish halt message with full event data for notifications
         if self.bus:
-            await self.publish(Topic.RISK_ALERTS, {
+            payload = {
                 "type": "kill_switch",
                 "status": self._ks_status.value,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "resume_time": self._resume_time.isoformat() if self._resume_time else None,
-            })
+            }
+            if event:
+                payload.update({
+                    "trigger_type": event.trigger_type,
+                    "trigger_value": event.trigger_value,
+                    "threshold": event.threshold,
+                    "action": event.action,
+                    "equity": event.equity,
+                    "message": event.message,
+                })
+            await self.publish(Topic.RISK_ALERTS, payload)
 
         # Call halt callback if registered
         if self._halt_callback:
@@ -396,6 +406,7 @@ class KillSwitchService(BaseService):
         if self.bus:
             await self.publish(Topic.RISK_ALERTS, {
                 "type": "kill_switch_resume",
+                "alert_type": "kill_switch_resume",
                 "previous_status": old_status.value,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             })

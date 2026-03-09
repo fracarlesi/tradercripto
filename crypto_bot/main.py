@@ -722,8 +722,12 @@ class ConservativeBot:
                 logger.error("Evaluation loop error: %s", e, exc_info=True)
                 if self._consecutive_scan_errors >= 5 and self._bus:
                     await self._bus.publish(Topic.RISK_ALERTS, {
+                        "type": "scan_errors",
                         "alert_type": "scan_errors",
-                        "message": f"5 consecutive scan errors. Latest: {e}",
+                        "message": (
+                            f"{self._consecutive_scan_errors} consecutive scan errors.\n"
+                            f"Error: {type(e).__name__}: {e}"
+                        ),
                         "consecutive_errors": self._consecutive_scan_errors,
                     })
                 await asyncio.sleep(60)
