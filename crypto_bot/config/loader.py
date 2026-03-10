@@ -175,7 +175,13 @@ class ExecutionEngineConfig(BaseConfig):
         default=0.5,
         ge=0,
         le=2.0,
-        description="Maximum allowed slippage percentage"
+        description="Maximum allowed slippage percentage (post-fill check)"
+    )
+    max_spread_pct: float = Field(
+        default=0.08,
+        ge=0,
+        le=1.0,
+        description="Maximum bid-ask spread for pre-flight entry check"
     )
     retry_attempts: int = Field(
         default=3,

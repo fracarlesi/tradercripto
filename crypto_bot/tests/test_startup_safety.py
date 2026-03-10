@@ -165,12 +165,15 @@ class TestRealOpenedAt:
 
     @pytest.mark.asyncio
     async def test_fallback_when_no_fills(self, engine, mock_client):
-        """Falls back to now-1h when no opening fills found."""
+        """Falls back to now-max_hold_hours when no opening fills found."""
         mock_client.get_fills.return_value = []
 
-        before = datetime.now(timezone.utc) - timedelta(hours=1, minutes=1)
+        # Fallback is now - max_hold_hours (default 6h) so position gets
+        # force-closed immediately rather than appearing as a fresh 1h-old position
+        max_hold = 6.0
+        before = datetime.now(timezone.utc) - timedelta(hours=max_hold, minutes=1)
         result = await engine._get_position_open_time("WLD")
-        after = datetime.now(timezone.utc) - timedelta(minutes=59)
+        after = datetime.now(timezone.utc) - timedelta(hours=max_hold - 0.02)
 
         assert before <= result <= after
 
@@ -180,8 +183,8 @@ class TestRealOpenedAt:
         mock_client.get_fills.side_effect = Exception("timeout")
 
         result = await engine._get_position_open_time("WLD")
-        # Should return approximately now - 1h
-        expected = datetime.now(timezone.utc) - timedelta(hours=1)
+        # Should return approximately now - max_hold_hours (6h)
+        expected = datetime.now(timezone.utc) - timedelta(hours=6)
         assert abs((result - expected).total_seconds()) < 5
 
     @pytest.mark.asyncio

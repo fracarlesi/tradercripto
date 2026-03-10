@@ -18,10 +18,13 @@ Author: Francesco Carlesi
 """
 
 import asyncio
+import json
 import logging
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .base import BaseService
@@ -130,8 +133,11 @@ class RiskManagerService(BaseService):
         self._open_positions: Dict[str, Dict] = {}
         self._pending_intents: Dict[str, TradeIntent] = {}
 
-        # Cooldown state
+        # Cooldown state (persisted to disk so restarts don't bypass active cooldowns)
         self._cooldown_state: Optional[CooldownState] = None
+        self._cooldown_file = Path(
+            os.environ.get("HLQUANTBOT_DATA_DIR", str(Path.home() / ".hlquantbot"))
+        ) / "cooldown_state.json"
 
         # In-memory per-symbol cooldown (prevent re-entry within N minutes)
         self._last_trade_time: Dict[str, datetime] = {}
@@ -745,7 +751,12 @@ class RiskManagerService(BaseService):
             self._logger.info("Cleared %d pending intents", count)
 
     def _cleanup_stale_intents(self, ttl_seconds: int = 300) -> None:
-        """Remove pending intents older than TTL (default 300s / 5min)."""
+        """Remove pending intents older than TTL (default 300s / 5min).
+
+        Also decrements the daily trade counter for each stale intent,
+        since the trade never actually filled — without this, stale maker
+        orders permanently consume daily trade slots.
+        """
         now = datetime.now(timezone.utc)
         stale = [
             symbol for symbol, intent in self._pending_intents.items()
@@ -753,8 +764,10 @@ class RiskManagerService(BaseService):
         ]
         for symbol in stale:
             self._pending_intents.pop(symbol, None)
+            self.decrement_trade_count()
             self._logger.warning(
-                "Removed stale pending intent for %s (older than %ds)", symbol, ttl_seconds
+                "Removed stale pending intent for %s (older than %ds) — daily counter decremented",
+                symbol, ttl_seconds,
             )
 
     def get_position_count(self) -> int:
@@ -938,7 +951,7 @@ class RiskManagerService(BaseService):
         duration_hours: int,
         details: dict
     ) -> CooldownState:
-        """Trigger cooldown (in-memory only)."""
+        """Trigger cooldown and persist to disk so restarts don't bypass it."""
         now = datetime.now(timezone.utc)
         cooldown_until = now + timedelta(hours=duration_hours)
 
@@ -949,6 +962,9 @@ class RiskManagerService(BaseService):
             cooldown_until=cooldown_until,
             trigger_details=details
         )
+
+        # Persist to disk
+        self._save_cooldown_to_disk()
 
         # Send Telegram alert
         if self._telegram:
@@ -974,12 +990,19 @@ class RiskManagerService(BaseService):
         return self._cooldown_state
 
     async def _clear_cooldown(self) -> None:
-        """Clear expired cooldown."""
+        """Clear expired cooldown and remove persisted file."""
         if self._cooldown_state:
             self._logger.info(
                 "Cooldown expired: %s, resuming trading",
                 self._cooldown_state.reason.value if self._cooldown_state.reason else "unknown"
             )
+
+            # Remove persisted cooldown file
+            try:
+                if self._cooldown_file.exists():
+                    self._cooldown_file.unlink()
+            except Exception as e:
+                self._logger.warning("Failed to remove cooldown file: %s", e)
 
             # Send Telegram notification
             if self._telegram:
@@ -994,8 +1017,40 @@ class RiskManagerService(BaseService):
         self._cooldown_state = None
 
     async def load_active_cooldown(self) -> None:
-        """Load any active cooldown on startup (no-op, cooldowns are in-memory only)."""
-        pass
+        """Load persisted cooldown from disk on startup.
+
+        If a cooldown was active when the bot stopped/restarted, this
+        restores it so restarts cannot bypass safety cooldowns.
+        """
+        try:
+            if not self._cooldown_file.exists():
+                return
+            data = json.loads(self._cooldown_file.read_text())
+            state = CooldownState(**data)
+            if state.active and not state.is_expired():
+                self._cooldown_state = state
+                remaining = state.time_remaining() or 0
+                self._logger.warning(
+                    "Restored active cooldown from disk: %s (%d min remaining)",
+                    state.reason.value if state.reason else "unknown",
+                    remaining // 60,
+                )
+            else:
+                # Expired — clean up the file
+                self._cooldown_file.unlink(missing_ok=True)
+                self._logger.info("Removed expired cooldown file from disk")
+        except Exception as e:
+            self._logger.warning("Failed to load cooldown from disk: %s", e)
+
+    def _save_cooldown_to_disk(self) -> None:
+        """Persist current cooldown state to disk."""
+        if not self._cooldown_state:
+            return
+        try:
+            self._cooldown_file.parent.mkdir(parents=True, exist_ok=True)
+            self._cooldown_file.write_text(self._cooldown_state.model_dump_json(indent=2))
+        except Exception as e:
+            self._logger.warning("Failed to save cooldown to disk: %s", e)
 
     def get_cooldown_state(self) -> Optional[CooldownState]:
         """Get current cooldown state."""

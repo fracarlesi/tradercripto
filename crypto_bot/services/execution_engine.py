@@ -872,14 +872,15 @@ class ExecutionEngineService(BaseService):
             f"{entry_price:.2f}" if order_type == "limit" else "MARKET"
         )
 
-        # Pre-flight spread check — skip if spread > max_slippage to avoid
-        # the open→slippage-reject→close cycle that burns double fees.
+        # Pre-flight spread check — skip if bid-ask spread > max_spread_pct
+        # to avoid the open→slippage-reject→close cycle that burns double fees.
+        max_spread = getattr(self._exec_config, "max_spread_pct", 0.08)
         try:
             spread = await self._get_spread(symbol)
-            if spread > self._exec_config.max_slippage_pct:
+            if spread > max_spread:
                 self._logger.warning(
-                    "SKIPPING %s %s: spread %.2f%% exceeds max slippage %.2f%% — avoiding fee burn",
-                    side.upper(), symbol, spread, self._exec_config.max_slippage_pct,
+                    "SKIPPING %s %s: spread %.4f%% exceeds max_spread_pct %.2f%% — avoiding fee burn",
+                    side.upper(), symbol, spread, max_spread,
                 )
                 self.metrics.orders_rejected += 1
                 return None
@@ -2438,13 +2439,16 @@ class ExecutionEngineService(BaseService):
         """Recover the real open time for a position from the fills API.
 
         Scans recent fills for the earliest *opening* fill on ``symbol``
-        (direction contains "Open").  Falls back to ``now - 1h`` if no
-        matching fill is found, and logs a warning so the operator knows
-        the timestamp is estimated.
+        (direction contains "Open").  Falls back to ``now - max_hold_hours``
+        if no matching fill is found — this ensures the position will be
+        force-closed on the next max_hold_time check rather than appearing
+        as a fresh 1-hour-old position.
         """
-        fallback = datetime.now(timezone.utc) - timedelta(hours=1)
+        stops_cfg = getattr(self._bot_config, "stops", None)
+        max_hold = getattr(stops_cfg, "max_hold_hours", 6.0) if stops_cfg else 6.0
+        fallback = datetime.now(timezone.utc) - timedelta(hours=max_hold)
         try:
-            fills = await self.client.get_fills(limit=200)
+            fills = await self.client.get_fills(limit=2000)
             # Filter to opening fills for this symbol, oldest first
             open_fills = [
                 f for f in fills
@@ -2660,15 +2664,15 @@ class ExecutionEngineService(BaseService):
                 )
 
     async def _check_max_hold_time(self) -> None:
-        """Close dead trades that have been open longer than max_hold_hours with negligible P&L.
+        """Force-close ANY position that has been open longer than max_hold_hours.
 
-        A "dead trade" is one where abs(pnl_pct) < 0.3% after the configured
-        hold time — it's going nowhere and just consuming a position slot.
-        Profitable or losing trades are NOT force-closed.
+        Previously only closed "dead" trades with negligible P&L (< 0.3%).
+        This caused zombie positions that could stay open for days if P&L
+        oscillated outside the dead-trade window without hitting TP/SL.
+        Now unconditionally closes after max_hold_hours regardless of P&L.
         """
         stops_cfg = getattr(self._bot_config, "stops", None)
         max_hold = getattr(stops_cfg, "max_hold_hours", 6.0) if stops_cfg else 6.0
-        DEAD_TRADE_PNL_PCT = 0.003  # 0.3%
 
         now = datetime.now(timezone.utc)
 
@@ -2686,25 +2690,24 @@ class ExecutionEngineService(BaseService):
             if age_hours < max_hold:
                 continue
 
-            # Calculate P&L percentage
+            # Calculate P&L percentage for logging
             if position.side == "long":
                 pnl_pct = (position.current_price - position.entry_price) / position.entry_price
             else:
                 pnl_pct = (position.entry_price - position.current_price) / position.entry_price
 
-            if abs(pnl_pct) < DEAD_TRADE_PNL_PCT:
-                self._logger.info(
-                    "MAX HOLD TIME: %s %s | age=%.1fh | pnl=%.3f%% | closing dead trade",
-                    position.side.upper(), symbol, age_hours, pnl_pct * 100,
+            self._logger.info(
+                "MAX HOLD TIME: %s %s | age=%.1fh | pnl=%.3f%% | force-closing (unconditional)",
+                position.side.upper(), symbol, age_hours, pnl_pct * 100,
+            )
+            position.exit_reason = "max_hold_time"
+            try:
+                await self.close_position(symbol)
+            except Exception as e:
+                self._logger.error(
+                    "Failed to close %s on max_hold_time: %s", symbol, e
                 )
-                position.exit_reason = "max_hold_time"
-                try:
-                    await self.close_position(symbol)
-                except Exception as e:
-                    self._logger.error(
-                        "Failed to close %s on max_hold_time: %s", symbol, e
-                    )
-                    position.exit_reason = None
+                position.exit_reason = None
 
     async def _check_trailing_stops(self) -> None:
         """ATR-based trailing stop.
