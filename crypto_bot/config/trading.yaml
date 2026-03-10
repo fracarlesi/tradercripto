@@ -309,7 +309,7 @@ metrics:
 ml_model:
   enabled: true
   model_path: "models/trade_model.joblib"
-  min_probability: 0.58        # Grid replay optimal (XGB+LGB ensemble): +$93, PF 1.32, Sharpe 17.8
+  min_probability: 0.50        # Lowered from 0.58: counterfactual showed 96% rejection, +15.5% P&L lost
   retrain_days: 90             # 3× training window to reduce overfitting
   retrain_interval_days: 3     # Ogni quanto ri-addestrare
 

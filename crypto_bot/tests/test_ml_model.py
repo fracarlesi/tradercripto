@@ -881,3 +881,79 @@ class TestDatasetGenerator:
         # We just verify it is a DataFrame — the key point is it does NOT
         # generate ~100 signals like the state-based version would.
         assert isinstance(df, pd.DataFrame)
+
+
+# ── Feature mismatch warning correctness ────────────────────────────────
+
+class TestFeatureMismatchDiagnostics:
+    """Ensure load() distinguishes 'excluded by design' from genuine mismatch.
+
+    Uses joblib mocking to avoid slow XGBoost training in fixtures.
+    """
+
+    def _make_payload(self, feature_importances: dict) -> dict:
+        """Build a minimal model payload for save/load testing."""
+        mock_model = MagicMock()
+        mock_model.get_booster.return_value = MagicMock(
+            feature_names=list(feature_importances.keys())
+        )
+        mock_model.predict_proba.return_value = np.array([[0.6, 0.4]])
+        return {
+            "model": mock_model,
+            "lgb_model": None,
+            "feature_importances": feature_importances,
+            "optimal_threshold": 0.55,
+            "train_features": list(feature_importances.keys()),
+        }
+
+    def test_excluded_features_log_info_not_warning(self, caplog):
+        """Model trained with FEATURES_DEPLOYABLE should log INFO, not WARNING."""
+        importances = {f: 0.04 for f in MLTradeModel.FEATURES_DEPLOYABLE}
+        payload = self._make_payload(importances)
+
+        fresh = MLTradeModel()
+        with patch("joblib.load", return_value=payload), caplog.at_level(logging.DEBUG):
+            fresh.load("fake_path.joblib")
+
+        info_msgs = [r for r in caplog.records if r.levelno == logging.INFO
+                     and "excluded by design" in r.message]
+        warn_msgs = [r for r in caplog.records if r.levelno == logging.WARNING
+                     and "MISMATCH" in r.message]
+        assert len(info_msgs) == 1, f"Expected 1 INFO about exclusions, got {info_msgs}"
+        assert len(warn_msgs) == 0, f"Unexpected WARNING: {warn_msgs}"
+
+    def test_genuine_mismatch_logs_warning(self, caplog):
+        """Model with truly unexpected features should log WARNING."""
+        bad_importances = {f: 0.04 for f in MLTradeModel.FEATURES_DEPLOYABLE}
+        bad_importances["some_unknown_feature"] = 0.1
+        payload = self._make_payload(bad_importances)
+
+        fresh = MLTradeModel()
+        with patch("joblib.load", return_value=payload), caplog.at_level(logging.DEBUG):
+            fresh.load("fake_path.joblib")
+
+        warn_msgs = [r for r in caplog.records if r.levelno == logging.WARNING
+                     and "MISMATCH" in r.message]
+        assert len(warn_msgs) == 1, f"Expected 1 WARNING about mismatch, got {warn_msgs}"
+
+    def test_first_predict_diagnostic_logs_once(self, caplog):
+        """The one-time predict diagnostic should fire exactly once."""
+        importances = {f: 0.04 for f in MLTradeModel.FEATURES_DEPLOYABLE}
+        payload = self._make_payload(importances)
+
+        model = MLTradeModel()
+        model._model = payload["model"]
+        model._feature_importances = importances
+        model._train_features = list(importances.keys())
+
+        features = {f: 1.0 for f in MLTradeModel.FEATURES}
+
+        with caplog.at_level(logging.DEBUG):
+            model.predict(features)
+            model.predict(features)
+            model.predict(features)
+
+        first_predict_msgs = [r for r in caplog.records if "first predict" in r.message]
+        assert len(first_predict_msgs) == 1, (
+            f"Expected exactly 1 'first predict' log, got {len(first_predict_msgs)}"
+        )

@@ -102,6 +102,7 @@ class MLTradeModel:
         self._feature_importances: dict[str, float] = {}
         self._optimal_threshold: Optional[float] = None
         self._train_features: list[str] = list(self.FEATURES)
+        self._first_predict_logged: bool = False
 
     @property
     def optimal_threshold(self) -> Optional[float]:
@@ -439,6 +440,20 @@ class MLTradeModel:
                     len(missing), missing,
                     len(model_feature_names), model_feature_names,
                 )
+
+            # One-time diagnostic: show feature alignment on first prediction
+            if not self._first_predict_logged:
+                self._first_predict_logged = True
+                input_keys = sorted(features.keys())
+                model_keys = sorted(model_feature_names)
+                unused = sorted(set(input_keys) - set(model_keys))
+                logger.info(
+                    "ML first predict — model uses %d features: %s | "
+                    "input has %d features (unused by model: %s)",
+                    len(model_keys), model_keys,
+                    len(input_keys), unused if unused else "none",
+                )
+
             row_data = {f: features.get(f, 0.0) for f in model_feature_names}
             row = pd.DataFrame([row_data]).astype(float)
         else:
@@ -648,16 +663,29 @@ class MLTradeModel:
             self._optimal_threshold = payload.get("optimal_threshold", None)
             self._train_features = payload.get("train_features", list(self.FEATURES))
 
-            # Warn if saved model was trained with different features
+            # Check if saved model was trained with different features
             model_features = set(self._feature_importances.keys())
-            expected_features = set(self.FEATURES)
-            if model_features and model_features != expected_features:
-                logger.warning(
-                    "ML model features mismatch - retrain required: "
-                    "model=%s, expected=%s",
-                    sorted(model_features),
-                    sorted(expected_features),
-                )
+            deployable_features = set(self.FEATURES_DEPLOYABLE)
+            all_features = set(self.FEATURES)
+            excluded = all_features - deployable_features
+
+            if model_features and model_features != all_features:
+                if model_features == deployable_features:
+                    # Model was trained with known exclusions — expected, no action needed
+                    logger.info(
+                        "ML model trained with %d/%d features (excluded by design: %s)",
+                        len(model_features), len(all_features), sorted(excluded),
+                    )
+                else:
+                    # Genuine mismatch — model has unexpected feature set
+                    missing_from_model = sorted(all_features - model_features - excluded)
+                    extra_in_model = sorted(model_features - all_features)
+                    logger.warning(
+                        "ML model features MISMATCH - retrain may be required: "
+                        "missing=%s, extra=%s (model=%d, expected=%d)",
+                        missing_from_model, extra_in_model,
+                        len(model_features), len(all_features),
+                    )
 
             ensemble = "xgb+lgb" if self._lgb_model else "xgb"
             logger.info("Model loaded from %s (ensemble=%s)", path, ensemble)
