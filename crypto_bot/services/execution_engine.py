@@ -771,7 +771,6 @@ class ExecutionEngineService(BaseService):
             self._logger.error(
                 "Failed to close %s on regime_change: %s", symbol, e
             )
-            position.exit_reason = None
 
     def _validate_signal(self, signal: Dict[str, Any]) -> bool:
         """
@@ -1528,6 +1527,18 @@ class ExecutionEngineService(BaseService):
                     return
 
             elif len(reduce_only_orders) == 1:
+                # Recover the single order's price before placing the missing one
+                single = reduce_only_orders[0]
+                single_price = float(single.get("limitPx", single.get("price", 0)))
+                tp_orders, sl_orders = self._classify_tp_sl_orders(reduce_only_orders, position)
+                if tp_orders:
+                    position.tp_price = single_price
+                    position.tp_order_id = str(single.get("orderId", ""))
+                    self._logger.info("%s: recovered single TP order price=%.6f", symbol, single_price)
+                elif sl_orders:
+                    position.sl_price = single_price
+                    position.sl_order_id = str(single.get("orderId", ""))
+                    self._logger.info("%s: recovered single SL order price=%.6f", symbol, single_price)
                 # Only 1 order — need to place the missing one
                 self._logger.warning(
                     "%s has only 1 reduce-only order — will place missing TP or SL",
@@ -2567,7 +2578,6 @@ class ExecutionEngineService(BaseService):
                     # CRITICAL: Remove from _closing_positions so next iteration retries
                     self._closing_positions.discard(symbol)
                     position.status = PositionStatus.OPEN
-                    position.exit_reason = None
 
     async def _check_breakeven_stops(self) -> None:
         """Move SL to entry price (breakeven) when unrealized P&L reaches threshold.
@@ -2707,7 +2717,6 @@ class ExecutionEngineService(BaseService):
                 self._logger.error(
                     "Failed to close %s on max_hold_time: %s", symbol, e
                 )
-                position.exit_reason = None
 
     async def _check_trailing_stops(self) -> None:
         """ATR-based trailing stop.
@@ -2724,8 +2733,11 @@ class ExecutionEngineService(BaseService):
         """
         trailing_mult = getattr(
             getattr(self._bot_config, "stops", None),
-            "trailing_atr_mult", 2.5
+            "trailing_atr_mult", 0  # Safe fallback: disabled when key missing
         )
+
+        if trailing_mult == 0:
+            return
 
         for symbol, position in list(self.active_positions.items()):
             if position.status != PositionStatus.OPEN:
@@ -2989,7 +3001,6 @@ class ExecutionEngineService(BaseService):
                         self._logger.error(
                             "Failed to close %s on roi_target: %s", symbol, e
                         )
-                        position.exit_reason = None
 
             except Exception as e:
                 self._logger.error(
@@ -3082,7 +3093,6 @@ class ExecutionEngineService(BaseService):
                     self._logger.error(
                         "Failed to close %s on momentum_fade: %s", symbol, e
                     )
-                    position.exit_reason = None
 
     async def _handle_position_closed(self, symbol: str) -> None:
         """
@@ -3112,6 +3122,27 @@ class ExecutionEngineService(BaseService):
                 position.exit_reason = "take_profit"
             elif position.sl_price:
                 position.exit_reason = "stop_loss"
+            else:
+                # Last resort: infer from config TP/SL thresholds vs close price
+                try:
+                    tp_pct = getattr(getattr(self._bot_config, 'risk', None), 'take_profit_pct', 2.5) / 100
+                    sl_pct = getattr(getattr(self._bot_config, 'risk', None), 'stop_loss_pct', 1.0) / 100
+                    is_long = position.side == "long"
+                    entry = float(position.entry_price) if position.entry_price else 0
+                    if entry > 0:
+                        exit_px = float(position.current_price) if position.current_price else entry
+                        implied_tp = entry * (1 + tp_pct) if is_long else entry * (1 - tp_pct)
+                        implied_sl = entry * (1 - sl_pct) if is_long else entry * (1 + sl_pct)
+                        tp_dist = abs(exit_px - implied_tp)
+                        sl_dist = abs(exit_px - implied_sl)
+                        position.exit_reason = "take_profit" if tp_dist < sl_dist else "stop_loss"
+                        self._logger.info(
+                            "%s exit_reason inferred from config thresholds: %s (exit_px=%.4f, implied_tp=%.4f, implied_sl=%.4f)",
+                            position.symbol, position.exit_reason, exit_px, implied_tp, implied_sl,
+                        )
+                except Exception as e:
+                    self._logger.warning("Failed to infer exit_reason for %s: %s", position.symbol, e)
+                    position.exit_reason = "unknown"
 
         # Cancel remaining TP/SL orders (the one that didn't trigger)
         for order_id in [position.tp_order_id, position.sl_order_id]:

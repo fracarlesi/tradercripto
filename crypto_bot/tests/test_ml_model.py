@@ -712,7 +712,7 @@ class TestMLPersistence:
         loaded = MLTradeModel()
         with caplog.at_level(logging.WARNING):
             assert loaded.load(path)
-        assert "features mismatch" in caplog.text
+        assert "features mismatch" in caplog.text.lower()
 
 
 # ── Signal Crossover Entry Tests ─────────────────────────────────────────

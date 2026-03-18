@@ -153,7 +153,7 @@ stops:
 
   # Momentum Fade Exit — DISABLED (backtest showed it cuts winners prematurely)
   momentum_exit:
-    enabled: true
+    enabled: false  # DISABLED — cuts winners prematurely (WS1 safety fix)
     min_age_minutes: 5
     min_profit_pct: 9.0        # Effectively disabled — 900% profit threshold never reached
     rsi_slope_threshold: 1.0
@@ -310,84 +310,14 @@ ml_model:
   enabled: true
   model_path: "models/trade_model.joblib"
   min_probability: 0.50        # Lowered from 0.58: counterfactual showed 96% rejection, +15.5% P&L lost
-  retrain_days: 90             # 3× training window to reduce overfitting
+  short_threshold_offset: 0.05  # Shorts require 0.55 vs longs 0.50
+  retrain_days: 90             # 3x training window to reduce overfitting
   retrain_interval_days: 3     # Ogni quanto ri-addestrare
 
 # -----------------------------------------------------------------------------
-# Capital Ladder — Progressive scale-up with objective criteria
+# Short-Specific Filters — improve short WR from 16.7%
 # -----------------------------------------------------------------------------
-capital_ladder:
-  enabled: true
-  current_level: 0
-  auto_promote: false
-  auto_demote: false
-  levels:
-    - level: 0
-      label: "test_65"
-      target_capital_usd: 65
-      min_closed_trades: 30
-      min_live_days: 14
-      min_profit_factor: 1.15
-      min_net_pnl_usd: 0.5
-      max_drawdown_pct: 10.0
-      min_maker_fill_ratio_pct: 70.0
-    - level: 1
-      label: "step_250"
-      target_capital_usd: 250
-      min_closed_trades: 30
-      min_live_days: 14
-      min_profit_factor: 1.15
-      min_net_pnl_usd: 2.0
-      max_drawdown_pct: 10.0
-      min_maker_fill_ratio_pct: 70.0
-    - level: 2
-      label: "step_500"
-      target_capital_usd: 500
-      min_closed_trades: 35
-      min_live_days: 14
-      min_profit_factor: 1.15
-      min_net_pnl_usd: 4.0
-      max_drawdown_pct: 10.0
-      min_maker_fill_ratio_pct: 68.0
-    - level: 3
-      label: "step_1500"
-      target_capital_usd: 1500
-      min_closed_trades: 40
-      min_live_days: 21
-      min_profit_factor: 1.18
-      min_net_pnl_usd: 10.0
-      max_drawdown_pct: 9.0
-      min_maker_fill_ratio_pct: 65.0
-    - level: 4
-      label: "step_3000"
-      target_capital_usd: 3000
-      min_closed_trades: 40
-      min_live_days: 21
-      min_profit_factor: 1.18
-      min_net_pnl_usd: 20.0
-      max_drawdown_pct: 9.0
-      min_maker_fill_ratio_pct: 65.0
-    - level: 5
-      label: "step_5000"
-      target_capital_usd: 5000
-      min_closed_trades: 50
-      min_live_days: 30
-      min_profit_factor: 1.20
-      min_net_pnl_usd: 35.0
-      max_drawdown_pct: 8.5
-      min_maker_fill_ratio_pct: 62.0
-    - level: 6
-      label: "step_10000"
-      target_capital_usd: 10000
-      min_closed_trades: 60
-      min_live_days: 30
-      min_profit_factor: 1.20
-      min_net_pnl_usd: 70.0
-      max_drawdown_pct: 8.0
-      min_maker_fill_ratio_pct: 60.0
-
-# -----------------------------------------------------------------------------
-# Environment
-# -----------------------------------------------------------------------------
-environment: "mainnet"
-dry_run: false
+filters:
+  btc_macro_gate_shorts: true   # Block shorts when BTC EMA9 > EMA21
+  short_rsi_min: 42             # Don't short into near-oversold (was 35)
+  short_rsi_max: 72             # Don't short when RSI already falling hard

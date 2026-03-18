@@ -209,6 +209,12 @@ class ConservativeConfig:
     testnet: bool
     dry_run: bool
 
+    # Short filters (WS3)
+    btc_macro_gate_shorts: bool = False
+    short_rsi_min: float = 35.0
+    short_rsi_max: float = 100.0
+    ml_short_threshold_offset: float = 0.0
+
     @classmethod
     def from_yaml(cls, path: str) -> "ConservativeConfig":
         """Load configuration from YAML file."""
@@ -229,6 +235,7 @@ class ConservativeConfig:
         vb = get_section("volume_breakout")
         mb = get_section("momentum_burst")
         me = get_section("stops").get("momentum_exit", {})
+        filters = get_section("filters")
 
         # Parse universe mode and assets
         universe_mode = universe.get("mode", "manual")
@@ -263,7 +270,7 @@ class ConservativeConfig:
             weekly_loss_pct=ks.get("weekly_loss_pct", 15.0),
             max_drawdown_pct=ks.get("max_drawdown_pct", 30.0),
             initial_atr_mult=stops.get("initial_atr_mult", 2.5),
-            trailing_atr_mult=stops.get("trailing_atr_mult", 2.5),
+            trailing_atr_mult=stops.get("trailing_atr_mult", 0),  # Safe default: disabled
             minimal_roi=stops.get("minimal_roi", {}),
             stop_loss_pct=stops.get("stop_loss_pct", 0.8),
             take_profit_pct=stops.get("take_profit_pct", 1.6),
@@ -300,12 +307,16 @@ class ConservativeConfig:
             momentum_burst_max_rsi_entry=mb.get("max_rsi_entry", 75.0),
             momentum_burst_min_volume_ratio=mb.get("min_volume_ratio", 1.2),
             momentum_burst_allowed_regimes=mb.get("allowed_regimes", ["chaos", "trend"]),
-            momentum_exit_enabled=me.get("enabled", True),
+            momentum_exit_enabled=me.get("enabled", False),  # Safe default: disabled
             momentum_exit_min_age_minutes=me.get("min_age_minutes", 15),
             momentum_exit_min_profit_pct=me.get("min_profit_pct", 0.1),
             momentum_exit_rsi_slope_threshold=me.get("rsi_slope_threshold", 1.0),
             testnet=env.lower() == "testnet",
             dry_run=data.get("dry_run", False),
+            btc_macro_gate_shorts=filters.get("btc_macro_gate_shorts", False),
+            short_rsi_min=filters.get("short_rsi_min", 35.0),
+            short_rsi_max=filters.get("short_rsi_max", 100.0),
+            ml_short_threshold_offset=ml.get("short_threshold_offset", 0.0),
         )
 
 
@@ -902,12 +913,23 @@ class ConservativeBot:
                         elif direction == Direction.SHORT and float(state.ema9_1h) >= float(state.ema21_1h):
                             mtf_aligned = False
 
-                    # Gate: RSI hard floor for SHORT entries
+                    # Gate: RSI window for SHORT entries (configurable)
                     rsi_ok = True
-                    if direction == Direction.SHORT and state.rsi and float(state.rsi) < 35:
-                        rsi_ok = False
+                    if direction == Direction.SHORT and state.rsi:
+                        rsi_val = float(state.rsi)
+                        if rsi_val < self.config.short_rsi_min or rsi_val > self.config.short_rsi_max:
+                            rsi_ok = False
 
-                    if funding_ok and mtf_aligned and rsi_ok and ema_gap_ok:
+                    # Gate: BTC macro gate — block shorts when BTC in uptrend
+                    btc_gate_ok = True
+                    if direction == Direction.SHORT and self.config.btc_macro_gate_shorts and btc_state is not None:
+                        btc_ema9 = float(btc_state.ema9) if btc_state.ema9 is not None else 0.0
+                        btc_ema21 = float(btc_state.ema21) if btc_state.ema21 is not None else 0.0
+                        if btc_ema9 > btc_ema21:
+                            btc_gate_ok = False
+                            logger.debug("SKIP %s SHORT: BTC in uptrend (EMA9 %.2f > EMA21 %.2f)", symbol, btc_ema9, btc_ema21)
+
+                    if funding_ok and mtf_aligned and rsi_ok and ema_gap_ok and btc_gate_ok:
                         dir_float = 1.0 if direction == Direction.LONG else -1.0
                         features = self._ml_model.extract_features(
                             state, signal_type=0.0, direction=dir_float,
@@ -918,7 +940,8 @@ class ConservativeBot:
                         if prob > top_scored_prob:
                             top_scored_prob = prob
                             top_scored_direction = direction
-                        if prob >= threshold and prob > best_prob:
+                        ema_eff_threshold = threshold + (self.config.ml_short_threshold_offset if direction == Direction.SHORT else 0.0)
+                        if prob >= ema_eff_threshold and prob > best_prob:
                             best_prob = prob
                             best_direction = direction
                             best_reason = reason
@@ -936,8 +959,17 @@ class ConservativeBot:
                 # Fix 5: RSI direction alignment — don't long overbought, don't short oversold
                 if vb_direction == Direction.LONG and state.rsi and float(state.rsi) > 70:
                     vb_direction = Direction.FLAT
-                if vb_direction == Direction.SHORT and state.rsi and float(state.rsi) < 30:
-                    vb_direction = Direction.FLAT
+                if vb_direction == Direction.SHORT and state.rsi:
+                    vb_rsi = float(state.rsi)
+                    if vb_rsi < self.config.short_rsi_min or vb_rsi > self.config.short_rsi_max:
+                        vb_direction = Direction.FLAT
+                # Gate: BTC macro gate — block shorts when BTC in uptrend
+                if vb_direction == Direction.SHORT and self.config.btc_macro_gate_shorts and btc_state is not None:
+                    btc_ema9 = float(btc_state.ema9) if btc_state.ema9 is not None else 0.0
+                    btc_ema21 = float(btc_state.ema21) if btc_state.ema21 is not None else 0.0
+                    if btc_ema9 > btc_ema21:
+                        logger.debug("SKIP %s VB SHORT: BTC in uptrend (EMA9 %.2f > EMA21 %.2f)", symbol, btc_ema9, btc_ema21)
+                        vb_direction = Direction.FLAT
                 if vb_direction != Direction.FLAT and self._is_volume_breakout(state):
                     breakout_evaluated += 1
                     vb_dir_float = 1.0 if vb_direction == Direction.LONG else -1.0
@@ -950,7 +982,8 @@ class ConservativeBot:
                     if prob > top_scored_prob:
                         top_scored_prob = prob
                         top_scored_direction = vb_direction
-                    if prob >= threshold and prob > best_prob:
+                    vb_eff_threshold = threshold + (self.config.ml_short_threshold_offset if vb_direction == Direction.SHORT else 0.0)
+                    if prob >= vb_eff_threshold and prob > best_prob:
                         best_prob = prob
                         best_direction = vb_direction
                         best_reason = reason
@@ -969,8 +1002,17 @@ class ConservativeBot:
                     # Fix 5: RSI direction alignment — don't long overbought, don't short oversold
                     if mb_direction == Direction.LONG and state.rsi and float(state.rsi) > 70:
                         mb_direction = Direction.FLAT
-                    if mb_direction == Direction.SHORT and state.rsi and float(state.rsi) < 30:
-                        mb_direction = Direction.FLAT
+                    if mb_direction == Direction.SHORT and state.rsi:
+                        mb_rsi = float(state.rsi)
+                        if mb_rsi < self.config.short_rsi_min or mb_rsi > self.config.short_rsi_max:
+                            mb_direction = Direction.FLAT
+                    # Gate: BTC macro gate — block shorts when BTC in uptrend
+                    if mb_direction == Direction.SHORT and self.config.btc_macro_gate_shorts and btc_state is not None:
+                        btc_ema9 = float(btc_state.ema9) if btc_state.ema9 is not None else 0.0
+                        btc_ema21 = float(btc_state.ema21) if btc_state.ema21 is not None else 0.0
+                        if btc_ema9 > btc_ema21:
+                            logger.debug("SKIP %s MB SHORT: BTC in uptrend (EMA9 %.2f > EMA21 %.2f)", symbol, btc_ema9, btc_ema21)
+                            mb_direction = Direction.FLAT
                     if mb_direction != Direction.FLAT:
                         burst_evaluated += 1
                         mb_dir_float = 1.0 if mb_direction == Direction.LONG else -1.0
@@ -983,7 +1025,8 @@ class ConservativeBot:
                         if prob > top_scored_prob:
                             top_scored_prob = prob
                             top_scored_direction = mb_direction
-                        if prob >= threshold and prob > best_prob:
+                        mb_eff_threshold = threshold + (self.config.ml_short_threshold_offset if mb_direction == Direction.SHORT else 0.0)
+                        if prob >= mb_eff_threshold and prob > best_prob:
                             best_prob = prob
                             best_direction = mb_direction
                             best_reason = reason
