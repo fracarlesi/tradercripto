@@ -39,6 +39,13 @@ from .services.regime_detector import RegimeDetector
 from .services.trade_journal import TradeJournal
 from .services.scorecard import Scorecard
 from .strategies.registry import create_strategy, create_rsi_mean_reversion, create_rsi2_connors
+from .strategies.etf_rotation import (
+    ETFRotationStrategy,
+    fetch_etf_bars,
+    load_state as load_etf_state,
+    RotationAction,
+)
+from .strategies.options_spreads import CreditSpreadStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +162,35 @@ class IBBot:
         )
         self._regime_enabled = config.regime.enabled
 
+        # ETF Rotation (VAA-G4) — monthly rebalance
+        self._etf_rotation: Optional[ETFRotationStrategy] = None
+        self._etf_rotation_checked_today = False
+        if config.etf_rotation.enabled:
+            self._etf_rotation = ETFRotationStrategy(
+                offensive=config.etf_rotation.offensive,
+                defensive=config.etf_rotation.defensive,
+            )
+            logger.info(
+                "ETF Rotation enabled: offensive=%s defensive=%s check_time=%s",
+                config.etf_rotation.offensive,
+                config.etf_rotation.defensive,
+                config.etf_rotation.check_time,
+            )
+
+        # Credit put spread strategy
+        self._credit_spread: Optional[CreditSpreadStrategy] = None
+        self._credit_spread_checked_today = False
+        if config.options_spreads.enabled:
+            self._credit_spread = CreditSpreadStrategy(
+                config.options_spreads.model_dump()
+            )
+            logger.info(
+                "Credit Spread strategy enabled: %s width=$%.0f delta=%.2f",
+                config.options_spreads.underlying,
+                config.options_spreads.spread_width,
+                config.options_spreads.target_delta,
+            )
+
     # =========================================================================
     # Startup Diagnostics
     # =========================================================================
@@ -187,6 +223,8 @@ class IBBot:
             f"  VWAP confirm:    {cfg.strategy.vwap_confirmation}",
             f"  RSI MR (2nd):    {'ENABLED' if self._rsi_mr_strategy else 'disabled'}",
             f"  RSI2 Connors:    {'ENABLED (daily)' if self._rsi2_strategy else 'disabled'}",
+            f"  ETF Rotation:    {'ENABLED (monthly VAA-G4)' if self._etf_rotation else 'disabled'}",
+            f"  Credit Spreads:  {'ENABLED (bi-weekly SPY puts)' if self._credit_spread else 'disabled'}",
             "",
             "  --- IB Connection ---",
             f"  Host:            {conn.host}:{conn.port}",
@@ -305,6 +343,8 @@ class IBBot:
         while self._running:
             try:
                 await self._update_phase()
+                await self._check_etf_rotation()
+                await self._check_credit_spreads()
                 await asyncio.sleep(5.0)
             except asyncio.CancelledError:
                 break
@@ -393,6 +433,8 @@ class IBBot:
                 self._rsi2_strategy.reset_daily()
             if self._regime_enabled:
                 self._regime_detector.reset()
+            self._etf_rotation_checked_today = False
+            self._credit_spread_checked_today = False
             logger.info("Daily reset complete - ready for new session")
 
         elif new == SessionPhase.OPENING_RANGE:
@@ -504,6 +546,171 @@ class IBBot:
                 break
             except Exception as e:
                 logger.debug("Heartbeat error: %s", e)
+
+    # =========================================================================
+    # ETF Rotation (VAA-G4)
+    # =========================================================================
+
+    async def _check_etf_rotation(self) -> None:
+        """Check if ETF rotation rebalance is needed.
+
+        Runs daily at the configured check_time (default 15:50 ET).
+        Only executes on the last trading day of the month.
+        """
+        if not self._etf_rotation:
+            return
+
+        if self._etf_rotation_checked_today:
+            return
+
+        now_et = datetime.now(timezone.utc).astimezone(self._session_tz)
+        check_time_str = self._config.etf_rotation.check_time
+        h, m = map(int, check_time_str.split(":"))
+        check_time = time(h, m)
+
+        # Only check after the configured time
+        if now_et.time() < check_time:
+            return
+
+        # Mark as checked so we don't re-run today
+        self._etf_rotation_checked_today = True
+        today = now_et.date()
+
+        if not self._etf_rotation.should_rebalance(today):
+            logger.info(
+                "ETF Rotation: not last trading day of month (%s), skipping",
+                today,
+            )
+            return
+
+        logger.info("ETF Rotation: last trading day of month — running evaluation")
+
+        try:
+            # Fetch 13 months of daily bars for all 7 ETFs
+            all_symbols = self._etf_rotation.all_symbols
+            bars_by_symbol = await fetch_etf_bars(self._ib_client, all_symbols)
+
+            # Evaluate momentum and get recommendation
+            result = self._etf_rotation.evaluate(bars_by_symbol, today)
+
+            # Execute the rebalance
+            await self._etf_rotation.execute_rebalance(
+                result, self._ib_client, self._notifications,
+            )
+
+        except Exception as e:
+            logger.error("ETF Rotation failed: %s", e, exc_info=True)
+            await self._notifications.send(
+                f"ETF Rotation ERROR: {e}",
+                title="ETF Rotation - ERROR",
+                tags="warning",
+            )
+
+    # =========================================================================
+    # Credit Put Spread Strategy
+    # =========================================================================
+
+    async def _check_credit_spreads(self) -> None:
+        """Check credit spread entries and exits daily at 15:50 ET.
+
+        Runs once per day at 15:50 ET:
+        1. Check exits on all open positions
+        2. If it's an entry day and below max positions, find and place a new spread
+        """
+        if not self._credit_spread:
+            return
+
+        if self._credit_spread_checked_today:
+            return
+
+        now_et = datetime.now(timezone.utc).astimezone(self._session_tz)
+        check_time = time(15, 50)
+
+        # Only check after 15:50 ET
+        if now_et.time() < check_time:
+            return
+
+        self._credit_spread_checked_today = True
+        today = now_et.date()
+        ib = self._ib_client.ib
+
+        logger.info("Credit Spread: daily check at %s ET", now_et.strftime("%H:%M"))
+
+        # --- Step 1: Check exits on open positions ---
+        try:
+            exits = await self._credit_spread.check_exits(ib)
+            for pos, reason in exits:
+                logger.info("Credit Spread EXIT: %s — %s", pos.spread_id, reason)
+                closed = await self._credit_spread.close_spread(ib, pos, reason)
+                if closed:
+                    await self._notifications.send(
+                        f"SPREAD CLOSED: {pos.spread_id}\n"
+                        f"Reason: {reason}\n"
+                        f"Credit received: ${pos.credit_received:.2f}",
+                        title="Credit Spread EXIT",
+                        tags="white_check_mark",
+                    )
+                else:
+                    await self._notifications.send(
+                        f"SPREAD CLOSE FAILED: {pos.spread_id}\n"
+                        f"Reason: {reason}",
+                        title="Credit Spread ERROR",
+                        tags="warning",
+                    )
+        except Exception as e:
+            logger.error("Credit Spread exit check failed: %s", e, exc_info=True)
+
+        # --- Step 2: Check entry ---
+        if not self._credit_spread.should_enter(today):
+            # Log status even when not entering
+            report = self._credit_spread.status_report()
+            logger.info("Credit Spread status:\n%s", report)
+            return
+
+        logger.info("Credit Spread: entry day — searching for spread")
+
+        try:
+            spread = await self._credit_spread.find_spread(ib)
+            if not spread:
+                logger.warning("Credit Spread: no suitable spread found")
+                await self._notifications.send(
+                    "No suitable credit spread found today",
+                    title="Credit Spread",
+                    tags="mag",
+                )
+                return
+
+            result = await self._credit_spread.place_spread(ib, spread)
+            if result:
+                await self._notifications.send(
+                    f"NEW SPREAD: {result.spread_id}\n"
+                    f"Short: P{spread.short_strike:.0f} ({spread.short_delta:.3f} delta)\n"
+                    f"Long: P{spread.long_strike:.0f}\n"
+                    f"Expiry: {spread.expiry} ({spread.dte} DTE)\n"
+                    f"Credit: ${result.credit_received:.2f}\n"
+                    f"Max risk: ${self._credit_spread._spread_width * 100 - result.credit_received:.2f}",
+                    title="Credit Spread ENTRY",
+                    tags="chart_with_upwards_trend",
+                )
+            else:
+                logger.error("Credit Spread: order placement failed")
+                await self._notifications.send(
+                    "Credit spread order placement FAILED",
+                    title="Credit Spread ERROR",
+                    tags="warning",
+                )
+
+        except Exception as e:
+            logger.error("Credit Spread entry failed: %s", e, exc_info=True)
+            await self._notifications.send(
+                f"Credit Spread ENTRY ERROR: {e}",
+                title="Credit Spread ERROR",
+                tags="warning",
+            )
+
+        # Log final status
+        report = self._credit_spread.status_report()
+        logger.info("Credit Spread status:\n%s", report)
 
     # =========================================================================
     # Event Handlers

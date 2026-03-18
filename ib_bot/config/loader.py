@@ -605,6 +605,73 @@ class RegimeConfig(BaseConfig):
     )
 
 
+class OptionsSpreadsConfig(BaseConfig):
+    """SPY Credit Put Spread strategy configuration."""
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable the credit put spread strategy",
+    )
+    underlying: str = Field(
+        default="SPY",
+        description="Underlying ticker for spreads",
+    )
+    spread_width: float = Field(
+        default=5.0,
+        ge=1.0,
+        le=20.0,
+        description="Width of the spread in dollars",
+    )
+    target_delta: float = Field(
+        default=0.20,
+        ge=0.05,
+        le=0.40,
+        description="Target delta for the short put leg",
+    )
+    target_dte: int = Field(
+        default=45,
+        ge=20,
+        le=90,
+        description="Target days to expiration at entry",
+    )
+    profit_target_pct: float = Field(
+        default=50.0,
+        ge=10.0,
+        le=90.0,
+        description="Close when spread can be bought back at this % of credit",
+    )
+    stop_loss_mult: float = Field(
+        default=2.0,
+        ge=1.5,
+        le=5.0,
+        description="Close when cost to close reaches this multiple of credit",
+    )
+    dte_exit: int = Field(
+        default=21,
+        ge=5,
+        le=30,
+        description="Close if DTE reaches this level",
+    )
+    delta_exit: float = Field(
+        default=0.30,
+        ge=0.20,
+        le=0.50,
+        description="Close if short leg delta reaches this level",
+    )
+    max_positions: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Maximum concurrent open spreads",
+    )
+    entry_frequency_days: int = Field(
+        default=14,
+        ge=7,
+        le=30,
+        description="Minimum days between new entries",
+    )
+
+
 class ScorecardConfig(BaseConfig):
     """Paper-trading scorecard configuration."""
 
@@ -650,6 +717,44 @@ class ScorecardConfig(BaseConfig):
     )
 
 
+class ETFRotationConfig(BaseConfig):
+    """Vigilant Asset Allocation (VAA-G4) ETF rotation configuration.
+
+    Monthly rebalance: always 100% in one ETF based on momentum scoring.
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable ETF rotation strategy",
+    )
+    strategy: str = Field(
+        default="vaa_g4",
+        description="Rotation strategy name",
+    )
+    offensive: list[str] = Field(
+        default=["SPY", "EFA", "EEM", "AGG"],
+        description="Offensive ETF universe",
+    )
+    defensive: list[str] = Field(
+        default=["BIL", "IEF", "LQD"],
+        description="Defensive ETF universe",
+    )
+    rebalance_day: str = Field(
+        default="last_trading_day",
+        description="When to rebalance (last_trading_day of month)",
+    )
+    check_time: str = Field(
+        default="15:50",
+        description="Time (ET) to check for rebalance",
+    )
+    client_id: int = Field(
+        default=2,
+        ge=0,
+        le=999,
+        description="Separate IB client ID for ETF rotation (avoids conflict with futures bot)",
+    )
+
+
 class LoggingConfig(BaseConfig):
     """Logging configuration."""
 
@@ -690,7 +795,9 @@ class TradingConfig(BaseConfig):
     atr_filter: ATRFilterConfig = Field(default_factory=ATRFilterConfig)
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
     regime: RegimeConfig = Field(default_factory=RegimeConfig)
+    options_spreads: OptionsSpreadsConfig = Field(default_factory=OptionsSpreadsConfig)
     scorecard: ScorecardConfig = Field(default_factory=ScorecardConfig)
+    etf_rotation: ETFRotationConfig = Field(default_factory=ETFRotationConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
     @property

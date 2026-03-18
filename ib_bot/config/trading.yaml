@@ -148,6 +148,37 @@ scorecard:
   candidate_max_dd: 300
   candidate_min_wr: 35.0
 
+# ETF Rotation (VAA-G4) — Monthly rebalance
+# Runs independently of intraday strategies.
+# Checks daily at 15:50 ET if today is last trading day of month.
+# Always 100% in one ETF: best offensive if all offensive momentum > 0,
+# otherwise best defensive.
+etf_rotation:
+  enabled: true
+  strategy: "vaa_g4"
+  offensive: ["SPY", "EFA", "EEM", "AGG"]
+  defensive: ["BIL", "IEF", "LQD"]
+  rebalance_day: "last_trading_day"
+  check_time: "15:50"
+  client_id: 2              # Separate client ID to avoid conflict with futures bot
+
+# SPY Credit Put Spread Strategy
+# Sells bull put credit spreads every 2 weeks on Tuesdays
+# Short leg: ~20 delta put, Long leg: $5 below short
+# Exits: 50% profit, 2x loss, 21 DTE, or 0.30 delta breach
+options_spreads:
+  enabled: true
+  underlying: "SPY"
+  spread_width: 5
+  target_delta: 0.20
+  target_dte: 45
+  profit_target_pct: 50
+  stop_loss_mult: 2.0
+  dte_exit: 21
+  delta_exit: 0.30
+  max_positions: 3
+  entry_frequency_days: 14
+
 # Logging
 logging:
   level: "INFO"
