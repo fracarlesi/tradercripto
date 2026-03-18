@@ -215,9 +215,9 @@ class OpeningRangeConfig(BaseConfig):
 class StrategyConfig(BaseConfig):
     """ORB strategy parameters."""
 
-    name: Literal["orb", "ema_momentum"] = Field(
+    name: Literal["orb", "ema_momentum", "rsi2_connors"] = Field(
         default="orb",
-        description="Strategy name (orb or ema_momentum)",
+        description="Strategy name (orb, ema_momentum, or rsi2_connors)",
     )
     breakout_buffer_ticks: int = Field(
         default=2,
@@ -351,6 +351,112 @@ class EMAStrategyConfig(BaseConfig):
     allow_short: bool = Field(
         default=True,
         description="Allow short entries",
+    )
+
+
+class RSIMeanReversionConfig(BaseConfig):
+    """RSI Mean Reversion intraday strategy parameters."""
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable RSI Mean Reversion strategy",
+    )
+    rsi_period: int = Field(
+        default=14,
+        ge=2,
+        le=50,
+        description="RSI lookback period on 5-min bars",
+    )
+    rsi_entry_long: float = Field(
+        default=25.0,
+        ge=0.0,
+        le=100.0,
+        description="RSI threshold for long entry (below this)",
+    )
+    rsi_entry_short: float = Field(
+        default=75.0,
+        ge=0.0,
+        le=100.0,
+        description="RSI threshold for short entry (above this)",
+    )
+    rsi_exit: float = Field(
+        default=50.0,
+        ge=0.0,
+        le=100.0,
+        description="RSI level for mean reversion exit",
+    )
+    stop_points: float = Field(
+        default=6.0,
+        ge=1.0,
+        le=50.0,
+        description="Fixed stop loss in points",
+    )
+    max_daily_trades: int = Field(
+        default=4,
+        ge=1,
+        le=20,
+        description="Maximum trades per day for this strategy",
+    )
+    start_time: str = Field(
+        default="10:00",
+        description="Earliest entry time ET (skip opening volatility)",
+    )
+    end_time: str = Field(
+        default="15:30",
+        description="Latest entry time ET (skip close)",
+    )
+
+
+class RSI2ConnorsConfig(BaseConfig):
+    """RSI(2) Connors Mean Reversion strategy parameters.
+
+    Daily timeframe, long-only. Enters when RSI(2) dips below threshold
+    while price is above SMA(200), exits when RSI(2) recovers.
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable RSI2 Connors strategy",
+    )
+    rsi_period: int = Field(
+        default=2,
+        ge=2,
+        le=14,
+        description="RSI lookback period (standard Connors uses 2)",
+    )
+    rsi_entry_threshold: float = Field(
+        default=10.0,
+        ge=1.0,
+        le=50.0,
+        description="Enter long when RSI closes below this level",
+    )
+    rsi_exit_threshold: float = Field(
+        default=70.0,
+        ge=50.0,
+        le=99.0,
+        description="Exit long when RSI closes above this level",
+    )
+    sma_period: int = Field(
+        default=200,
+        ge=50,
+        le=500,
+        description="SMA trend filter period (price must be above)",
+    )
+    max_hold_days: int = Field(
+        default=7,
+        ge=1,
+        le=30,
+        description="Force exit after N trading days if RSI hasn't recovered",
+    )
+    stop_points: int = Field(
+        default=20,
+        ge=5,
+        le=100,
+        description="Catastrophe stop in points (20 pts = $100 on MES)",
+    )
+    direction: str = Field(
+        default="long_only",
+        description="Trade direction (long_only for S&P upward bias)",
     )
 
 
@@ -565,6 +671,8 @@ class TradingConfig(BaseConfig):
     strategy: StrategyConfig = Field(default_factory=StrategyConfig)
     stops: StopsConfig = Field(default_factory=StopsConfig)
     ema_strategy: EMAStrategyConfig = Field(default_factory=EMAStrategyConfig)
+    rsi2_connors: RSI2ConnorsConfig = Field(default_factory=RSI2ConnorsConfig)
+    rsi_mean_reversion: RSIMeanReversionConfig = Field(default_factory=RSIMeanReversionConfig)
     risk: RiskConfig = Field(default_factory=RiskConfig)
     atr_filter: ATRFilterConfig = Field(default_factory=ATRFilterConfig)
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)

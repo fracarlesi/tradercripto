@@ -88,6 +88,34 @@ ema_strategy:
   max_entry_time: "15:00"
   allow_short: true
 
+# RSI(2) Connors Mean Reversion Strategy — DAILY timeframe
+# Classic Connors RSI(2) strategy: buy oversold dips in uptrends
+# Evaluates once/day at 16:00 ET, holds overnight, exits on RSI recovery
+rsi2_connors:
+  enabled: true
+  rsi_period: 2                  # Standard Connors RSI period
+  rsi_entry_threshold: 10        # Enter when RSI(2) < 10 (deeply oversold)
+  rsi_exit_threshold: 70         # Exit when RSI(2) > 70 (mean reverted)
+  sma_period: 200                # Trend filter: price must be above SMA(200)
+  max_hold_days: 7               # Force exit after 7 trading days
+  stop_points: 20                # Catastrophe stop: 20 pts = $100 on MES
+  direction: "long_only"         # S&P has long-term upward bias
+
+# RSI Mean Reversion (Intraday) — secondary strategy
+# Runs alongside the primary strategy on 5-min bars.
+# Does NOT trade if primary strategy has an open position.
+# Backtest: PF 1.27, ~1.9 trades/day
+rsi_mean_reversion:
+  enabled: true
+  rsi_period: 14
+  rsi_entry_long: 25
+  rsi_entry_short: 75
+  rsi_exit: 50
+  stop_points: 6             # 6 pts = $30 per MES contract
+  max_daily_trades: 4
+  start_time: "10:00"        # ET - skip opening volatility
+  end_time: "15:30"          # ET - skip close
+
 # Notifications
 notifications:
   enabled: true

@@ -49,6 +49,12 @@ class SetupType(str, Enum):
     ORB_SHORT = "orb_short"
     EMA_LONG = "ema_long"
     EMA_SHORT = "ema_short"
+    RSI2_LONG = "rsi2_long"
+    RSI2_EXIT = "rsi2_exit"
+    RSI_MR_LONG = "rsi_mr_long"
+    RSI_MR_SHORT = "rsi_mr_short"
+    RSI_MR_EXIT_LONG = "rsi_mr_exit_long"
+    RSI_MR_EXIT_SHORT = "rsi_mr_exit_short"
 
 
 class KillSwitchStatus(str, Enum):

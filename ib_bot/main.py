@@ -26,7 +26,7 @@ from typing import Optional
 from dotenv import load_dotenv
 
 from .config.loader import load_config, TradingConfig
-from .core.enums import SessionPhase, Topic
+from .core.enums import Direction, SessionPhase, Topic
 from .services.message_bus import MessageBus
 from .services.ib_client import IBClient
 from .services.market_data import MarketDataService
@@ -38,7 +38,7 @@ from .services.atr_filter import ATRFilter
 from .services.regime_detector import RegimeDetector
 from .services.trade_journal import TradeJournal
 from .services.scorecard import Scorecard
-from .strategies.registry import create_strategy
+from .strategies.registry import create_strategy, create_rsi_mean_reversion, create_rsi2_connors
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +142,8 @@ class IBBot:
             journal=self._journal,
         )
         self._strategy = create_strategy(config)
+        self._rsi_mr_strategy = create_rsi_mean_reversion(config)
+        self._rsi2_strategy = create_rsi2_connors(config)
         self._atr_filter = ATRFilter(config.atr_filter)
 
         # Regime detector (observation-only)
@@ -183,6 +185,8 @@ class IBBot:
             f"  Contracts:       {', '.join(enabled)} (disabled: {', '.join(disabled) or 'none'})",
             f"  Allow short:     {cfg.strategy.allow_short}",
             f"  VWAP confirm:    {cfg.strategy.vwap_confirmation}",
+            f"  RSI MR (2nd):    {'ENABLED' if self._rsi_mr_strategy else 'disabled'}",
+            f"  RSI2 Connors:    {'ENABLED (daily)' if self._rsi2_strategy else 'disabled'}",
             "",
             "  --- IB Connection ---",
             f"  Host:            {conn.host}:{conn.port}",
@@ -383,6 +387,10 @@ class IBBot:
             self._market_data.reset_session()
             self._atr_filter.reset_daily()
             self._strategy.reset_daily()
+            if self._rsi_mr_strategy:
+                self._rsi_mr_strategy.reset_daily()
+            if self._rsi2_strategy:
+                self._rsi2_strategy.reset_daily()
             if self._regime_enabled:
                 self._regime_detector.reset()
             logger.info("Daily reset complete - ready for new session")
@@ -444,6 +452,12 @@ class IBBot:
                     await self._notifications.notify_scorecard(report)
                 except Exception as e:
                     logger.error("Scorecard evaluation failed: %s", e)
+
+        elif new == SessionPhase.CLOSED:
+            # RSI(2) Connors daily evaluation at 16:00 ET
+            # Runs after market close when today's daily bar is final.
+            if self._rsi2_strategy:
+                await self._evaluate_rsi2_daily()
 
     # =========================================================================
     # Heartbeat Logging
@@ -516,7 +530,10 @@ class IBBot:
 
     async def _on_market_data(self, msg: object) -> None:
         """Handle market data updates - evaluate strategy during active trading."""
-        if self._phase != SessionPhase.ACTIVE_TRADING:
+        # Primary strategy only runs during ACTIVE_TRADING.
+        # RSI Mean Reversion also runs during AFTERNOON (10:00-15:30 ET).
+        active_phases = {SessionPhase.ACTIVE_TRADING, SessionPhase.AFTERNOON}
+        if self._phase not in active_phases:
             return
 
         if not self._kill_switch.is_trading_allowed:
@@ -551,35 +568,248 @@ class IBBot:
 
         # Get OR range for this symbol
         or_range = self._market_data.get_or_range(state.symbol)
-        if not or_range or not or_range.valid:
+
+        # --- Primary strategy (ORB / Connors / EMA) ---
+        if self._phase == SessionPhase.ACTIVE_TRADING and or_range and or_range.valid:
+            result = self._strategy.evaluate(state, or_range)
+            if result.has_setup and result.setup:
+                setup = result.setup
+                logger.info(
+                    "SIGNAL [%s]: %s %s entry=%.2f stop=%.2f target=%.2f "
+                    "risk=%d ticks reward=%d ticks conf=%.2f",
+                    setup.symbol, setup.setup_type.value, setup.direction.value,
+                    float(setup.entry_price), float(setup.stop_price),
+                    float(setup.target_price), setup.risk_ticks,
+                    setup.reward_ticks, float(setup.confidence),
+                )
+
+                # Size the trade
+                intent = self._risk_manager.size_trade(setup)
+                if intent:
+                    await self._bus.publish(
+                        Topic.ORDER,
+                        intent.model_dump(),
+                        source="strategy",
+                    )
+                    logger.info(
+                        "TRADE INTENT [%s]: %s x%d risk=$%.2f",
+                        setup.symbol, setup.direction.value,
+                        intent.contracts, float(intent.risk_usd),
+                    )
+
+        # --- RSI Mean Reversion (secondary intraday strategy) ---
+        await self._evaluate_rsi_mr(state, or_range)
+
+    async def _evaluate_rsi_mr(
+        self,
+        state: "FuturesMarketState",
+        or_range: "Optional[ORBRange]",
+    ) -> None:
+        """Evaluate RSI Mean Reversion strategy as secondary intraday strategy.
+
+        Coordination rules:
+        - Does NOT enter if execution engine has any active trades
+          (i.e., the primary strategy has an open position).
+        - Always processes exit signals for its own open positions.
+        - Uses a dummy OR range if none is available (RSI MR doesn't use it).
+        """
+        if not self._rsi_mr_strategy:
             return
 
-        # Evaluate strategy
-        result = self._strategy.evaluate(state, or_range)
-        if result.has_setup and result.setup:
-            setup = result.setup
-            logger.info(
-                "SIGNAL [%s]: %s %s entry=%.2f stop=%.2f target=%.2f "
-                "risk=%d ticks reward=%d ticks conf=%.2f",
-                setup.symbol, setup.setup_type.value, setup.direction.value,
-                float(setup.entry_price), float(setup.stop_price),
-                float(setup.target_price), setup.risk_ticks,
-                setup.reward_ticks, float(setup.confidence),
+        from .core.enums import SetupType
+
+        # Build a dummy OR range if none available (RSI MR ignores it)
+        if or_range is None:
+            from .core.models import ORBRange
+            or_range = ORBRange(
+                symbol=state.symbol,
+                or_high=state.last_price,
+                or_low=state.last_price,
+                midpoint=state.last_price,
+                range_ticks=0,
+                volume=Decimal("0"),
+                vwap=state.last_price,
+                timestamp=state.timestamp,
+                valid=False,
             )
 
-            # Size the trade
-            intent = self._risk_manager.size_trade(setup)
-            if intent:
-                await self._bus.publish(
-                    Topic.ORDER,
-                    intent.model_dump(),
-                    source="strategy",
-                )
+        result = self._rsi_mr_strategy.evaluate(state, or_range)
+
+        if not result.has_setup or not result.setup:
+            return
+
+        setup = result.setup
+
+        # Handle EXIT signals -- always process these
+        if setup.setup_type in (SetupType.RSI_MR_EXIT_LONG, SetupType.RSI_MR_EXIT_SHORT):
+            logger.info(
+                "RSI_MR EXIT [%s]: %s price=%.2f",
+                setup.symbol, setup.setup_type.value,
+                float(setup.entry_price),
+            )
+            # Flatten the position
+            await self._execution.flatten_all()
+            self._rsi_mr_strategy.record_exit()
+            return
+
+        # Handle ENTRY signals -- only if no other strategy has a position
+        if self._execution.has_active_trades:
+            logger.debug(
+                "RSI_MR entry blocked: primary strategy has active trades"
+            )
+            return
+
+        # Block if RSI2 Connors has an overnight position
+        if self._rsi2_strategy and self._rsi2_strategy.in_position:
+            logger.debug(
+                "RSI_MR entry blocked: RSI2 Connors has overnight position"
+            )
+            return
+
+        logger.info(
+            "RSI_MR SIGNAL [%s]: %s %s entry=%.2f stop=%.2f "
+            "risk=%d ticks conf=%.2f",
+            setup.symbol, setup.setup_type.value, setup.direction.value,
+            float(setup.entry_price), float(setup.stop_price),
+            setup.risk_ticks, float(setup.confidence),
+        )
+
+        # Size the trade
+        intent = self._risk_manager.size_trade(setup)
+        if intent:
+            await self._bus.publish(
+                Topic.ORDER,
+                intent.model_dump(),
+                source="rsi_mr_strategy",
+            )
+            self._rsi_mr_strategy.record_entry(
+                direction=setup.direction,
+                entry_price=setup.entry_price,
+            )
+            logger.info(
+                "RSI_MR TRADE INTENT [%s]: %s x%d risk=$%.2f",
+                setup.symbol, setup.direction.value,
+                intent.contracts, float(intent.risk_usd),
+            )
+
+
+    # =========================================================================
+    # RSI(2) Connors Daily Evaluation
+    # =========================================================================
+
+    async def _evaluate_rsi2_daily(self) -> None:
+        """Evaluate RSI(2) Connors strategy on daily bars at 16:00 ET.
+
+        Fetches 2 years of daily bars from IB, converts to DailyBar objects,
+        and calls the strategy's evaluate_daily(). On entry/exit signals,
+        places a market order (executes at next open).
+        """
+        from .strategies.rsi2_connors import DailyBar
+        from .core.enums import SetupType
+
+        symbol = self._rsi2_strategy._symbol
+        today = datetime.now(self._session_tz).date()
+
+        logger.info("RSI2 daily evaluation starting for %s", symbol)
+
+        try:
+            # Fetch 2 years of daily bars from IB
+            contract = await self._ib_client.qualify_contract(symbol)
+            ib_bars = await self._ib_client.ib.reqHistoricalDataAsync(
+                contract,
+                endDateTime="",
+                durationStr="2 Y",
+                barSizeSetting="1 day",
+                whatToShow="TRADES",
+                useRTH=True,
+                keepUpToDate=False,
+            )
+
+            if not ib_bars:
+                logger.warning("RSI2: no daily bars returned for %s", symbol)
+                return
+
+            # Convert IB bars to DailyBar objects
+            bars: list[DailyBar] = []
+            for b in ib_bars:
+                bars.append(DailyBar(
+                    date=b.date if hasattr(b.date, "year") else b.date.date(),
+                    open=Decimal(str(b.open)),
+                    high=Decimal(str(b.high)),
+                    low=Decimal(str(b.low)),
+                    close=Decimal(str(b.close)),
+                    volume=Decimal(str(b.volume)) if b.volume else Decimal("0"),
+                ))
+
+            logger.info(
+                "RSI2: fetched %d daily bars for %s (from %s to %s)",
+                len(bars), symbol, bars[0].date, bars[-1].date,
+            )
+
+            # Evaluate the strategy
+            result = self._rsi2_strategy.evaluate_daily(bars, today)
+
+            if not result.has_setup or not result.setup:
+                logger.info("RSI2: no signal — %s", result.reason)
+                return
+
+            setup = result.setup
+
+            # --- ENTRY: RSI2_LONG -> place market buy (1 contract) ---
+            if setup.setup_type == SetupType.RSI2_LONG:
                 logger.info(
-                    "TRADE INTENT [%s]: %s x%d risk=$%.2f",
-                    setup.symbol, setup.direction.value,
-                    intent.contracts, float(intent.risk_usd),
+                    "RSI2 ENTRY: BUY %s x1 @ market (will fill at next open) "
+                    "| stop=%.2f | RSI2 entry",
+                    symbol, float(setup.stop_price),
                 )
+                trade = await self._ib_client.place_market_order(
+                    symbol=symbol,
+                    direction=Direction.LONG,
+                    contracts=1,
+                )
+                await self._notifications.send(
+                    f"RSI2 ENTRY: BUY {symbol} x1 @ market\n"
+                    f"Stop: {float(setup.stop_price):.2f} ({self._rsi2_strategy._cfg.stop_points} pts)\n"
+                    f"Exit: RSI(2) > {self._rsi2_strategy._cfg.rsi_exit_threshold} or {self._rsi2_strategy._cfg.max_hold_days}d max",
+                    title="RSI2 Connors ENTRY",
+                    tags="chart_with_upwards_trend",
+                )
+
+                # Track in execution engine's active trades
+                trade_id = f"rsi2_{symbol}_{today.isoformat()}"
+                self._execution._active_trades[symbol] = {
+                    "trades": [trade],
+                    "intent": None,
+                    "entry_time": datetime.now(timezone.utc),
+                    "trade_id": trade_id,
+                    "source": "rsi2_connors",
+                }
+
+            # --- EXIT: RSI2_EXIT -> flatten the position ---
+            elif setup.setup_type == SetupType.RSI2_EXIT:
+                logger.info(
+                    "RSI2 EXIT: SELL %s @ market | reason: %s",
+                    symbol, result.reason,
+                )
+                await self._ib_client.flatten_position(symbol)
+
+                # Clear from execution engine tracking
+                self._execution._active_trades.pop(symbol, None)
+
+                await self._notifications.send(
+                    f"RSI2 EXIT: SELL {symbol} @ market\n"
+                    f"Reason: {result.reason}",
+                    title="RSI2 Connors EXIT",
+                    tags="white_check_mark",
+                )
+
+        except Exception as e:
+            logger.error("RSI2 daily evaluation failed: %s", e, exc_info=True)
+            await self._notifications.send(
+                f"RSI2 evaluation error: {e}",
+                title="RSI2 Error",
+                tags="warning",
+            )
 
 
 async def main() -> None:
