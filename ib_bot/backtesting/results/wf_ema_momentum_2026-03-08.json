@@ -1,0 +1,119 @@
+{
+  "config": {
+    "total_days": 90,
+    "train_days": 30,
+    "validate_days": 10,
+    "step_days": 5,
+    "symbols": [
+      "MES",
+      "MNQ"
+    ],
+    "strategy": "ema_momentum",
+    "account_size": 10000.0
+  },
+  "summary": {
+    "total_oos_pnl": -1584.9956813971244,
+    "total_is_pnl": 5373.711105937018,
+    "total_oos_trades": 146,
+    "oos_profit_factor": 0.0,
+    "consistency_score": 0.0,
+    "degradation_ratio": -0.29495364565578885,
+    "avg_robustness": 56.722500000000004,
+    "windows_profitable": 0,
+    "total_windows": 4
+  },
+  "windows": [
+    {
+      "window_id": 1,
+      "train_start": "2025-12-15",
+      "train_end": "2026-01-28",
+      "validate_start": "2026-01-29",
+      "validate_end": "2026-02-11",
+      "best_params": {
+        "ema_fast": 9,
+        "ema_slow": 21,
+        "atr_stop_multiplier": 1.5,
+        "reward_risk_ratio": 1.5
+      },
+      "in_sample_pnl": -259.96052654173536,
+      "in_sample_trades": 120,
+      "in_sample_pf": 0.9277088056555288,
+      "in_sample_sharpe": -1.0413925552368348,
+      "out_sample_pnl": -202.40280753643637,
+      "out_sample_trades": 40,
+      "out_sample_pf": 0.89643747414452,
+      "out_sample_sharpe": -2.7616643221410286,
+      "robustness_score": 44.14,
+      "robustness_class": "acceptable"
+    },
+    {
+      "window_id": 2,
+      "train_start": "2025-12-22",
+      "train_end": "2026-02-04",
+      "validate_start": "2026-02-05",
+      "validate_end": "2026-02-19",
+      "best_params": {
+        "ema_fast": 5,
+        "ema_slow": 13,
+        "atr_stop_multiplier": 3.0,
+        "reward_risk_ratio": 2.0
+      },
+      "in_sample_pnl": 1752.6577837798347,
+      "in_sample_trades": 110,
+      "in_sample_pf": 1.2434222679428528,
+      "in_sample_sharpe": 1.600009034655275,
+      "out_sample_pnl": -344.50456908734907,
+      "out_sample_trades": 36,
+      "out_sample_pf": 0.916154020874666,
+      "out_sample_sharpe": -0.9257569158009314,
+      "robustness_score": 61.02,
+      "robustness_class": "robust"
+    },
+    {
+      "window_id": 3,
+      "train_start": "2025-12-30",
+      "train_end": "2026-02-11",
+      "validate_start": "2026-02-12",
+      "validate_end": "2026-02-26",
+      "best_params": {
+        "ema_fast": 5,
+        "ema_slow": 13,
+        "atr_stop_multiplier": 3.0,
+        "reward_risk_ratio": 2.0
+      },
+      "in_sample_pnl": 1959.8251188941501,
+      "in_sample_trades": 113,
+      "in_sample_pf": 1.2260337243602861,
+      "in_sample_sharpe": 1.6169631686750348,
+      "out_sample_pnl": -539.8354944693847,
+      "out_sample_trades": 35,
+      "out_sample_pf": 0.8424463516910964,
+      "out_sample_sharpe": -2.0540560320676566,
+      "robustness_score": 61.21,
+      "robustness_class": "robust"
+    },
+    {
+      "window_id": 4,
+      "train_start": "2026-01-07",
+      "train_end": "2026-02-19",
+      "validate_start": "2026-02-20",
+      "validate_end": "2026-03-05",
+      "best_params": {
+        "ema_fast": 5,
+        "ema_slow": 13,
+        "atr_stop_multiplier": 3.0,
+        "reward_risk_ratio": 2.0
+      },
+      "in_sample_pnl": 1921.1887298047682,
+      "in_sample_trades": 113,
+      "in_sample_pf": 1.2021075453452497,
+      "in_sample_sharpe": 1.5444132582502175,
+      "out_sample_pnl": -498.2528103039542,
+      "out_sample_trades": 35,
+      "out_sample_pf": 0.8584039495117263,
+      "out_sample_sharpe": -2.5996977628212283,
+      "robustness_score": 60.52,
+      "robustness_class": "robust"
+    }
+  ]
+}

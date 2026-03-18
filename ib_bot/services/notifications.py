@@ -104,3 +104,11 @@ class NotificationService:
     async def notify_session(self, event: str) -> bool:
         """Send session lifecycle notification."""
         return await self.send(event, title="IB Session", tags="clock3")
+
+    async def notify_scorecard(self, report: str) -> bool:
+        """Send EOD scorecard report."""
+        return await self.send(
+            report,
+            title="IB Scorecard",
+            tags="clipboard,bar_chart",
+        )

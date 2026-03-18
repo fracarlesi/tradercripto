@@ -13,12 +13,14 @@ ib_connection:
   reconnect_delay: 5
   max_reconnect_attempts: 10
 
-# Contracts to trade (MES + MNQ micros for $2K account)
+# Contracts to trade
+# MNQ disabled: OR ranges are 183-1138 ticks (always exceeds max_range_ticks)
+# MNQ generates zero valid ORB setups — confirmed in 56-day walk-forward
 contracts:
   - symbol: MES
     enabled: true
   - symbol: MNQ
-    enabled: true
+    enabled: false
   - symbol: ES
     enabled: false
   - symbol: NQ
@@ -34,32 +36,44 @@ opening_range:
   timezone: "US/Eastern"
 
 # Strategy
+# Evidence: max_entry 10:00 is the single strongest filter (PF 1.38→1.51, DD halved)
+# Evidence: buffer=1 marginally better than 2 (+$78), minimal impact
+# Evidence: VWAP confirmation has zero effect (identical results ON/OFF) — left ON as no-op
 strategy:
   name: "orb"
-  breakout_buffer_ticks: 2     # Ticks above/below OR for entry
-  vwap_confirmation: true      # Require price above/below VWAP
+  breakout_buffer_ticks: 1     # Reduced from 2: marginal improvement, less restrictive
+  vwap_confirmation: true      # No measurable effect but harmless
   min_atr_ticks: 4             # Minimum ATR in ticks
-  max_entry_time: "11:30"      # ET - no new entries after this
-  allow_short: true
+  max_entry_time: "10:00"      # ET - restrict to first 15min after OR (strongest edge window)
+  allow_short: true            # SHORT carries ~90% of P&L — do not disable
   no_reentry_after_stop: true  # No re-entry same direction after stop
 
 # Stop and Target
+# Evidence: R:R 2.0 = PF 1.38 (38 trades), R:R 2.5 = PF 1.51 (36 trades)
+# Using 2.0 for more trades and conservative validation (38 vs 36)
 stops:
   stop_type: "or_midpoint"     # Stop at OR midpoint
   stop_buffer_ticks: 2         # Buffer below stop level
-  reward_risk_ratio: "2.0"     # R:R 1:2.0 (Config L optimal)
+  reward_risk_ratio: "2.0"     # R:R 2.0 — balances trade count vs edge
   trailing_enabled: false
   eod_flatten_time: "15:45"    # ET - flatten all before close
 
 # Risk Management
+# Validation sizing: minimum executable size for signal quality testing.
+# 1 MES = smallest tradeable unit ($1.25/tick). Do NOT scale up until
+# paper evidence meets scorecard CANDIDATE criteria (PF>1.2, 30+ trades).
+# The paper account's $1M simulated equity is irrelevant — sizing is
+# fixed at 1 contract to test edge, not to simulate P&L at scale.
 risk:
-  max_risk_per_trade_usd: "50"     # Sized for $2K account (Size-E)
-  max_daily_loss_usd: "200"        # Reduced proportionally for $2K
-  max_contracts_per_trade: 1       # 1 contract max for $2K account
+  max_risk_per_trade_usd: "50"     # ~40 tick max risk on MES ($1.25/tick)
+  max_daily_loss_usd: "200"        # 4x single-trade risk
+  max_contracts_per_trade: 1       # Minimum executable size — do not increase during validation
   max_trades_per_day: 2
   consecutive_stops_halt: 2    # Halt after N consecutive stops
 
-# EMA Momentum Strategy (used when strategy.name: "ema_momentum")
+# EMA Momentum Strategy — DISABLED
+# Walk-forward verdict: FAIL (0/4 OOS windows profitable, -$1585 OOS, degradation -0.29)
+# Do not re-enable without new walk-forward evidence
 ema_strategy:
   ema_fast: 9
   ema_slow: 21

@@ -37,6 +37,30 @@ services:
     profiles:
       - paper
 
+  ib_gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:10.37
+    container_name: ib_gateway
+    environment:
+      TWS_USERID: ${IB_USERNAME}
+      TWS_PASSWORD: ${IB_PASSWORD}
+      TRADING_MODE: paper
+      READ_ONLY_API: "no"
+      RELOGIN_AFTER_2FA_TIMEOUT: "yes"
+      EXISTING_SESSION_DETECTED_ACTION: primaryoverride
+      TWOFA_TIMEOUT_ACTION: restart
+      ACCEPT_NON_BROKERAGE_ACCOUNT_WARNING: "yes"
+      AUTO_RESTART_TIME: "11:58 PM"
+    ports:
+      - "4002:4004"   # Paper trading API port
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    profiles:
+      - ib
+
   ib_bot:
     build:
       context: .
@@ -47,7 +71,10 @@ services:
       - .env
     volumes:
       - ./ib_bot/logs:/app/ib_bot/logs
-    network_mode: host    # Required to reach TWS on localhost
+      - ./ib_bot/data:/app/data
+    network_mode: host    # Required to reach ib_gateway on localhost:4002
+    depends_on:
+      - ib_gateway
     restart: unless-stopped
     logging:
       driver: json-file

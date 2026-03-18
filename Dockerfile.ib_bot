@@ -2,7 +2,10 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install dependencies
+# Install system dependencies (tzdata required for US/Central timezone)
+RUN apt-get update && apt-get install -y --no-install-recommends tzdata && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
 COPY requirements-ib.txt .
 RUN pip install --no-cache-dir -r requirements-ib.txt
 

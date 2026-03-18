@@ -61,6 +61,10 @@ def main() -> None:
         "--trades", action="store_true",
         help="Print individual trade log after summary",
     )
+    replay_parser.add_argument(
+        "--slippage", default=None,
+        help="Slippage scenario: ideal, normal, adverse, hostile, or all",
+    )
 
     # ---- Sweep mode ----
     sweep_parser = subparsers.add_parser(
@@ -154,6 +158,52 @@ def main() -> None:
         help="Print individual trade logs for each config",
     )
 
+    # ---- Walk-forward mode ----
+    wf_parser = subparsers.add_parser(
+        "walk-forward", help="Run walk-forward validation",
+    )
+    wf_parser.add_argument(
+        "--days", type=int, default=90,
+        help="Total calendar days for walk-forward (default: 90)",
+    )
+    wf_parser.add_argument(
+        "--train", type=int, default=30,
+        help="Training window in trading days (default: 30)",
+    )
+    wf_parser.add_argument(
+        "--validate", type=int, default=10,
+        help="Validation window in trading days (default: 10)",
+    )
+    wf_parser.add_argument(
+        "--step", type=int, default=5,
+        help="Step size in trading days (default: 5)",
+    )
+    wf_parser.add_argument(
+        "--strategy", default="orb",
+        choices=["orb", "ema_momentum"],
+        help="Strategy to validate (default: orb)",
+    )
+    wf_parser.add_argument(
+        "--symbols", nargs="+", default=["MES", "MNQ"],
+        help="Futures symbols (default: MES MNQ)",
+    )
+    wf_parser.add_argument(
+        "--account", type=float, default=10_000,
+        help="Starting account size in USD (default: 10000)",
+    )
+    wf_parser.add_argument(
+        "--ib-host", default="127.0.0.1",
+        help="IB Gateway/TWS host (default: 127.0.0.1)",
+    )
+    wf_parser.add_argument(
+        "--ib-port", type=int, default=4002,
+        help="IB Gateway/TWS port (default: 4002 for paper)",
+    )
+    wf_parser.add_argument(
+        "--verbose", "-v", action="store_true",
+        help="Enable debug logging",
+    )
+
     # ---- Sweep-EMA mode ----
     sweep_ema_parser = subparsers.add_parser(
         "sweep-ema", help="Run EMA momentum parameter sweep",
@@ -215,3 +265,6 @@ def main() -> None:
     elif args.mode == "sweep-ema":
         from .modes.sweep_ema import run_sweep_ema
         asyncio.run(run_sweep_ema(args))
+    elif args.mode == "walk-forward":
+        from .modes.walk_forward_mode import run_walk_forward
+        asyncio.run(run_walk_forward(args))

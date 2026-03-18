@@ -52,5 +52,9 @@ class BaseStrategy(ABC):
     def reject(self, reason: str) -> StrategyResult:
         return StrategyResult(has_setup=False, reason=reason)
 
+    def reset_daily(self) -> None:
+        """Reset daily state. Override in subclasses if needed."""
+        pass
+
     def generate_setup_id(self) -> str:
         return f"{self.name}_{uuid.uuid4().hex[:8]}"

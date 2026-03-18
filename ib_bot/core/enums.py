@@ -20,6 +20,8 @@ class Topic(str, Enum):
     RISK = "risk"
     KILL_SWITCH = "kill_switch"
     NOTIFICATION = "notification"
+    REGIME = "regime"
+    SCORECARD = "scorecard"
 
 
 class Direction(str, Enum):
@@ -41,10 +43,12 @@ class SessionPhase(str, Enum):
 
 
 class SetupType(str, Enum):
-    """Type of ORB trade setup."""
+    """Type of trade setup."""
 
     ORB_LONG = "orb_long"
     ORB_SHORT = "orb_short"
+    EMA_LONG = "ema_long"
+    EMA_SHORT = "ema_short"
 
 
 class KillSwitchStatus(str, Enum):

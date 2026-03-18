@@ -9,6 +9,9 @@ from ib_bot.config.loader import (
     StrategyConfig,
     StopsConfig,
     OpeningRangeConfig,
+    EMAStrategyConfig,
+    RegimeConfig,
+    ScorecardConfig,
 )
 from ib_bot.core.contracts import CONTRACTS
 from ib_bot.core.enums import Direction, SessionPhase, SetupType

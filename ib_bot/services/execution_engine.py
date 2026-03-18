@@ -18,6 +18,7 @@ from .ib_client import IBClient
 from .message_bus import MessageBus
 from .risk_manager import RiskManager
 from .kill_switch import KillSwitchService
+from .trade_journal import TradeJournal
 from ..core.enums import Direction, Topic
 from ..core.models import TradeIntent, Position
 
@@ -33,11 +34,13 @@ class ExecutionEngine(BaseService):
         risk_manager: RiskManager,
         kill_switch: KillSwitchService,
         bus: Optional[MessageBus] = None,
+        journal: Optional[TradeJournal] = None,
     ) -> None:
         super().__init__(name="execution_engine", bus=bus, loop_interval_seconds=5.0)
         self._ib_client = ib_client
         self._risk_manager = risk_manager
         self._kill_switch = kill_switch
+        self._journal = journal
         self._active_trades: Dict[str, Any] = {}
         self._stopped_directions: Dict[str, set] = {}  # symbol -> {Direction.LONG, ...}
         # order_id -> status string (Submitted, Filled, Cancelled, etc.)
@@ -93,11 +96,26 @@ class ExecutionEngine(BaseService):
                 target_price=intent.setup.target_price,
             )
 
+            trade_id = f"{symbol}_{datetime.now(timezone.utc).strftime('%H%M%S')}"
             self._active_trades[symbol] = {
                 "trades": trades,
                 "intent": intent,
                 "entry_time": datetime.now(timezone.utc),
+                "trade_id": trade_id,
             }
+
+            # Record entry in trade journal
+            if self._journal:
+                self._journal.record_entry(
+                    trade_id=trade_id,
+                    symbol=symbol,
+                    direction=direction.value,
+                    setup_type=intent.setup.setup_type.value,
+                    entry_price=intent.setup.entry_price,
+                    contracts=intent.contracts,
+                    stop_price=intent.setup.stop_price,
+                    target_price=intent.setup.target_price,
+                )
 
             # Publish order event
             await self.publish(Topic.ORDER, {
@@ -209,6 +227,16 @@ class ExecutionEngine(BaseService):
                     intent.setup.direction.value, symbol,
                     float(net_pnl), is_stop,
                 )
+                # Record exit in trade journal
+                if self._journal:
+                    exit_trade_id = entry_info.get("trade_id", "unknown")
+                    exit_reason = "stop_loss" if is_stop else "take_profit"
+                    self._journal.record_exit(
+                        trade_id=exit_trade_id,
+                        exit_price=Decimal(str(exec_info.price)),
+                        exit_reason=exit_reason,
+                        pnl=net_pnl,
+                    )
                 self.record_exit(symbol, net_pnl, is_stop)
 
     def _handle_ib_error(self, req_id: int, error_code: int, error_string: str) -> None:

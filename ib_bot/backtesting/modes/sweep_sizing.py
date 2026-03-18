@@ -3,7 +3,7 @@ IB Backtesting - Position Sizing Sweep
 ========================================
 
 Tests Config F (best ORB config) with different account sizes and
-position sizing parameters to find the right size for a $2K account.
+position sizing parameters to compare risk profiles.
 
 Usage:
     python -m ib_bot.backtesting sweep-sizing --days 90

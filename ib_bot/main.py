@@ -18,6 +18,7 @@ import logging.handlers
 import signal
 import sys
 from datetime import datetime, time, timezone
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Optional
@@ -34,7 +35,10 @@ from .services.risk_manager import RiskManager
 from .services.kill_switch import KillSwitchService
 from .services.notifications import NotificationService
 from .services.atr_filter import ATRFilter
-from .strategies.orb import ORBStrategy
+from .services.regime_detector import RegimeDetector
+from .services.trade_journal import TradeJournal
+from .services.scorecard import Scorecard
+from .strategies.registry import create_strategy
 
 logger = logging.getLogger(__name__)
 
@@ -118,17 +122,36 @@ class IBBot:
             symbols=self._symbols,
             bus=self._bus,
         )
+        # Trade journal + scorecard (initialized before execution engine)
+        self._journal = TradeJournal()
+        self._scorecard = Scorecard(
+            halt_dd_usd=Decimal(str(config.scorecard.halt_dd_usd)),
+            halt_5s_loss_usd=Decimal(str(config.scorecard.halt_5s_loss_usd)),
+            candidate_pf_20s=Decimal(str(config.scorecard.candidate_pf)),
+            candidate_min_trades=config.scorecard.candidate_min_trades,
+            candidate_max_dd=Decimal(str(config.scorecard.candidate_max_dd)),
+            candidate_min_wr=config.scorecard.candidate_min_wr,
+        )
+        self._scorecard_enabled = config.scorecard.enabled
+
         self._execution = ExecutionEngine(
             ib_client=self._ib_client,
             risk_manager=self._risk_manager,
             kill_switch=self._kill_switch,
             bus=self._bus,
+            journal=self._journal,
         )
-        self._strategy = ORBStrategy(
-            strategy_config=config.strategy,
-            stops_config=config.stops,
-        )
+        self._strategy = create_strategy(config)
         self._atr_filter = ATRFilter(config.atr_filter)
+
+        # Regime detector (observation-only)
+        self._regime_detector = RegimeDetector(
+            atr_lookback=config.regime.atr_lookback,
+            price_window=config.regime.price_window,
+            high_vol_mult=config.regime.high_vol_multiplier,
+            low_vol_mult=config.regime.low_vol_multiplier,
+        )
+        self._regime_enabled = config.regime.enabled
 
     # =========================================================================
     # Startup Diagnostics
@@ -156,7 +179,7 @@ class IBBot:
             "=" * 62,
             "",
             f"  Mode:            {mode_label}",
-            f"  Strategy:        {cfg.strategy.name.upper()} (breakout buffer: {cfg.strategy.breakout_buffer_ticks} ticks)",
+            f"  Strategy:        {self._strategy.name.upper()}",
             f"  Contracts:       {', '.join(enabled)} (disabled: {', '.join(disabled) or 'none'})",
             f"  Allow short:     {cfg.strategy.allow_short}",
             f"  VWAP confirm:    {cfg.strategy.vwap_confirmation}",
@@ -359,6 +382,9 @@ class IBBot:
             self._execution.reset_daily()
             self._market_data.reset_session()
             self._atr_filter.reset_daily()
+            self._strategy.reset_daily()
+            if self._regime_enabled:
+                self._regime_detector.reset()
             logger.info("Daily reset complete - ready for new session")
 
         elif new == SessionPhase.OPENING_RANGE:
@@ -407,6 +433,17 @@ class IBBot:
             logger.info("EOD FLATTEN: closing all positions")
             await self._execution.flatten_all()
             await self._notifications.notify_session("EOD: all positions flattened")
+
+            # EOD scorecard evaluation
+            if self._scorecard_enabled:
+                try:
+                    sessions = self._journal.load_sessions(days=30)
+                    metrics = self._scorecard.evaluate(sessions)
+                    report = Scorecard.format_report(metrics)
+                    logger.info("EOD Scorecard:\n%s", report)
+                    await self._notifications.notify_scorecard(report)
+                except Exception as e:
+                    logger.error("Scorecard evaluation failed: %s", e)
 
     # =========================================================================
     # Heartbeat Logging
@@ -499,6 +536,18 @@ class IBBot:
             state = FuturesMarketState(**payload)
         except Exception:
             return
+
+        # Update regime detector (observation-only)
+        if self._regime_enabled:
+            try:
+                regime = self._regime_detector.update(
+                    close=state.last_price,
+                    vwap=state.vwap,
+                    atr=state.atr_14,
+                )
+                logger.debug("Regime [%s]: %s", state.symbol, regime.value)
+            except Exception:
+                pass
 
         # Get OR range for this symbol
         or_range = self._market_data.get_or_range(state.symbol)
