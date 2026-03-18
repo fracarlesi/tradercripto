@@ -272,7 +272,7 @@ protections:
   - name: "StoplossGuard"
     lookback_period_min: 60
     stoploss_limit: 3
-    stop_duration_min: 360
+    stop_duration_min: 120     # 2h pause after 3 stops in 1h (was 6h — too long for 24/7 market)
 
   - name: "MaxDrawdown"
     lookback_period_min: 1440
@@ -280,11 +280,10 @@ protections:
     stop_duration_min: 720
 
 
-  - name: "LowPerformance"
-    min_trades: 20              # Need 20+ trades before judging
-    max_profit_factor: 0.90     # Block if PF < 0.90 (losing money after fees)
-    require_negative_pnl: true  # Only block if net_pnl < 0 (confirms real loss)
-    stop_duration_min: 1440     # Pause 24h
+  # LowPerformance DISABLED — counterproductive for a bidirectional bot.
+  # Losing on longs in a downtrend triggers cooldown, which then blocks
+  # profitable shorts in the same downtrend. Other protections (StoplossGuard,
+  # MaxDrawdown, kill_switch, max_daily_trades) already limit risk.
 
 # -----------------------------------------------------------------------------
 # Performance Metrics
