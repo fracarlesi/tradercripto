@@ -183,13 +183,75 @@ class PerformanceMonitorService(BaseService):
     # Reports & Alerts
     # =========================================================================
 
+    def _get_level_trades(self) -> tuple[list["TradeRecord"], str, int, str, float, int, int]:
+        """Get trades filtered to the current capital ladder level period.
+
+        Returns:
+            (trades, level_label, level_num, status, target_capital,
+             min_closed_trades, min_live_days)
+
+        Falls back to 30-day rolling window if no capital ladder is configured.
+        """
+        level_label = "30d"
+        level_num = -1
+        status = ""
+        target_capital = 0.0
+        min_closed_trades = 0
+        min_live_days = 0
+        cutoff_dt: Optional[datetime] = None
+
+        if self._capital_ladder:
+            state = getattr(self._capital_ladder, "_state", None)
+            if state and state.started_at:
+                try:
+                    cutoff_dt = datetime.fromisoformat(state.started_at)
+                    if cutoff_dt.tzinfo is None:
+                        cutoff_dt = cutoff_dt.replace(tzinfo=timezone.utc)
+                except (ValueError, TypeError):
+                    cutoff_dt = None
+
+                level_num = state.current_level
+                level_label = state.level_label or f"L{level_num}"
+                status = state.status or "TRACKING"
+                target_capital = state.target_capital_usd or 0.0
+
+            # Get min requirements from level config
+            levels = getattr(self._capital_ladder, "_levels", [])
+            for lc in levels:
+                if lc.level == level_num:
+                    min_closed_trades = lc.min_closed_trades
+                    min_live_days = lc.min_live_days
+                    break
+
+        if cutoff_dt is None:
+            # Fallback: 30-day rolling window
+            cutoff_dt = datetime.now(timezone.utc) - timedelta(days=ROLLING_WINDOW_DAYS)
+
+        trades = []
+        for t in self._trades:
+            try:
+                t_dt = datetime.fromisoformat(t.closed_at)
+                if t_dt.tzinfo is None:
+                    t_dt = t_dt.replace(tzinfo=timezone.utc)
+                if t_dt >= cutoff_dt:
+                    trades.append(t)
+            except (ValueError, TypeError):
+                continue
+
+        return trades, level_label, level_num, status, target_capital, min_closed_trades, min_live_days
+
     async def _send_scheduled_report(self) -> None:
-        """Send Account Snapshot via ntfy (replaces old Performance Report)."""
+        """Send Account Snapshot via ntfy.
+
+        Metrics are scoped to the current capital-ladder level (started_at).
+        Falls back to 30-day rolling window when no ladder is configured.
+        """
         if not self._whatsapp:
             return
 
         now = datetime.now(timezone.utc)
         now_rome = now.astimezone(REPORT_TIMEZONE)
+        time_str = now_rome.strftime("%H:%M %d/%m")
 
         # Get equity from exchange
         equity_str = "N/A"
@@ -200,27 +262,6 @@ class PerformanceMonitorService(BaseService):
                 equity_str = f"${equity:,.2f}" if equity else "N/A"
         except Exception:
             pass
-
-        # Today's trades (midnight UTC)
-        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        today_trades = [
-            t for t in self._trades
-            if datetime.fromisoformat(t.closed_at).replace(tzinfo=timezone.utc) >= today_start
-        ]
-
-        today_count = len(today_trades)
-        today_wins = sum(1 for t in today_trades if t.is_win)
-        today_pnl = sum(t.realized_pnl for t in today_trades)
-        tp_sign = "+" if today_pnl >= 0 else ""
-
-        # Rolling metrics (30 days)
-        window = self._get_rolling_trades()
-        total = len(window)
-        wins = sum(1 for t in window if t.is_win)
-        win_rate = (wins / total * 100) if total else 0
-        gross_wins = sum(t.realized_pnl for t in window if t.realized_pnl > 0)
-        gross_losses = abs(sum(t.realized_pnl for t in window if t.realized_pnl < 0))
-        pf = gross_wins / gross_losses if gross_losses > 0 else float("inf")
 
         # Open positions
         open_positions = "none"
@@ -234,52 +275,99 @@ class PerformanceMonitorService(BaseService):
         except Exception:
             pass
 
-        # Top symbols by P&L
-        sym_pnl: Dict[str, float] = {}
-        for t in window:
-            sym_pnl[t.symbol] = sym_pnl.get(t.symbol, 0.0) + t.realized_pnl
-        sorted_syms = sorted(sym_pnl.items(), key=lambda x: x[1], reverse=True)[:5]
-        sym_lines = ", ".join(f"{s} {v:+.2f}" for s, v in sorted_syms) if sorted_syms else "none"
+        # Today's trades (midnight UTC)
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        today_trades = [
+            t for t in self._trades
+            if datetime.fromisoformat(t.closed_at).replace(tzinfo=timezone.utc) >= today_start
+        ]
+        today_count = len(today_trades)
+        today_wins = sum(1 for t in today_trades if t.is_win)
+        today_pnl = sum(t.realized_pnl for t in today_trades)
 
-        # Ladder status
-        ladder_line = ""
-        if self._capital_ladder:
-            state = getattr(self._capital_ladder, "_state", None)
-            if state:
-                ladder_line = f"Ladder: L{state.current_level} [{state.status}]"
+        # Level-scoped metrics (current capital ladder level or 30d fallback)
+        (level_trades, level_label, level_num, ladder_status,
+         target_capital, min_closed_trades, min_live_days) = self._get_level_trades()
 
-        # Max drawdown
+        total = len(level_trades)
+        wins = sum(1 for t in level_trades if t.is_win)
+        win_rate = (wins / total * 100) if total else 0
+        gross_wins = sum(t.realized_pnl for t in level_trades if t.realized_pnl > 0)
+        gross_losses = abs(sum(t.realized_pnl for t in level_trades if t.realized_pnl < 0))
+        pf = gross_wins / gross_losses if gross_losses > 0 else float("inf")
+        net_pnl = sum(t.realized_pnl for t in level_trades)
+
+        # Max drawdown (level-scoped)
         max_dd = 0.0
-        if window:
+        if level_trades:
             running = 0.0
             peak = 0.0
-            for t in window:
+            for t in level_trades:
                 running += t.realized_pnl
                 peak = max(peak, running)
                 dd = peak - running
                 max_dd = max(max_dd, dd)
 
-        time_str = now_rome.strftime("%H:%M %d/%m")
+        # Top symbols by P&L (level-scoped)
+        sym_pnl: Dict[str, float] = {}
+        for t in level_trades:
+            sym_pnl[t.symbol] = sym_pnl.get(t.symbol, 0.0) + t.realized_pnl
+        sorted_syms = sorted(sym_pnl.items(), key=lambda x: x[1], reverse=True)[:5]
+        top_line = ", ".join(f"{s} {v:+.2f}" for s, v in sorted_syms) if sorted_syms else "none"
 
-        report = (
-            f"ACCOUNT SNAPSHOT\n"
-            f"Time: {time_str}\n"
-            f"Equity: {equity_str}\n"
-            f"Net P&L today: {tp_sign}${today_pnl:.2f} ({today_count} trades)\n"
-            f"Today: {today_wins}W/{today_count - today_wins}L\n"
-            f"---\n"
-            f"Win rate (30d): {win_rate:.0f}% ({total} trades)\n"
-            f"Profit factor: {pf:.2f}\n"
-            f"Max DD: ${max_dd:.2f}\n"
-            f"Open: {open_positions}\n"
-            f"Top symbols: {sym_lines}\n"
-            f"{ladder_line}"
-        )
+        # Compute level age in days
+        level_days = 0
+        if self._capital_ladder:
+            state = getattr(self._capital_ladder, "_state", None)
+            if state and state.started_at:
+                try:
+                    start_dt = datetime.fromisoformat(state.started_at)
+                    if start_dt.tzinfo is None:
+                        start_dt = start_dt.replace(tzinfo=timezone.utc)
+                    level_days = max(0, (now - start_dt).days)
+                except (ValueError, TypeError):
+                    pass
+
+        # Build the report
+        if level_num >= 0:
+            # Capital ladder is active — show level-scoped info
+            cap_str = f"${target_capital:.0f}" if target_capital else "?"
+            today_pnl_str = f"{'+' if today_pnl >= 0 else ''}{today_pnl:.2f}"
+
+            # Status line with remaining requirements
+            remaining_parts = []
+            if min_closed_trades > 0 and total < min_closed_trades:
+                remaining_parts.append(f"{min_closed_trades - total} trades")
+            if min_live_days > 0 and level_days < min_live_days:
+                remaining_parts.append(f"{min_live_days - level_days} days")
+            remaining_str = ", ".join(remaining_parts) if remaining_parts else "requirements met"
+
+            report = (
+                f"Equity: {equity_str} | Open: {open_positions}\n"
+                f"Today: ${today_pnl_str} ({today_wins}W/{today_count - today_wins}L)\n"
+                f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+                f"Level {level_num} ({cap_str}) \u00b7 {level_days}d \u00b7 {total} trades\n"
+                f"WR: {win_rate:.0f}% | PF: {pf:.2f} | DD: ${max_dd:.2f}\n"
+                f"Net: ${net_pnl:+.2f}\n"
+                f"Top: {top_line}\n"
+                f"Status: {ladder_status} (need {remaining_str})"
+            )
+        else:
+            # No capital ladder — fallback format
+            today_pnl_str = f"{'+' if today_pnl >= 0 else ''}{today_pnl:.2f}"
+            report = (
+                f"Equity: {equity_str} | Open: {open_positions}\n"
+                f"Today: ${today_pnl_str} ({today_wins}W/{today_count - today_wins}L)\n"
+                f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+                f"30d: {total} trades | WR: {win_rate:.0f}% | PF: {pf:.2f}\n"
+                f"Net: ${net_pnl:+.2f} | DD: ${max_dd:.2f}\n"
+                f"Top: {top_line}"
+            )
 
         try:
             await self._whatsapp._send_message(
                 report,
-                title=f"Account Snapshot — {time_str}",
+                title=f"Snapshot {time_str}",
                 tags="chart_with_upwards_trend",
             )
             self._logger.info("Account Snapshot sent")
@@ -288,13 +376,13 @@ class PerformanceMonitorService(BaseService):
 
     async def _check_win_rate_alert(self) -> None:
         """Log win rate warning (ntfy alert disabled — covered by Account Snapshot)."""
-        window = self._get_rolling_trades()
-        total = len(window)
+        level_trades = self._get_level_trades()[0]
+        total = len(level_trades)
 
         if total < MIN_TRADES_FOR_ALERT:
             return
 
-        wins = sum(1 for t in window if t.is_win)
+        wins = sum(1 for t in level_trades if t.is_win)
         win_rate = wins / total
 
         if win_rate < WIN_RATE_ALERT_THRESHOLD:
@@ -374,13 +462,15 @@ class PerformanceMonitorService(BaseService):
 
     @property
     def metrics(self) -> Dict[str, Any]:
-        """Service metrics for health dashboard."""
-        window = self._get_rolling_trades()
-        total = len(window)
-        wins = sum(1 for t in window if t.is_win)
+        """Service metrics for health dashboard (scoped to current level)."""
+        level_trades, level_label, level_num, *_ = self._get_level_trades()
+        total = len(level_trades)
+        wins = sum(1 for t in level_trades if t.is_win)
 
         return {
             "total_trades": total,
             "win_rate": (wins / total * 100) if total else 0,
-            "total_pnl": sum(t.realized_pnl for t in window),
+            "total_pnl": sum(t.realized_pnl for t in level_trades),
+            "level": level_num,
+            "level_label": level_label,
         }
