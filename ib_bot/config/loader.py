@@ -410,8 +410,9 @@ class RSIMeanReversionConfig(BaseConfig):
 class RSI2ConnorsConfig(BaseConfig):
     """RSI(2) Connors Mean Reversion strategy parameters.
 
-    Daily timeframe, long-only. Enters when RSI(2) dips below threshold
-    while price is above SMA(200), exits when RSI(2) recovers.
+    Daily timeframe. Long side: enters when RSI(2) < threshold and price > SMA(200).
+    Short side: enters when RSI(2) > short threshold and price < SMA(200).
+    Exits when RSI(2) mean-reverts or max hold / catastrophe stop is hit.
     """
 
     enabled: bool = Field(
@@ -454,9 +455,21 @@ class RSI2ConnorsConfig(BaseConfig):
         le=100,
         description="Catastrophe stop in points (20 pts = $100 on MES)",
     )
+    rsi_short_entry_threshold: float = Field(
+        default=95.0,
+        ge=50.0,
+        le=99.0,
+        description="Enter short when RSI closes above this level (overbought)",
+    )
+    rsi_short_exit_threshold: float = Field(
+        default=30.0,
+        ge=1.0,
+        le=50.0,
+        description="Exit short when RSI closes below this level (mean reverted)",
+    )
     direction: str = Field(
         default="long_only",
-        description="Trade direction (long_only for S&P upward bias)",
+        description="Trade direction: 'long_only', 'short_only', or 'both'",
     )
 
 

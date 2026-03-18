@@ -2,15 +2,23 @@
 RSI(2) Connors Mean Reversion Strategy
 ========================================
 
-Daily timeframe, long-only mean reversion strategy for MES futures.
+Daily timeframe mean reversion strategy for MES futures.
 
 Rules:
-  - LONG ONLY (S&P upward bias)
+  LONG side (uptrend dip-buying):
   - Entry: RSI(2) closes below 10 AND price > SMA(200) on daily bars
   - Exit:  RSI(2) closes above 70
-  - Stop:  20 points fixed catastrophe stop ($100 on MES)
+  - Stop:  20 points below entry (catastrophe stop)
+
+  SHORT side (downtrend rally-fading):
+  - Entry: RSI(2) closes above 95 AND price < SMA(200) on daily bars
+  - Exit:  RSI(2) closes below 30
+  - Stop:  20 points above entry (catastrophe stop)
+
+  Common:
   - Max hold: 7 trading days (force exit if RSI hasn't recovered)
-  - Only 1 position at a time
+  - Only 1 position at a time (no simultaneous long + short)
+  - direction config controls which sides are enabled
 
 Evaluation: once per day at 16:00 ET using daily bar data.
 Signals queue a market order for next day's open.
@@ -46,12 +54,12 @@ class DailyBar:
 class RSI2ConnorsStrategy(BaseStrategy):
     """RSI(2) Connors mean reversion strategy.
 
-    Evaluates daily bars to detect oversold conditions (RSI(2) < 10)
-    with a trend filter (price > SMA(200)). Long only.
+    Evaluates daily bars to detect oversold/overbought conditions with a
+    trend filter (SMA 200). Supports long-only, short-only, or both sides.
 
     The strategy is called once per day at market close. It maintains
-    state about the current position (entry date, entry price) to
-    manage max hold days and the catastrophe stop.
+    state about the current position (entry date, entry price, direction)
+    to manage max hold days and the catastrophe stop.
     """
 
     def __init__(
@@ -67,6 +75,7 @@ class RSI2ConnorsStrategy(BaseStrategy):
 
         # Position tracking
         self._in_position: bool = False
+        self._position_direction: Optional[Direction] = None
         self._entry_price: Optional[Decimal] = None
         self._entry_date: Optional[date] = None
         self._hold_days: int = 0
@@ -75,6 +84,14 @@ class RSI2ConnorsStrategy(BaseStrategy):
     def name(self) -> str:
         return "rsi2_connors"
 
+    @property
+    def allow_long(self) -> bool:
+        return self._cfg.direction in ("long_only", "both")
+
+    @property
+    def allow_short(self) -> bool:
+        return self._cfg.direction in ("short_only", "both")
+
     def reset_daily(self) -> None:
         """Reset daily state. Position state persists across days."""
         pass
@@ -82,6 +99,7 @@ class RSI2ConnorsStrategy(BaseStrategy):
     def reset_position(self) -> None:
         """Clear position tracking (called after exit fill confirmed)."""
         self._in_position = False
+        self._position_direction = None
         self._entry_price = None
         self._entry_date = None
         self._hold_days = 0
@@ -139,10 +157,12 @@ class RSI2ConnorsStrategy(BaseStrategy):
 
         logger.info(
             "RSI2 eval [%s]: close=%.2f RSI(2)=%.2f SMA(%d)=%.2f "
-            "in_position=%s hold_days=%d",
+            "in_position=%s dir=%s hold_days=%d",
             self._symbol, float(last_close), float(rsi_value),
             self._cfg.sma_period, float(sma_value),
-            self._in_position, self._hold_days,
+            self._in_position,
+            self._position_direction.value if self._position_direction else "none",
+            self._hold_days,
         )
 
         # --- EXIT LOGIC (check first) ---
@@ -172,31 +192,82 @@ class RSI2ConnorsStrategy(BaseStrategy):
         last_close: Decimal,
         current_date: date,
     ) -> StrategyResult:
-        """Check entry conditions: RSI(2) < threshold AND price > SMA(200)."""
-        # Trend filter: price must be above SMA(200)
-        if last_close <= sma_value:
-            return self.reject(
-                f"Price {float(last_close):.2f} below SMA({self._cfg.sma_period}) "
-                f"{float(sma_value):.2f} - no uptrend"
-            )
+        """Check entry conditions for both long and short sides.
 
-        # RSI(2) must be below entry threshold
-        if float(rsi_value) >= self._cfg.rsi_entry_threshold:
+        Long:  RSI(2) < rsi_entry_threshold AND price > SMA(200)
+        Short: RSI(2) > rsi_short_entry_threshold AND price < SMA(200)
+        """
+        # --- LONG entry ---
+        if self.allow_long and last_close > sma_value:
+            if float(rsi_value) < self._cfg.rsi_entry_threshold:
+                return self._create_entry_signal(
+                    direction=Direction.LONG,
+                    rsi_value=rsi_value,
+                    last_close=last_close,
+                    current_date=current_date,
+                )
             return self.reject(
                 f"RSI(2) {float(rsi_value):.2f} >= {self._cfg.rsi_entry_threshold} "
                 f"- not oversold"
             )
 
-        # All conditions met -- generate BUY signal
+        # --- SHORT entry ---
+        if self.allow_short and last_close < sma_value:
+            if float(rsi_value) > self._cfg.rsi_short_entry_threshold:
+                return self._create_entry_signal(
+                    direction=Direction.SHORT,
+                    rsi_value=rsi_value,
+                    last_close=last_close,
+                    current_date=current_date,
+                )
+            return self.reject(
+                f"RSI(2) {float(rsi_value):.2f} <= {self._cfg.rsi_short_entry_threshold} "
+                f"- not overbought"
+            )
+
+        # Price is on the wrong side of SMA for all enabled directions
+        if last_close <= sma_value and self.allow_long and not self.allow_short:
+            return self.reject(
+                f"Price {float(last_close):.2f} below SMA({self._cfg.sma_period}) "
+                f"{float(sma_value):.2f} - no uptrend"
+            )
+        if last_close >= sma_value and self.allow_short and not self.allow_long:
+            return self.reject(
+                f"Price {float(last_close):.2f} above SMA({self._cfg.sma_period}) "
+                f"{float(sma_value):.2f} - no downtrend"
+            )
+
+        return self.reject(
+            f"No entry conditions met: RSI(2)={float(rsi_value):.2f} "
+            f"close={float(last_close):.2f} SMA={float(sma_value):.2f}"
+        )
+
+    def _create_entry_signal(
+        self,
+        direction: Direction,
+        rsi_value: Decimal,
+        last_close: Decimal,
+        current_date: date,
+    ) -> StrategyResult:
+        """Create an entry signal for the given direction."""
         spec = CONTRACTS.get(self._symbol)
         tick_size = spec.tick_size if spec else Decimal("0.25")
 
         entry_price = last_close  # will execute at next open (approx)
-        stop_price = entry_price - Decimal(str(self._cfg.stop_points))
-        # Target: dummy high value since we exit on RSI, not fixed target
-        target_price = entry_price + Decimal(str(self._cfg.stop_points * 3))
+        stop_distance = Decimal(str(self._cfg.stop_points))
 
-        risk_ticks = int(Decimal(str(self._cfg.stop_points)) / tick_size)
+        if direction == Direction.LONG:
+            stop_price = entry_price - stop_distance
+            target_price = entry_price + stop_distance * 3
+            setup_type = SetupType.RSI2_LONG
+            action = "BUY"
+        else:
+            stop_price = entry_price + stop_distance
+            target_price = entry_price - stop_distance * 3
+            setup_type = SetupType.RSI2_SHORT
+            action = "SELL"
+
+        risk_ticks = int(stop_distance / tick_size)
         reward_ticks = risk_ticks * 3
 
         # Create a dummy ORBRange for compatibility with ORBSetup
@@ -204,8 +275,8 @@ class RSI2ConnorsStrategy(BaseStrategy):
 
         setup = ORBSetup(
             symbol=self._symbol,
-            direction=Direction.LONG,
-            setup_type=SetupType.RSI2_LONG,
+            direction=direction,
+            setup_type=setup_type,
             entry_price=entry_price,
             stop_price=stop_price,
             target_price=target_price,
@@ -217,14 +288,15 @@ class RSI2ConnorsStrategy(BaseStrategy):
 
         # Mark position as open (will be confirmed on fill)
         self._in_position = True
+        self._position_direction = direction
         self._entry_price = entry_price
         self._entry_date = current_date
         self._hold_days = 0
 
         logger.info(
-            "RSI2 ENTRY SIGNAL: %s BUY @ %.2f | RSI(2)=%.2f | "
+            "RSI2 ENTRY SIGNAL: %s %s @ %.2f | RSI(2)=%.2f | "
             "stop=%.2f (%d pts) | hold limit=%d days",
-            self._symbol, float(entry_price), float(rsi_value),
+            self._symbol, action, float(entry_price), float(rsi_value),
             float(stop_price), self._cfg.stop_points, self._cfg.max_hold_days,
         )
 
@@ -236,13 +308,17 @@ class RSI2ConnorsStrategy(BaseStrategy):
         last_close: Decimal,
         current_date: date,
     ) -> StrategyResult:
-        """Check exit conditions: RSI(2) > 70 OR max hold exceeded."""
+        """Check exit conditions for both long and short positions."""
         self._hold_days += 1
         exit_reason: Optional[str] = None
+        is_long = self._position_direction == Direction.LONG
 
         # Catastrophe stop check
         if self._entry_price is not None:
-            unrealized_loss = self._entry_price - last_close
+            if is_long:
+                unrealized_loss = self._entry_price - last_close
+            else:
+                unrealized_loss = last_close - self._entry_price
             if unrealized_loss >= Decimal(str(self._cfg.stop_points)):
                 exit_reason = (
                     f"Catastrophe stop: loss {float(unrealized_loss):.2f} pts "
@@ -250,11 +326,17 @@ class RSI2ConnorsStrategy(BaseStrategy):
                 )
 
         # RSI exit
-        if exit_reason is None and float(rsi_value) > self._cfg.rsi_exit_threshold:
-            exit_reason = (
-                f"RSI(2) {float(rsi_value):.2f} > {self._cfg.rsi_exit_threshold} "
-                f"- mean reverted"
-            )
+        if exit_reason is None:
+            if is_long and float(rsi_value) > self._cfg.rsi_exit_threshold:
+                exit_reason = (
+                    f"RSI(2) {float(rsi_value):.2f} > {self._cfg.rsi_exit_threshold} "
+                    f"- mean reverted"
+                )
+            elif not is_long and float(rsi_value) < self._cfg.rsi_short_exit_threshold:
+                exit_reason = (
+                    f"RSI(2) {float(rsi_value):.2f} < {self._cfg.rsi_short_exit_threshold} "
+                    f"- mean reverted"
+                )
 
         # Max hold days
         if exit_reason is None and self._hold_days >= self._cfg.max_hold_days:
@@ -265,7 +347,7 @@ class RSI2ConnorsStrategy(BaseStrategy):
 
         if exit_reason is None:
             return self.reject(
-                f"Holding: RSI(2)={float(rsi_value):.2f}, "
+                f"Holding {'LONG' if is_long else 'SHORT'}: RSI(2)={float(rsi_value):.2f}, "
                 f"day {self._hold_days}/{self._cfg.max_hold_days}"
             )
 
@@ -280,12 +362,14 @@ class RSI2ConnorsStrategy(BaseStrategy):
         risk_ticks = int(abs(last_close - entry_price) / tick_size)
         reward_ticks = risk_ticks
 
+        setup_type = SetupType.RSI2_EXIT if is_long else SetupType.RSI2_EXIT_SHORT
+
         dummy_or = self._make_dummy_or_range(last_close)
 
         setup = ORBSetup(
             symbol=self._symbol,
-            direction=Direction.LONG,
-            setup_type=SetupType.RSI2_EXIT,
+            direction=self._position_direction or Direction.LONG,
+            setup_type=setup_type,
             entry_price=last_close,
             stop_price=stop_price,
             target_price=target_price,
@@ -295,10 +379,11 @@ class RSI2ConnorsStrategy(BaseStrategy):
             confidence=Decimal("0.5"),
         )
 
+        action = "SELL" if is_long else "COVER"
         logger.info(
-            "RSI2 EXIT SIGNAL: %s SELL @ %.2f | %s | "
+            "RSI2 EXIT SIGNAL: %s %s @ %.2f | %s | "
             "entry was %.2f | held %d days",
-            self._symbol, float(last_close), exit_reason,
+            self._symbol, action, float(last_close), exit_reason,
             float(entry_price), self._hold_days,
         )
 
@@ -397,6 +482,11 @@ class RSI2ConnorsStrategy(BaseStrategy):
     def in_position(self) -> bool:
         """Whether the strategy currently has an open position."""
         return self._in_position
+
+    @property
+    def position_direction(self) -> Optional[Direction]:
+        """Direction of the current open position, or None."""
+        return self._position_direction
 
     @property
     def hold_days(self) -> int:

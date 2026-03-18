@@ -785,7 +785,37 @@ class IBBot:
                     "source": "rsi2_connors",
                 }
 
-            # --- EXIT: RSI2_EXIT -> flatten the position ---
+            # --- ENTRY: RSI2_SHORT -> place market sell (1 contract) ---
+            elif setup.setup_type == SetupType.RSI2_SHORT:
+                logger.info(
+                    "RSI2 ENTRY: SELL SHORT %s x1 @ market (will fill at next open) "
+                    "| stop=%.2f | RSI2 short entry",
+                    symbol, float(setup.stop_price),
+                )
+                trade = await self._ib_client.place_market_order(
+                    symbol=symbol,
+                    direction=Direction.SHORT,
+                    contracts=1,
+                )
+                await self._notifications.send(
+                    f"RSI2 ENTRY: SELL SHORT {symbol} x1 @ market\n"
+                    f"Stop: {float(setup.stop_price):.2f} ({self._rsi2_strategy._cfg.stop_points} pts above)\n"
+                    f"Exit: RSI(2) < {self._rsi2_strategy._cfg.rsi_short_exit_threshold} or {self._rsi2_strategy._cfg.max_hold_days}d max",
+                    title="RSI2 Connors SHORT ENTRY",
+                    tags="chart_with_downwards_trend",
+                )
+
+                # Track in execution engine's active trades
+                trade_id = f"rsi2_{symbol}_{today.isoformat()}"
+                self._execution._active_trades[symbol] = {
+                    "trades": [trade],
+                    "intent": None,
+                    "entry_time": datetime.now(timezone.utc),
+                    "trade_id": trade_id,
+                    "source": "rsi2_connors",
+                }
+
+            # --- EXIT: RSI2_EXIT -> flatten long position ---
             elif setup.setup_type == SetupType.RSI2_EXIT:
                 logger.info(
                     "RSI2 EXIT: SELL %s @ market | reason: %s",
@@ -800,6 +830,24 @@ class IBBot:
                     f"RSI2 EXIT: SELL {symbol} @ market\n"
                     f"Reason: {result.reason}",
                     title="RSI2 Connors EXIT",
+                    tags="white_check_mark",
+                )
+
+            # --- EXIT: RSI2_EXIT_SHORT -> cover short position ---
+            elif setup.setup_type == SetupType.RSI2_EXIT_SHORT:
+                logger.info(
+                    "RSI2 EXIT SHORT: COVER %s @ market | reason: %s",
+                    symbol, result.reason,
+                )
+                await self._ib_client.flatten_position(symbol)
+
+                # Clear from execution engine tracking
+                self._execution._active_trades.pop(symbol, None)
+
+                await self._notifications.send(
+                    f"RSI2 EXIT SHORT: COVER {symbol} @ market\n"
+                    f"Reason: {result.reason}",
+                    title="RSI2 Connors SHORT EXIT",
                     tags="white_check_mark",
                 )
 
