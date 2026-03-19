@@ -2449,15 +2449,12 @@ class ExecutionEngineService(BaseService):
     async def _get_position_open_time(self, symbol: str) -> datetime:
         """Recover the real open time for a position from the fills API.
 
-        Scans recent fills for the earliest *opening* fill on ``symbol``
-        (direction contains "Open").  Falls back to ``now - max_hold_hours``
-        if no matching fill is found — this ensures the position will be
-        force-closed on the next max_hold_time check rather than appearing
-        as a fresh 1-hour-old position.
+        Scans recent fills for the most recent *opening* fill on ``symbol``
+        (direction contains "Open").  Falls back to ``now - 1 hour``
+        if no matching fill is found — this assumes the position is recent
+        rather than ancient, avoiding premature force-close of new positions.
         """
-        stops_cfg = getattr(self._bot_config, "stops", None)
-        max_hold = getattr(stops_cfg, "max_hold_hours", 6.0) if stops_cfg else 6.0
-        fallback = datetime.now(timezone.utc) - timedelta(hours=max_hold)
+        fallback = datetime.now(timezone.utc) - timedelta(hours=1)
         try:
             fills = await self.client.get_fills(limit=2000)
             # Filter to opening fills for this symbol, oldest first
@@ -2468,14 +2465,14 @@ class ExecutionEngineService(BaseService):
                 and "Open" in f["dir"]
             ]
             if open_fills:
-                # The fills API returns newest-first; pick the earliest
-                earliest = min(open_fills, key=lambda f: f.get("time") or fallback)
-                real_time = earliest.get("time")
+                # The fills API returns newest-first; pick the most recent
+                latest = max(open_fills, key=lambda f: f.get("time") or fallback)
+                real_time = latest.get("time")
                 if real_time:
                     real_time = _ensure_aware(real_time)
                     self._logger.info(
                         "Recovered real opened_at for %s: %s (from fill %s)",
-                        symbol, real_time.isoformat(), earliest.get("fillId"),
+                        symbol, real_time.isoformat(), latest.get("fillId"),
                     )
                     return real_time
 
