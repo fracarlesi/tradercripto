@@ -237,3 +237,6 @@ crypto_bot/models/
 # FLAG-Trader data and model checkpoints
 data/candles/
 models/flag_trader/
+
+# Autoresearch results
+experiments.json
