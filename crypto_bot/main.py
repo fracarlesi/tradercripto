@@ -67,8 +67,6 @@ from .services.execution_engine import (
 )
 from .services.telegram_service import TelegramService
 from .services.whatsapp_service import WhatsAppService
-from .services.protections import ProtectionManager
-from .services.ml_model import MLTradeModel
 
 # API Client
 from .api.hyperliquid import HyperliquidClient
@@ -365,9 +363,6 @@ class ConservativeBot:
         # Services
         self._services: Dict[str, Any] = {}
 
-        # ML Model
-        self._ml_model: MLTradeModel = MLTradeModel()
-
         # State
         self._running = False
         self._shutdown_event = asyncio.Event()
@@ -376,7 +371,6 @@ class ConservativeBot:
         # Background tasks
         self._strategy_task: Optional[asyncio.Task] = None
         self._health_task: Optional[asyncio.Task] = None
-        self._retrain_task: Optional[asyncio.Task] = None
 
         # Consecutive scan error counter for ntfy alerts (#17)
         self._consecutive_scan_errors: int = 0
@@ -615,19 +609,13 @@ class ConservativeBot:
             client=self._exchange,
         )
 
-        # Performance Monitor (must init before ProtectionManager — LowPerformance needs it)
+        # Performance Monitor
         whatsapp_svc = self._services.get("whatsapp")
 
         from .services.performance_monitor import PerformanceMonitorService
         self._services["performance_monitor"] = PerformanceMonitorService(
             bus=self._bus, config=self._raw_config, whatsapp=whatsapp_svc,
             exchange=self._exchange,
-        )
-
-        # Protection Manager
-        self._services["protection_manager"] = ProtectionManager(
-            config=self._raw_config, telegram=telegram_service,
-            performance_monitor=self._services["performance_monitor"],
         )
 
         # Counterfactual Logger
@@ -654,23 +642,6 @@ class ConservativeBot:
         risk_mgr = self._services.get("risk_manager")
         if risk_mgr and perf_mon:
             risk_mgr._performance_monitor = perf_mon
-
-        # ML Model - required
-        model_loaded = self._ml_model.load(cfg.ml_model_path)
-        if model_loaded:
-            effective_threshold = cfg.ml_min_probability
-            logger.info(
-                "ML model loaded: model_calibrated=%.4f, config_threshold=%.2f, effective=%.4f",
-                self._ml_model.optimal_threshold or 0.0,
-                cfg.ml_min_probability,
-                effective_threshold,
-            )
-        else:
-            logger.warning(
-                "ML model not found at %s — bot will skip trades until model is trained. "
-                "Run: python3 -m crypto_bot.scripts.retrain_model",
-                cfg.ml_model_path,
-            )
 
         logger.info(
             "Initialized %d services: %s",
@@ -766,16 +737,6 @@ class ConservativeBot:
                 )
                 return
 
-        protection_manager = self._services.get("protection_manager")
-        if protection_manager:
-            can_trade, protection_result = await protection_manager.check_all_protections()
-            if not can_trade and protection_result:
-                logger.warning(
-                    "Trading paused by PROTECTION: %s - %s",
-                    protection_result.protection_name, protection_result.reason,
-                )
-                return
-
         # --- Get market states ---
         market_state_svc = self._services.get("market_state")
         if not market_state_svc:
@@ -812,12 +773,7 @@ class ConservativeBot:
         if exec_engine and states:
             exec_engine.update_market_states(states)
 
-        # --- ML model gate ---
-        if not self._ml_model.is_loaded:
-            logger.debug("ML model not loaded, skipping evaluation")
-            return
-
-        # --- Score all assets with ML ---
+        # --- Score all assets ---
         candidates: list[tuple[str, Setup, float, str]] = []
         all_scores: list[tuple[str, float]] = []  # diagnostic: track ALL scores
         symbols_with_positions: set = set()
@@ -827,28 +783,8 @@ class ConservativeBot:
 
         threshold = self.config.ml_min_probability
 
-        # Guard: volume breakout requires 13-feature model
-        n_model_features = getattr(self._ml_model._model, "n_features_in_", 0)
-        vb_enabled = (
-            self.config.volume_breakout_enabled
-            and n_model_features >= 13
-        )
-        if self.config.volume_breakout_enabled and not vb_enabled:
-            logger.debug(
-                "Volume breakout disabled: model has %d features (need 13). Retrain required.",
-                n_model_features,
-            )
-
-        # Guard: momentum burst requires 14-feature model
-        mb_enabled = (
-            self.config.momentum_burst_enabled
-            and n_model_features >= 14
-        )
-        if self.config.momentum_burst_enabled and not mb_enabled:
-            logger.debug(
-                "Momentum burst disabled: model has %d features (need 14). Retrain required.",
-                n_model_features,
-            )
+        vb_enabled = self.config.volume_breakout_enabled
+        mb_enabled = self.config.momentum_burst_enabled
 
         vb_allowed_regimes = {r.lower() for r in self.config.volume_breakout_allowed_regimes}
         mb_allowed_regimes = {r.lower() for r in self.config.momentum_burst_allowed_regimes}
@@ -931,11 +867,8 @@ class ConservativeBot:
 
                     if funding_ok and mtf_aligned and rsi_ok and ema_gap_ok and btc_gate_ok:
                         dir_float = 1.0 if direction == Direction.LONG else -1.0
-                        features = self._ml_model.extract_features(
-                            state, signal_type=0.0, direction=dir_float,
-                            btc_state=btc_state,
-                        )
-                        prob, reason = self._ml_model.predict(features)
+                        # TODO: replace with new model inference
+                        prob, reason = 0.0, "no_model"
                         all_scores.append((f"{symbol}/ema", prob))
                         if prob > top_scored_prob:
                             top_scored_prob = prob
@@ -973,11 +906,8 @@ class ConservativeBot:
                 if vb_direction != Direction.FLAT and self._is_volume_breakout(state):
                     breakout_evaluated += 1
                     vb_dir_float = 1.0 if vb_direction == Direction.LONG else -1.0
-                    features = self._ml_model.extract_features(
-                        state, signal_type=1.0, direction=vb_dir_float,
-                        btc_state=btc_state,
-                    )
-                    prob, reason = self._ml_model.predict(features)
+                    # TODO: replace with new model inference
+                    prob, reason = 0.0, "no_model"
                     all_scores.append((f"{symbol}/vb", prob))
                     if prob > top_scored_prob:
                         top_scored_prob = prob
@@ -1016,11 +946,8 @@ class ConservativeBot:
                     if mb_direction != Direction.FLAT:
                         burst_evaluated += 1
                         mb_dir_float = 1.0 if mb_direction == Direction.LONG else -1.0
-                        features = self._ml_model.extract_features(
-                            state, signal_type=2.0, direction=mb_dir_float,
-                            btc_state=btc_state,
-                        )
-                        prob, reason = self._ml_model.predict(features)
+                        # TODO: replace with new model inference
+                        prob, reason = 0.0, "no_model"
                         all_scores.append((f"{symbol}/mb", prob))
                         if prob > top_scored_prob:
                             top_scored_prob = prob
@@ -1338,83 +1265,6 @@ class ConservativeBot:
         return True
 
     # =========================================================================
-    # ML Model Retraining
-    # =========================================================================
-
-    async def _retrain_loop(self) -> None:
-        """Periodically retrain the ML model with fresh data."""
-        await asyncio.sleep(60)  # Let bot fully initialize
-
-        interval = self.config.ml_retrain_interval_days * 86400
-
-        while self._running and not self._shutdown_event.is_set():
-            try:
-                await self._do_retrain()
-            except Exception as e:
-                logger.error("Retrain error: %s", e, exc_info=True)
-                if self._bus:
-                    await self._bus.publish(Topic.RISK_ALERTS, {
-                        "alert_type": "retrain_failure",
-                        "message": f"ML model retrain failed: {e}",
-                    })
-
-            try:
-                await asyncio.wait_for(self._shutdown_event.wait(), timeout=interval)
-                break
-            except asyncio.TimeoutError:
-                pass
-
-    async def _do_retrain(self) -> None:
-        """Execute model retraining if model is stale or missing."""
-        model_path = Path(self.config.ml_model_path)
-        if model_path.exists():
-            age_days = (time.time() - model_path.stat().st_mtime) / 86400
-            if age_days < self.config.ml_retrain_interval_days:
-                logger.info("Model is %.1f days old, retrain not needed yet", age_days)
-                return
-
-        logger.info("Starting ML model retrain (%d days of data)...", self.config.ml_retrain_days)
-
-        metrics = await asyncio.get_event_loop().run_in_executor(None, self._retrain_sync)
-
-        if metrics is None:
-            logger.warning("Retrain produced no results (insufficient data)")
-            return
-
-        if metrics["cv_auc_mean"] < 0.55:
-            logger.warning(
-                "New model CV AUC %.4f too low (<0.55), keeping old model",
-                metrics["cv_auc_mean"],
-            )
-            return
-
-        self._ml_model.load(self.config.ml_model_path)
-        logger.info(
-            "Model retrained and loaded: CV AUC=%.4f, %d samples",
-            metrics["cv_auc_mean"], metrics["n_samples"],
-        )
-
-    def _retrain_sync(self) -> dict | None:
-        """Synchronous retrain — runs in thread pool."""
-        from backtesting.api import get_all_assets
-        from backtesting.config import load_config
-        from crypto_bot.services.ml_dataset import generate_dataset
-
-        cfg = load_config()
-        all_assets = get_all_assets()
-        symbols = [s for s in all_assets if s not in cfg.exclude_symbols]
-
-        df = generate_dataset(symbols, days=self.config.ml_retrain_days, cfg=cfg)
-        if df.empty or len(df) < 50:
-            return None
-
-        model = MLTradeModel()
-        metrics = model.train(df)
-        Path(self.config.ml_model_path).parent.mkdir(parents=True, exist_ok=True)
-        model.save(self.config.ml_model_path)
-        return metrics
-
-    # =========================================================================
     # Health Monitoring
     # =========================================================================
 
@@ -1609,9 +1459,6 @@ class ConservativeBot:
             self._health_task = asyncio.create_task(
                 self._health_loop(), name="health_loop",
             )
-            self._retrain_task = asyncio.create_task(
-                self._retrain_loop(), name="retrain_loop",
-            )
 
             self._running = True
             self._start_time = datetime.now(timezone.utc)
@@ -1652,7 +1499,7 @@ class ConservativeBot:
         self._running = False
         self._shutdown_event.set()
 
-        for task in [self._strategy_task, self._health_task, self._retrain_task]:
+        for task in [self._strategy_task, self._health_task]:
             if task and not task.done():
                 task.cancel()
                 try:
@@ -1726,7 +1573,6 @@ class ConservativeBot:
                 "max_drawdown": self.config.max_drawdown_pct if self._config else 0,
             },
             "services": service_status,
-            "ml_model_loaded": self._ml_model.is_loaded,
         }
 
 

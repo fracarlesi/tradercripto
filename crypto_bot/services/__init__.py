@@ -58,12 +58,6 @@ from .kill_switch import (
     create_kill_switch,
 )
 
-from .llm_veto import (
-    LLMVetoService,
-    LLMVetoConfig,
-    create_llm_veto,
-)
-
 __all__ = [
     # Message Bus
     "MessageBus",
@@ -96,10 +90,6 @@ __all__ = [
     "KillSwitchConfig",
     "KillSwitchEvent",
     "create_kill_switch",
-    # LLM Veto
-    "LLMVetoService",
-    "LLMVetoConfig",
-    "create_llm_veto",
 ]
 
 __version__ = "3.0.0"  # Momentum scalper update

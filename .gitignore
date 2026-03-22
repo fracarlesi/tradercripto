@@ -233,3 +233,7 @@ models/trade_model_*backup*
 models/trade_model_v*.joblib
 models/trade_model_paper.joblib
 crypto_bot/models/
+
+# FLAG-Trader data and model checkpoints
+data/candles/
+models/flag_trader/
