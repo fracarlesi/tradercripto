@@ -22,3 +22,9 @@ httpx>=0.25.0
 
 # SQLite async
 aiosqlite>=0.19
+
+# FLAG-Trader (ML/RL)
+transformers>=4.40.0
+accelerate>=0.28.0
+gymnasium>=0.29.0
+pyarrow>=15.0.0
