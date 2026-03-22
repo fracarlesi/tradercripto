@@ -13,8 +13,8 @@ from pathlib import Path
 
 import numpy as np
 
-from flag_trader.data_collector import HyperliquidDataCollector
-from flag_trader.walk_forward import WalkForwardValidator
+from crypto_bot.flag_trader.data_collector import HyperliquidDataCollector
+from crypto_bot.flag_trader.walk_forward import WalkForwardValidator
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 

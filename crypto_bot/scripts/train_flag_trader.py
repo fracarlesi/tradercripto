@@ -11,11 +11,11 @@ from pathlib import Path
 
 import numpy as np
 
-from flag_trader.data_collector import HyperliquidDataCollector
-from flag_trader.environment import HyperliquidTradingEnv
-from flag_trader.model import FlagTraderModel
-from flag_trader.prompt import PromptBuilder
-from flag_trader.trainer import PPOTrainer  # Created by trainer-builder agent
+from crypto_bot.flag_trader.data_collector import HyperliquidDataCollector
+from crypto_bot.flag_trader.environment import HyperliquidTradingEnv
+from crypto_bot.flag_trader.model import FlagTraderModel
+from crypto_bot.flag_trader.prompt import PromptBuilder
+from crypto_bot.flag_trader.trainer import PPOTrainer  # Created by trainer-builder agent
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 

@@ -10,8 +10,8 @@ import argparse
 import logging
 from pathlib import Path
 
-from flag_trader.autoresearch import AutoResearcher
-from flag_trader.data_collector import HyperliquidDataCollector
+from crypto_bot.flag_trader.autoresearch import AutoResearcher
+from crypto_bot.flag_trader.data_collector import HyperliquidDataCollector
 
 logging.basicConfig(
     level=logging.INFO,

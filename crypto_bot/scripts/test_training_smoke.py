@@ -9,9 +9,9 @@ Usage:
 import numpy as np
 import torch
 
-from flag_trader.environment import HyperliquidTradingEnv
-from flag_trader.model import FlagTraderModel
-from flag_trader.prompt import PromptBuilder
+from crypto_bot.flag_trader.environment import HyperliquidTradingEnv
+from crypto_bot.flag_trader.model import FlagTraderModel
+from crypto_bot.flag_trader.prompt import PromptBuilder
 
 
 def main() -> None:

@@ -8,7 +8,7 @@ import argparse
 import asyncio
 import logging
 
-from flag_trader.data_collector import HyperliquidDataCollector
+from crypto_bot.flag_trader.data_collector import HyperliquidDataCollector
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
