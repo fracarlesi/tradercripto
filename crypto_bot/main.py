@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
-from scipy.stats import rankdata
+import numpy as np
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -1066,7 +1066,7 @@ class ConservativeBot:
                         momentums.append(0.0)
                 else:
                     momentums.append(0.0)
-            ranks = rankdata(momentums, method="ordinal") / len(momentums)
+            ranks = (np.argsort(np.argsort(momentums)).astype(float) + 1) / len(momentums)
             candidates = [
                 (c[0], c[1], 0.8 * c[2] + 0.2 * ranks[i], c[3])
                 for i, c in enumerate(candidates)
