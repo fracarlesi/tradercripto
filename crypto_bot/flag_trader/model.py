@@ -209,17 +209,18 @@ class FlagTraderModel(nn.Module):
         return logits, value
 
     @torch.no_grad()
-    def get_action(self, prompt: str) -> tuple[int, float, torch.Tensor]:
+    def get_action(
+        self, prompt: str, return_tokens: bool = False
+    ) -> tuple[int, float, torch.Tensor] | tuple[int, float, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Get a trading action from a text prompt.
 
         Args:
             prompt: Structured text prompt from PromptBuilder.
+            return_tokens: If True, also return input_ids and attention_mask for caching.
 
         Returns:
-            (action_id, state_value, log_prob) where:
-                action_id: 0=Sell, 1=Hold, 2=Buy
-                state_value: estimated V(s)
-                log_prob: log probability of sampled action (detached)
+            (action_id, state_value, log_prob) or
+            (action_id, state_value, log_prob, input_ids, attention_mask) if return_tokens=True.
         """
         tokens = self.tokenizer(
             prompt,
@@ -237,6 +238,8 @@ class FlagTraderModel(nn.Module):
         action = dist.sample()
         log_prob = dist.log_prob(action)
 
+        if return_tokens:
+            return int(action.item()), float(value.item()), log_prob, input_ids, attention_mask
         return int(action.item()), float(value.item()), log_prob
 
     def evaluate_actions(

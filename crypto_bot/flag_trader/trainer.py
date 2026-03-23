@@ -77,6 +77,9 @@ class RolloutBuffer:
         self.values: list[float] = []  # V(s) estimates
         self.log_probs: list[torch.Tensor] = []  # log pi(a|s)
         self.dones: list[bool] = []  # episode done flags
+        # Cached tokenized inputs (avoid re-tokenizing in update)
+        self.input_ids: list[torch.Tensor] = []
+        self.attention_masks: list[torch.Tensor] = []
 
     def add(
         self,
@@ -86,6 +89,8 @@ class RolloutBuffer:
         value: float,
         log_prob: torch.Tensor,
         done: bool,
+        input_ids: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
     ) -> None:
         self.states.append(state)
         self.actions.append(action)
@@ -93,6 +98,10 @@ class RolloutBuffer:
         self.values.append(value)
         self.log_probs.append(log_prob)
         self.dones.append(done)
+        if input_ids is not None:
+            self.input_ids.append(input_ids.cpu())
+        if attention_mask is not None:
+            self.attention_masks.append(attention_mask.cpu())
 
     def clear(self) -> None:
         self.states.clear()
@@ -101,6 +110,8 @@ class RolloutBuffer:
         self.values.clear()
         self.log_probs.clear()
         self.dones.clear()
+        self.input_ids.clear()
+        self.attention_masks.clear()
 
     def __len__(self) -> int:
         return len(self.states)
@@ -176,12 +187,16 @@ class PPOTrainer:
 
         for _ in range(num_steps):
             prompt = self._obs_to_prompt(obs)
-            action, value, log_prob = self.model.get_action(prompt)
+            result = self.model.get_action(prompt, return_tokens=True)
+            action, value, log_prob, input_ids, attention_mask = result
 
             next_obs, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
 
-            self.buffer.add(prompt, action, reward, value, log_prob, done)
+            self.buffer.add(
+                prompt, action, reward, value, log_prob, done,
+                input_ids=input_ids, attention_mask=attention_mask,
+            )
             current_episode_return += reward
             all_rewards.append(reward)
 
@@ -231,8 +246,51 @@ class PPOTrainer:
         returns = advantages + torch.tensor(values, dtype=torch.float32)
         return advantages, returns
 
-    def update(self) -> dict[str, float]:
+    def _pad_and_batch_tokens(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """Pad cached token tensors and stack into batches.
+
+        If tokens were cached during collect_rollout, use those.
+        Otherwise, batch-tokenize all prompts at once.
+
+        Returns:
+            (input_ids, attention_mask) both of shape (N, max_seq_len).
+        """
+        if self.buffer.input_ids:
+            # Use cached tokens - pad to same length
+            max_len = max(t.shape[1] for t in self.buffer.input_ids)
+            pad_id = self.model.tokenizer.pad_token_id or 0
+
+            padded_ids = []
+            padded_masks = []
+            for ids, mask in zip(self.buffer.input_ids, self.buffer.attention_masks):
+                seq_len = ids.shape[1]
+                if seq_len < max_len:
+                    pad_len = max_len - seq_len
+                    ids = torch.cat([ids, torch.full((1, pad_len), pad_id, dtype=ids.dtype)], dim=1)
+                    mask = torch.cat([mask, torch.zeros(1, pad_len, dtype=mask.dtype)], dim=1)
+                padded_ids.append(ids)
+                padded_masks.append(mask)
+
+            return torch.cat(padded_ids, dim=0), torch.cat(padded_masks, dim=0)
+        else:
+            # Fallback: batch tokenize all prompts
+            tokens = self.model.tokenizer(
+                self.buffer.states,
+                return_tensors="pt",
+                max_length=512,
+                truncation=True,
+                padding=True,
+            )
+            return tokens["input_ids"], tokens["attention_mask"]
+
+    def update(self, mini_batch_size: int = 16) -> dict[str, float]:
         """PPO policy gradient update using collected rollout buffer.
+
+        Processes samples in mini-batches for GPU efficiency.
+        Uses AMP (mixed precision) on CUDA for faster forward/backward.
+
+        Args:
+            mini_batch_size: Number of samples per mini-batch.
 
         Returns:
             Dict with policy_loss, value_loss, entropy, approx_kl.
@@ -254,39 +312,54 @@ class PPOTrainer:
         old_log_probs = torch.stack(self.buffer.log_probs).detach()
         actions_tensor = torch.tensor(self.buffer.actions, dtype=torch.long)
 
+        # Batch tokenize once (or use cached tokens)
+        all_input_ids, all_attention_masks = self._pad_and_batch_tokens()
+
+        # AMP scaler for CUDA mixed precision
+        use_amp = self.model.device.type == "cuda"
+        scaler = torch.amp.GradScaler("cuda", enabled=use_amp) if use_amp else None
+
         total_policy_loss = 0.0
         total_value_loss = 0.0
         total_entropy = 0.0
         total_kl = 0.0
         num_batches = 0
+        n = len(self.buffer)
 
         for _ in range(self.ppo_epochs):
-            # Process each sample individually (tokenization is the bottleneck on CPU)
-            for i in range(len(self.buffer)):
-                tokens = self.model.tokenizer(
-                    self.buffer.states[i],
-                    return_tensors="pt",
-                    max_length=512,
-                    truncation=True,
-                    padding=True,
-                )
-                input_ids = tokens["input_ids"].to(self.model.device)
-                attention_mask = tokens["attention_mask"].to(self.model.device)
-                action = actions_tensor[i : i + 1].to(self.model.device)
+            # Shuffle indices for mini-batching
+            indices = torch.randperm(n)
 
-                new_log_prob, new_value, entropy = self.model.evaluate_actions(
-                    input_ids, attention_mask, action
-                )
+            for start in range(0, n, mini_batch_size):
+                end = min(start + mini_batch_size, n)
+                batch_idx = indices[start:end]
+
+                b_input_ids = all_input_ids[batch_idx].to(self.model.device)
+                b_attention_mask = all_attention_masks[batch_idx].to(self.model.device)
+                b_actions = actions_tensor[batch_idx].to(self.model.device)
+                b_old_log_probs = old_log_probs[batch_idx].to(self.model.device)
+                b_advantages = advantages[batch_idx].to(self.model.device)
+                b_returns = returns[batch_idx].to(self.model.device)
+
+                # Forward pass with optional AMP
+                if use_amp:
+                    with torch.amp.autocast("cuda"):
+                        new_log_probs, new_values, entropy = self.model.evaluate_actions(
+                            b_input_ids, b_attention_mask, b_actions
+                        )
+                else:
+                    new_log_probs, new_values, entropy = self.model.evaluate_actions(
+                        b_input_ids, b_attention_mask, b_actions
+                    )
 
                 # PPO clipped surrogate
-                ratio = torch.exp(new_log_prob - old_log_probs[i])
-                adv = advantages[i]
-                surr1 = ratio * adv
-                surr2 = torch.clamp(ratio, 1.0 - self.clip_range, 1.0 + self.clip_range) * adv
+                ratio = torch.exp(new_log_probs - b_old_log_probs)
+                surr1 = ratio * b_advantages
+                surr2 = torch.clamp(ratio, 1.0 - self.clip_range, 1.0 + self.clip_range) * b_advantages
                 policy_loss = -torch.min(surr1, surr2).mean()
 
                 # Value loss (MSE)
-                value_loss = nn.functional.mse_loss(new_value, returns[i : i + 1].to(self.model.device))
+                value_loss = nn.functional.mse_loss(new_values, b_returns)
 
                 # Total loss
                 loss = (
@@ -296,16 +369,23 @@ class PPOTrainer:
                 )
 
                 self.optimizer.zero_grad()
-                loss.backward()
-                nn.utils.clip_grad_norm_(self.model.get_trainable_params(), self.max_grad_norm)
-                self.optimizer.step()
+                if use_amp and scaler is not None:
+                    scaler.scale(loss).backward()
+                    scaler.unscale_(self.optimizer)
+                    nn.utils.clip_grad_norm_(self.model.get_trainable_params(), self.max_grad_norm)
+                    scaler.step(self.optimizer)
+                    scaler.update()
+                else:
+                    loss.backward()
+                    nn.utils.clip_grad_norm_(self.model.get_trainable_params(), self.max_grad_norm)
+                    self.optimizer.step()
 
                 # Accumulate stats
                 total_policy_loss += policy_loss.item()
                 total_value_loss += value_loss.item()
                 total_entropy += entropy.mean().item()
                 with torch.no_grad():
-                    total_kl += ((old_log_probs[i] - new_log_prob).mean()).item()
+                    total_kl += (b_old_log_probs - new_log_probs).mean().item()
                 num_batches += 1
 
         self.buffer.clear()
