@@ -95,14 +95,20 @@ def test_training_loop_no_crash():
     model.device = torch.device("cpu")
     model.get_trainable_params.return_value = [torch.nn.Parameter(torch.randn(4, 3))]
 
-    # get_action returns (action, value, log_prob)
-    model.get_action.return_value = (1, 0.1, torch.tensor(-1.0))
+    # get_action returns (action, value, log_prob, tp_pct, sl_pct, input_ids, attention_mask)
+    model.get_action.return_value = (
+        1, 0.1, torch.tensor(-1.0), 2.5, 1.0,
+        torch.ones(1, 10, dtype=torch.long),
+        torch.ones(1, 10, dtype=torch.long),
+    )
 
-    # evaluate_actions returns (log_probs, values, entropy)
+    # evaluate_actions returns (log_probs, values, entropy, tp_pct, sl_pct)
     model.evaluate_actions.return_value = (
         torch.tensor([-1.0], requires_grad=True),
         torch.tensor([0.1], requires_grad=True),
         torch.tensor([0.5], requires_grad=True),
+        torch.tensor([2.5], requires_grad=True),
+        torch.tensor([1.0], requires_grad=True),
     )
 
     # Mock tokenizer

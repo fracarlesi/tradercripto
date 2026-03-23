@@ -911,8 +911,8 @@ class ConservativeBot:
             logger.warning("No MarketState for %s, skipping", decision.symbol)
             return False
 
-        # Calculate stop price
-        sl_pct = Decimal(str(self.config.stop_loss_pct))
+        # Use model-predicted TP/SL instead of config values
+        sl_pct = Decimal(str(round(decision.sl_pct, 2)))
         if direction == Direction.LONG:
             stop_price = entry_price * (Decimal("1") - sl_pct / Decimal("100"))
         else:
@@ -934,14 +934,17 @@ class ConservativeBot:
             rsi=rsi,
             setup_quality=Decimal(str(round(abs(decision.confidence), 4))),
             confidence=Decimal(str(round(abs(decision.confidence), 4))),
+            model_tp_pct=round(decision.tp_pct, 2),
+            model_sl_pct=round(decision.sl_pct, 2),
         )
 
         logger.info(
-            "FLAG-Trader | %s %s | confidence=%.4f | regime=%s | entry=$%s",
+            "FLAG-Trader | %s %s | confidence=%.2f | TP=%.1f%% SL=%.1f%% (model-predicted) | entry=$%s",
             direction.value.upper(),
             decision.symbol,
             decision.confidence,
-            regime.value.upper(),
+            decision.tp_pct,
+            decision.sl_pct,
             entry_price,
         )
 
@@ -962,7 +965,7 @@ class ConservativeBot:
             magnitude = floor(log10(price))
             max_decimals = min(4, max(0, 4 - magnitude))
             min_tick = 10 ** (-max_decimals)
-            tp_distance = price * self.config.stop_loss_pct / 100
+            tp_distance = price * decision.sl_pct / 100
             if tp_distance < min_tick * 1.5:
                 logger.info(
                     "SKIP %s: price $%.6f too low for TP/SL",

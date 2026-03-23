@@ -133,9 +133,14 @@ class TestModelStructure:
     def test_forward_shapes(self, model: "FlagTraderModel") -> None:
         input_ids = torch.randint(0, 999, (2, 10))
         attention_mask = torch.ones(2, 10, dtype=torch.long)
-        logits, value = model.forward(input_ids, attention_mask)
+        logits, value, tp_pct, sl_pct = model.forward(input_ids, attention_mask)
         assert logits.shape == (2, 3)
         assert value.shape == (2, 1)
+        assert tp_pct.shape == (2, 1)
+        assert sl_pct.shape == (2, 1)
+        # TP in [0.5, 5.0], SL in [0.3, 2.0]
+        assert (tp_pct >= 0.5).all() and (tp_pct <= 5.0).all()
+        assert (sl_pct >= 0.3).all() and (sl_pct <= 2.0).all()
 
     def test_freeze_layers(self, model: "FlagTraderModel") -> None:
         layers = model.llm.model.layers
@@ -181,9 +186,11 @@ class TestLargeModel:
     def test_forward_shapes(self, large_model: "FlagTraderModel") -> None:
         input_ids = torch.randint(0, 999, (2, 10))
         attention_mask = torch.ones(2, 10, dtype=torch.long)
-        logits, value = large_model.forward(input_ids, attention_mask)
+        logits, value, tp_pct, sl_pct = large_model.forward(input_ids, attention_mask)
         assert logits.shape == (2, 3)
         assert value.shape == (2, 1)
+        assert tp_pct.shape == (2, 1)
+        assert sl_pct.shape == (2, 1)
 
     def test_freeze_32_layers(self, large_model: "FlagTraderModel") -> None:
         layers = large_model.llm.model.layers
@@ -201,11 +208,13 @@ class TestGetAction:
     """Test action sampling from prompt."""
 
     def test_get_action_returns_valid(self, model: "FlagTraderModel") -> None:
-        action_id, value, log_prob = model.get_action("fake prompt")
+        action_id, value, log_prob, tp_pct, sl_pct = model.get_action("fake prompt")
         assert action_id in (0, 1, 2)
         assert isinstance(value, float)
         assert isinstance(log_prob, torch.Tensor)
         assert log_prob.shape == ()
+        assert 0.5 <= tp_pct <= 5.0
+        assert 0.3 <= sl_pct <= 2.0
 
 
 class TestEvaluateActions:
@@ -216,23 +225,27 @@ class TestEvaluateActions:
         input_ids = torch.randint(0, 999, (batch, 10))
         attention_mask = torch.ones(batch, 10, dtype=torch.long)
         actions = torch.tensor([0, 1, 2, 1])
-        log_probs, values, entropy = model.evaluate_actions(
+        log_probs, values, entropy, tp_pct, sl_pct = model.evaluate_actions(
             input_ids, attention_mask, actions
         )
         assert log_probs.shape == (batch,)
         assert values.shape == (batch,)
         assert entropy.shape == (batch,)
+        assert tp_pct.shape == (batch,)
+        assert sl_pct.shape == (batch,)
 
     def test_evaluate_actions_has_grad(self, model: "FlagTraderModel") -> None:
         input_ids = torch.randint(0, 999, (2, 10))
         attention_mask = torch.ones(2, 10, dtype=torch.long)
         actions = torch.tensor([0, 2])
-        log_probs, values, entropy = model.evaluate_actions(
+        log_probs, values, entropy, tp_pct, sl_pct = model.evaluate_actions(
             input_ids, attention_mask, actions
         )
         assert log_probs.requires_grad
         assert values.requires_grad
         assert entropy.requires_grad
+        assert tp_pct.requires_grad
+        assert sl_pct.requires_grad
 
 
 class TestTrainableParams:

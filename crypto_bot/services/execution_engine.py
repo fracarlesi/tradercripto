@@ -657,12 +657,9 @@ class ExecutionEngineService(BaseService):
                 entry_price = order_result.avg_price or signal["entry_price"]
                 is_long = signal["direction"] == "long"
 
-                # Recalculate TP/SL from fill price — always use fixed config values.
-                # ATR-adaptive branch was removed: the ATR formula produced TP=4-8%
-                # and SL=0.5-2%, far too wide for a 15m momentum scalper.
-                # Config values (TP=1.6%, SL=1.0%) are data-driven from parameter sweep.
-                sl_pct = self._bot_config.risk.stop_loss_pct / 100
-                tp_pct = self._bot_config.risk.take_profit_pct / 100
+                # Use model-predicted TP/SL if present, otherwise fall back to config.
+                sl_pct = signal.get("model_sl_pct", self._bot_config.risk.stop_loss_pct) / 100
+                tp_pct = signal.get("model_tp_pct", self._bot_config.risk.take_profit_pct) / 100
 
                 sl_price = entry_price * (1 - sl_pct) if is_long else entry_price * (1 + sl_pct)
                 tp_price = entry_price * (1 + tp_pct) if is_long else entry_price * (1 - tp_pct)
@@ -1853,9 +1850,9 @@ class ExecutionEngineService(BaseService):
         except Exception as e:
             self._logger.warning("Could not fetch open orders to clean up %s: %s", symbol, e)
 
-        # --- Fixed TP/SL from config (always) ---
-        sl_pct = self._bot_config.risk.stop_loss_pct / 100
-        tp_pct = self._bot_config.risk.take_profit_pct / 100
+        # Use model-predicted TP/SL if present, otherwise fall back to config
+        sl_pct = signal.get("model_sl_pct", self._bot_config.risk.stop_loss_pct) / 100
+        tp_pct = signal.get("model_tp_pct", self._bot_config.risk.take_profit_pct) / 100
 
         # Store ATR on position for trailing stop calculations (if available)
         atr_pct_raw = signal.get("atr_pct", 0)

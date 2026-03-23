@@ -34,6 +34,8 @@ class TradeDecision:
     action_name: str
     confidence: float  # state value from value head
     log_prob: float
+    tp_pct: float = 2.5  # model-predicted TP%
+    sl_pct: float = 1.0  # model-predicted SL%
 
 
 @dataclass
@@ -162,12 +164,12 @@ class FlagTraderAgent:
             similar_text = self.trade_memory_rag.format_for_prompt(similar)
 
         prompt = self.prompt_builder.build_prompt(candles, portfolio, history, similar_trades_text=similar_text)
-        action_id, state_value, log_prob = self.model.get_action(prompt)
+        action_id, state_value, log_prob, tp_pct, sl_pct = self.model.get_action(prompt)
         action_name = ACTION_NAMES.get(action_id, "HOLD")
 
         logger.info(
-            "FLAG-Trader | %s | action=%s | value=%.4f | log_prob=%.4f",
-            symbol, action_name, state_value, float(log_prob),
+            "FLAG-Trader | %s | action=%s | value=%.4f | tp=%.1f%% | sl=%.1f%%",
+            symbol, action_name, state_value, tp_pct, sl_pct,
         )
 
         # Log every decision for retraining data
@@ -210,6 +212,8 @@ class FlagTraderAgent:
             action_name=action_name,
             confidence=state_value,
             log_prob=float(log_prob),
+            tp_pct=tp_pct,
+            sl_pct=sl_pct,
         )
 
     async def evaluate_position(
@@ -267,7 +271,7 @@ class FlagTraderAgent:
             similar_trades_text=similar_text,
             position_info=position_info,
         )
-        action_id, state_value, log_prob = self.model.get_action(prompt)
+        action_id, state_value, log_prob, _tp, _sl = self.model.get_action(prompt)
         action_name = ACTION_NAMES.get(action_id, "HOLD")
 
         # Determine if model wants to reverse position

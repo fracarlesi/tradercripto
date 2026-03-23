@@ -94,6 +94,26 @@ class FlagTraderModel(nn.Module):
             nn.Linear(intermediate, 1),
         )
 
+        # TP head: predicts take-profit percentage [0.5% - 5.0%]
+        self.tp_head = nn.Sequential(
+            nn.Linear(hidden_size, intermediate),
+            nn.ReLU(),
+            nn.Linear(intermediate, 1),
+            nn.Sigmoid(),  # output in [0, 1]
+        )
+
+        # SL head: predicts stop-loss percentage [0.3% - 2.0%]
+        self.sl_head = nn.Sequential(
+            nn.Linear(hidden_size, intermediate),
+            nn.ReLU(),
+            nn.Linear(intermediate, 1),
+            nn.Sigmoid(),  # output in [0, 1]
+        )
+
+        # TP/SL ranges
+        self.TP_MIN, self.TP_MAX = 0.5, 5.0  # percentages
+        self.SL_MIN, self.SL_MAX = 0.3, 2.0
+
         self.to(self.device)
 
     def _get_transformer_layers(self) -> nn.ModuleList | list[nn.Module]:
@@ -195,7 +215,7 @@ class FlagTraderModel(nn.Module):
 
     def forward(
         self, input_ids: torch.Tensor, attention_mask: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Forward pass through LLM + heads.
 
         Args:
@@ -203,19 +223,28 @@ class FlagTraderModel(nn.Module):
             attention_mask: Attention mask, shape (batch, seq_len).
 
         Returns:
-            (logits, value) where logits is (batch, 3) and value is (batch, 1).
+            (logits, value, tp_pct, sl_pct) where logits is (batch, 3),
+            value is (batch, 1), tp_pct is (batch, 1), sl_pct is (batch, 1).
         """
         hidden = self._extract_last_hidden(input_ids, attention_mask)
         # Ensure float32 for heads (some models use bfloat16 internally)
         hidden = hidden.float()
         logits = self.policy_head(hidden)
         value = self.value_head(hidden)
-        return logits, value
+        tp_raw = self.tp_head(hidden)  # (batch, 1) in [0,1]
+        sl_raw = self.sl_head(hidden)  # (batch, 1) in [0,1]
+        # Scale to valid ranges
+        tp_pct = tp_raw * (self.TP_MAX - self.TP_MIN) + self.TP_MIN  # [0.5, 5.0]
+        sl_pct = sl_raw * (self.SL_MAX - self.SL_MIN) + self.SL_MIN  # [0.3, 2.0]
+        return logits, value, tp_pct, sl_pct
 
     @torch.no_grad()
     def get_action(
         self, prompt: str, return_tokens: bool = False
-    ) -> tuple[int, float, torch.Tensor] | tuple[int, float, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> (
+        tuple[int, float, torch.Tensor, float, float]
+        | tuple[int, float, torch.Tensor, float, float, torch.Tensor, torch.Tensor]
+    ):
         """Get a trading action from a text prompt.
 
         Args:
@@ -223,8 +252,9 @@ class FlagTraderModel(nn.Module):
             return_tokens: If True, also return input_ids and attention_mask for caching.
 
         Returns:
-            (action_id, state_value, log_prob) or
-            (action_id, state_value, log_prob, input_ids, attention_mask) if return_tokens=True.
+            (action_id, state_value, log_prob, tp_pct, sl_pct) or
+            (action_id, state_value, log_prob, tp_pct, sl_pct, input_ids, attention_mask)
+            if return_tokens=True.
         """
         tokens = self.tokenizer(
             prompt,
@@ -236,23 +266,25 @@ class FlagTraderModel(nn.Module):
         input_ids = tokens["input_ids"].to(self.device)
         attention_mask = tokens["attention_mask"].to(self.device)
 
-        logits, value = self.forward(input_ids, attention_mask)
+        logits, value, tp_pct_t, sl_pct_t = self.forward(input_ids, attention_mask)
 
         dist = Categorical(logits=logits.squeeze(0))
         action = dist.sample()
         log_prob = dist.log_prob(action)
+        tp = float(tp_pct_t.item())
+        sl = float(sl_pct_t.item())
 
         if return_tokens:
-            return int(action.item()), float(value.item()), log_prob, input_ids, attention_mask
-        return int(action.item()), float(value.item()), log_prob
+            return int(action.item()), float(value.item()), log_prob, tp, sl, input_ids, attention_mask
+        return int(action.item()), float(value.item()), log_prob, tp, sl
 
     def evaluate_actions(
         self,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
         actions: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Evaluate log_probs, values, and entropy for taken actions.
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Evaluate log_probs, values, entropy, and TP/SL for taken actions.
 
         Used during PPO update step. Runs with gradients enabled.
 
@@ -262,15 +294,15 @@ class FlagTraderModel(nn.Module):
             actions: (batch,) -- action indices taken during rollout
 
         Returns:
-            (log_probs, values, entropy) all with grad.
+            (log_probs, values, entropy, tp_pct, sl_pct) all with grad.
         """
-        logits, values = self.forward(input_ids, attention_mask)
+        logits, values, tp_pct, sl_pct = self.forward(input_ids, attention_mask)
         dist = Categorical(logits=logits)
 
         log_probs = dist.log_prob(actions)
         entropy = dist.entropy()
 
-        return log_probs, values.squeeze(-1), entropy
+        return log_probs, values.squeeze(-1), entropy, tp_pct.squeeze(-1), sl_pct.squeeze(-1)
 
     def get_trainable_params(self) -> list[nn.Parameter]:
         """Return only parameters that require gradients."""
@@ -285,6 +317,8 @@ class FlagTraderModel(nn.Module):
             "trainable_layers": {k: v.data for k, v in trainable_llm.items()},
             "policy_head": self.policy_head.state_dict(),
             "value_head": self.value_head.state_dict(),
+            "tp_head": self.tp_head.state_dict(),
+            "sl_head": self.sl_head.state_dict(),
             "model_name": self.model_name,
         }
         torch.save(state, path)
@@ -302,3 +336,9 @@ class FlagTraderModel(nn.Module):
         # Restore heads
         self.policy_head.load_state_dict(state["policy_head"])
         self.value_head.load_state_dict(state["value_head"])
+
+        # TP/SL heads (backward compatible with old checkpoints)
+        if "tp_head" in state:
+            self.tp_head.load_state_dict(state["tp_head"])
+        if "sl_head" in state:
+            self.sl_head.load_state_dict(state["sl_head"])

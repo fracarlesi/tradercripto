@@ -179,6 +179,10 @@ class Setup(BaseModel):
     confidence: Decimal = Field(default=Decimal("0.5"), ge=0, le=1,
                                 description="Strategy confidence 0-1")
 
+    # Model-predicted TP/SL (FLAG-Trader heads)
+    model_tp_pct: Optional[float] = Field(None, description="Model-predicted TP %")
+    model_sl_pct: Optional[float] = Field(None, description="Model-predicted SL %")
+
     # LLM veto (filled after veto check)
     llm_approved: Optional[bool] = Field(None, description="LLM approval status")
     llm_confidence: Optional[Decimal] = Field(None, ge=0, le=1)

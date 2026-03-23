@@ -81,6 +81,9 @@ class RolloutBuffer:
         # Cached tokenized inputs (avoid re-tokenizing in update)
         self.input_ids: list[torch.Tensor] = []
         self.attention_masks: list[torch.Tensor] = []
+        # Model-predicted TP/SL percentages
+        self.tp_pcts: list[float] = []
+        self.sl_pcts: list[float] = []
 
     def add(
         self,
@@ -113,6 +116,8 @@ class RolloutBuffer:
         self.dones.clear()
         self.input_ids.clear()
         self.attention_masks.clear()
+        self.tp_pcts.clear()
+        self.sl_pcts.clear()
 
     def __len__(self) -> int:
         return len(self.states)
@@ -189,8 +194,10 @@ class PPOTrainer:
         for _ in range(num_steps):
             prompt = self._obs_to_prompt(obs)
             result = self.model.get_action(prompt, return_tokens=True)
-            action, value, log_prob, input_ids, attention_mask = result
+            action, value, log_prob, tp_pct, sl_pct, input_ids, attention_mask = result
 
+            # Set TP/SL on env before step
+            env.set_tp_sl(tp_pct, sl_pct)
             next_obs, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
 
@@ -198,6 +205,8 @@ class PPOTrainer:
                 prompt, action, reward, value, log_prob, done,
                 input_ids=input_ids, attention_mask=attention_mask,
             )
+            self.buffer.tp_pcts.append(tp_pct)
+            self.buffer.sl_pcts.append(sl_pct)
             current_episode_return += reward
             all_rewards.append(reward)
 
@@ -345,7 +354,7 @@ class PPOTrainer:
                 # Forward + loss computation (all under AMP if CUDA)
                 amp_ctx = torch.amp.autocast("cuda") if use_amp else contextlib.nullcontext()
                 with amp_ctx:
-                    new_log_probs, new_values, entropy = self.model.evaluate_actions(
+                    new_log_probs, new_values, entropy, pred_tp, pred_sl = self.model.evaluate_actions(
                         b_input_ids, b_attention_mask, b_actions
                     )
                     ratio = torch.exp(new_log_probs - b_old_log_probs)
@@ -353,7 +362,23 @@ class PPOTrainer:
                     surr2 = torch.clamp(ratio, 1.0 - self.clip_range, 1.0 + self.clip_range) * b_advantages
                     policy_loss = -torch.min(surr1, surr2).mean()
                     value_loss = nn.functional.mse_loss(new_values, b_returns)
-                    loss = policy_loss + self.value_loss_coef * value_loss - self.entropy_coef * entropy.mean()
+
+                    # TP/SL auxiliary loss: advantage-weighted regression
+                    batch_tp = torch.tensor(
+                        self.buffer.tp_pcts, dtype=torch.float32, device=self.model.device
+                    )[batch_idx]
+                    batch_sl = torch.tensor(
+                        self.buffer.sl_pcts, dtype=torch.float32, device=self.model.device
+                    )[batch_idx]
+                    tp_loss = (b_advantages.detach().abs() * (pred_tp - batch_tp).pow(2)).mean()
+                    sl_loss = (b_advantages.detach().abs() * (pred_sl - batch_sl).pow(2)).mean()
+
+                    loss = (
+                        policy_loss
+                        + self.value_loss_coef * value_loss
+                        - self.entropy_coef * entropy.mean()
+                        + 0.1 * (tp_loss + sl_loss)
+                    )
 
                 self.optimizer.zero_grad()
                 if use_amp and scaler is not None:
@@ -495,7 +520,8 @@ class PPOTrainer:
 
             while True:
                 prompt = self._obs_to_prompt(obs)
-                action, _, _ = self.model.get_action(prompt)
+                action, _, _, tp_pct, sl_pct = self.model.get_action(prompt)
+                env.set_tp_sl(tp_pct, sl_pct)
                 obs, reward, terminated, truncated, info = env.step(action)
 
                 ep_return += reward

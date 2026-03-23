@@ -89,6 +89,12 @@ class HyperliquidTradingEnv(gym.Env):
         self._reward_history: list[float] = []
         self._total_value_prev: float = 0.0
 
+        # Dynamic TP/SL from model
+        self._tp_pct: float = 2.5  # default TP %
+        self._sl_pct: float = 1.0  # default SL %
+        self._tp_price: float = 0.0
+        self._sl_price: float = 0.0
+
     def reset(
         self,
         seed: int | None = None,
@@ -103,10 +109,19 @@ class HyperliquidTradingEnv(gym.Env):
         self._pnl_history = []
         self._reward_history = []
         self._total_value_prev = self.initial_cash
+        self._tp_pct = 2.5
+        self._sl_pct = 1.0
+        self._tp_price = 0.0
+        self._sl_price = 0.0
 
         obs = self._get_obs()
         info = {"total_value": self.initial_cash, "step": 0}
         return obs, info
+
+    def set_tp_sl(self, tp_pct: float, sl_pct: float) -> None:
+        """Set TP/SL for next trade. Called before step()."""
+        self._tp_pct = tp_pct
+        self._sl_pct = sl_pct
 
     def step(
         self, action: int
@@ -120,7 +135,40 @@ class HyperliquidTradingEnv(gym.Env):
             (observation, reward, terminated, truncated, info)
         """
         current_close = float(self.candles[self._step_idx, 3])  # Close price
+        current_high = float(self.candles[self._step_idx, 1])  # High
+        current_low = float(self.candles[self._step_idx, 2])   # Low
         executed_action = action
+
+        # Check TP/SL hit on current candle (for open positions)
+        step_pnl = 0.0
+        if self._position > 0:
+            if self._tp_price > 0 and current_high >= self._tp_price:
+                # TP hit — force sell at TP price
+                gross = self._position * self._tp_price
+                cost = gross * self.tx_cost_pct
+                proceeds = gross - cost
+                step_pnl = proceeds - (self._position * self._entry_price)
+                self._cash = proceeds
+                self._position = 0.0
+                self._entry_price = 0.0
+                self._tp_price = 0.0
+                self._sl_price = 0.0
+                executed_action = 1  # Treat as hold for the rest of step
+                # Skip normal trade execution
+                return self._finalize_step(step_pnl, executed_action, current_close)
+            elif self._sl_price > 0 and current_low <= self._sl_price:
+                # SL hit — force sell at SL price
+                gross = self._position * self._sl_price
+                cost = gross * self.tx_cost_pct
+                proceeds = gross - cost
+                step_pnl = proceeds - (self._position * self._entry_price)
+                self._cash = proceeds
+                self._position = 0.0
+                self._entry_price = 0.0
+                self._tp_price = 0.0
+                self._sl_price = 0.0
+                executed_action = 1
+                return self._finalize_step(step_pnl, executed_action, current_close)
 
         # Action masking: enforce valid actions
         if action == 2 and self._position > 0:
@@ -138,6 +186,9 @@ class HyperliquidTradingEnv(gym.Env):
             self._position = investable / current_close
             self._entry_price = current_close
             self._cash = 0.0
+            # Set TP/SL prices
+            self._tp_price = current_close * (1 + self._tp_pct / 100)
+            self._sl_price = current_close * (1 - self._sl_pct / 100)
         elif executed_action == 0:  # Sell
             gross = self._position * current_close
             cost = gross * self.tx_cost_pct
@@ -146,7 +197,18 @@ class HyperliquidTradingEnv(gym.Env):
             self._cash = proceeds
             self._position = 0.0
             self._entry_price = 0.0
+            self._tp_price = 0.0
+            self._sl_price = 0.0
 
+        return self._finalize_step(step_pnl, executed_action, current_close)
+
+    def _finalize_step(
+        self,
+        step_pnl: float,
+        executed_action: int,
+        current_close: float,
+    ) -> tuple[dict[str, np.ndarray], float, bool, bool, dict[str, Any]]:
+        """Calculate portfolio value, reward, advance step, and return transition."""
         # Calculate portfolio value
         unrealized_pnl = 0.0
         position_value = 0.0
