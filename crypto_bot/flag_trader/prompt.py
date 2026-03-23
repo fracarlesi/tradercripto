@@ -47,8 +47,15 @@ class PromptBuilder:
 
         prompt = (
             "Task: You are a cryptocurrency trading agent. Your goal is to maximize "
-            "long-term risk-adjusted returns. Choose optimal buy, sell, or hold "
-            "decisions based on market conditions and risk assessment.\n\n"
+            "long-term risk-adjusted returns (grow account equity after fees). "
+            "Choose optimal buy, sell, or hold decisions based on market conditions "
+            "and risk assessment.\n\n"
+            "Trading Costs:\n"
+            "- Entry fee (maker limit order): 0.02% of notional\n"
+            "- Exit fee (taker market order): 0.05% of notional\n"
+            "- Round-trip cost: ~0.07% of notional\n"
+            "- A trade must move at least 0.07% in your favor just to break even.\n"
+            "- Avoid opening positions unless expected move significantly exceeds fees.\n\n"
             "Legible Actions: Choose from {Buy, Sell, Hold}\n\n"
             "Current State:\n"
         )

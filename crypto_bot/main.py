@@ -762,10 +762,14 @@ class ConservativeBot:
         try:
             account = await self._exchange.get_account_state()
             equity = float(account.get("equity", 0))
+            margin_used = float(account.get("marginUsed", 0))
+            unrealized_pnl = float(account.get("unrealizedPnl", 0))
             portfolio = {
-                "cash_balance": equity,
-                "asset_position": 0.0,
+                "cash_balance": equity - margin_used,
+                "asset_position": margin_used,
                 "total_account_value": equity,
+                "unrealized_pnl": unrealized_pnl,
+                "leverage_used": round(margin_used / equity, 2) if equity > 0 else 0.0,
             }
         except Exception as e:
             logger.warning("Could not fetch account state: %s", e)
