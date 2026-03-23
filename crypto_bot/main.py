@@ -62,6 +62,7 @@ from .services.kill_switch import (
 from .services.execution_engine import (
     ExecutionEngineService,
 )
+from .services.realtime_monitor import RealtimeMonitorService
 from .services.telegram_service import TelegramService
 from .services.whatsapp_service import WhatsAppService
 
@@ -660,43 +661,29 @@ class ConservativeBot:
     async def _strategy_loop(self) -> None:
         """Main evaluation loop: scan assets with FLAG-Trader model.
 
-        Aligned to 15-minute bar close + 30s buffer for consistency.
+        Uses RealtimeMonitorService for event-driven triggering:
+        - Scheduled scan every 5 min (fallback)
+        - Price move >2% on top assets
+        - Position PnL threshold breach
+        - New fill detected
+
+        Cooldown of 60s between triggers to avoid LLM spam.
         """
-        logger.info("FLAG-Trader evaluation loop started")
+        logger.info("FLAG-Trader evaluation loop started (realtime monitor)")
 
         await asyncio.sleep(10)  # Let services initialize
 
-        bar_seconds = 15 * 60  # 15m bars
-        buffer = 30
+        # Start realtime monitor
+        self._monitor = RealtimeMonitorService(self._exchange, self.config)
+        await self._monitor.start()
 
         while self._running and not self._shutdown_event.is_set():
             try:
-                await self._evaluate_with_flag_trader()
-                self._consecutive_scan_errors = 0
-
-                # Align next scan to the next 15m bar close + buffer
-                now = datetime.now(timezone.utc)
-                current_ts = int(now.timestamp())
-                next_bar_close = (current_ts // bar_seconds + 1) * bar_seconds
-                sleep_seconds = next_bar_close + buffer - current_ts
-                if sleep_seconds <= 0:
-                    sleep_seconds = bar_seconds
-
-                next_scan_time = datetime.fromtimestamp(
-                    current_ts + sleep_seconds, tz=timezone.utc
-                )
-                logger.info(
-                    "Next scan at %s UTC (in %ds)",
-                    next_scan_time.strftime("%H:%M:%S"),
-                    sleep_seconds,
-                )
-                try:
-                    await asyncio.wait_for(
-                        self._shutdown_event.wait(), timeout=sleep_seconds,
-                    )
-                    break
-                except asyncio.TimeoutError:
-                    pass
+                trigger, reason = self._monitor.should_trigger_llm()
+                if trigger:
+                    logger.info("LLM triggered: %s", reason)
+                    await self._evaluate_with_flag_trader()
+                    self._consecutive_scan_errors = 0
 
             except asyncio.CancelledError:
                 logger.debug("Evaluation loop cancelled")
@@ -715,6 +702,19 @@ class ConservativeBot:
                         "consecutive_errors": self._consecutive_scan_errors,
                     })
                 await asyncio.sleep(60)
+
+            # Check every 10 seconds for triggers
+            try:
+                await asyncio.wait_for(
+                    self._shutdown_event.wait(), timeout=10,
+                )
+                break
+            except asyncio.TimeoutError:
+                pass
+
+        # Cleanup monitor on exit
+        if hasattr(self, '_monitor') and self._monitor:
+            await self._monitor.stop()
 
     async def _evaluate_with_flag_trader(self) -> None:
         """Evaluate assets with FLAG-Trader model.

@@ -28,6 +28,7 @@ class PromptBuilder:
         candles: list[dict[str, float]],
         portfolio: dict[str, float],
         history: dict[str, list[Any]],
+        similar_trades_text: str = "",
     ) -> str:
         """Build a structured prompt from market state.
 
@@ -72,6 +73,8 @@ class PromptBuilder:
         }
 
         prompt += json.dumps(state, indent=2)
+        if similar_trades_text:
+            prompt += "\n\n" + similar_trades_text
         prompt += (
             '\n\nOutput Action: Format your answer as JSON: '
             '{"Action": "Buy"}, {"Action": "Sell"}, or {"Action": "Hold"}'
