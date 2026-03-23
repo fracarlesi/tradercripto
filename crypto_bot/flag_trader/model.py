@@ -54,15 +54,19 @@ class FlagTraderModel(nn.Module):
         self.device = _resolve_device(device)
         self.model_name = model_name
 
-        # Load pretrained LLM - always load in float32 for compatibility
-        # Some models (e.g. Qwen 3.5) use bfloat16 internally which MPS doesn't support
+        # Load pretrained LLM
+        # Use float16 on CPU/CUDA to save RAM (1.5B model: 3GB vs 6GB in float32)
+        # Use float32 only on MPS (which doesn't support bfloat16)
+        if self.device == torch.device("mps"):
+            load_dtype = torch.float32
+        else:
+            load_dtype = torch.float16
+
         self.llm = AutoModelForCausalLM.from_pretrained(
             model_name,
-            torch_dtype=torch.float32,
+            torch_dtype=load_dtype,
             trust_remote_code=True,
         )
-        # Force ALL parameters to float32 (some models have mixed dtypes internally)
-        self.llm = self.llm.float()
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_name, trust_remote_code=True
         )
