@@ -471,13 +471,14 @@ class PPOTrainer:
 
     @torch.no_grad()
     def evaluate(
-        self, env: HyperliquidTradingEnv, num_episodes: int = 5
+        self, env: HyperliquidTradingEnv, num_episodes: int = 3, max_steps_per_episode: int = 500
     ) -> dict[str, float | list]:
         """Evaluate policy without training.
 
         Args:
             env: Environment for evaluation.
             num_episodes: Number of episodes to run.
+            max_steps_per_episode: Cap per episode to avoid very long evals.
 
         Returns:
             Dict with mean_return, std_return, mean_episode_length, actions_distribution.
@@ -501,7 +502,7 @@ class PPOTrainer:
                 ep_length += 1
                 action_counts[action] += 1
 
-                if terminated or truncated:
+                if terminated or truncated or ep_length >= max_steps_per_episode:
                     break
 
             episode_returns.append(ep_return)
