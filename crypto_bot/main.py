@@ -673,16 +673,18 @@ class ConservativeBot:
 
         await asyncio.sleep(10)  # Let services initialize
 
-        # Start realtime monitor
-        self._monitor = RealtimeMonitorService(self._exchange, self.config)
+        # Start realtime monitor with full universe
+        self._monitor = RealtimeMonitorService(
+            self._exchange, self.config, universe_assets=list(self.config.assets),
+        )
         await self._monitor.start()
 
         while self._running and not self._shutdown_event.is_set():
             try:
-                trigger, reason = self._monitor.should_trigger_llm()
+                trigger, reason, triggered_symbols = self._monitor.should_trigger_llm()
                 if trigger:
                     logger.info("LLM triggered: %s", reason)
-                    await self._evaluate_with_flag_trader()
+                    await self._evaluate_with_flag_trader(triggered_symbols)
                     self._consecutive_scan_errors = 0
 
             except asyncio.CancelledError:
@@ -716,8 +718,12 @@ class ConservativeBot:
         if hasattr(self, '_monitor') and self._monitor:
             await self._monitor.stop()
 
-    async def _evaluate_with_flag_trader(self) -> None:
+    async def _evaluate_with_flag_trader(self, triggered_symbols: list[str] | None = None) -> None:
         """Evaluate assets with FLAG-Trader model.
+
+        Args:
+            triggered_symbols: Specific symbols to evaluate (from monitor triggers).
+                If empty/None, falls back to scanning top N from universe.
 
         Flow: Physical gates -> Get portfolio -> FlagTraderAgent.scan_and_decide()
               -> For each decision: create Setup -> validate spread -> publish to risk manager
@@ -767,12 +773,19 @@ class ConservativeBot:
         except Exception as e:
             logger.warning("Could not fetch account state: %s", e)
 
-        # --- Filter assets: skip those with open positions ---
+        # --- Determine which assets to evaluate ---
         symbols_with_positions: set = set()
         if risk_manager:
             symbols_with_positions = set(risk_manager._open_positions.keys())
 
-        scan_assets = [s for s in self.config.assets if s not in symbols_with_positions]
+        if triggered_symbols:
+            # Event-driven: only evaluate the assets that triggered
+            scan_assets = [s for s in triggered_symbols if s not in symbols_with_positions]
+            logger.info("Targeted scan: %d triggered assets → %d after position filter",
+                        len(triggered_symbols), len(scan_assets))
+        else:
+            # Scheduled fallback: scan top N from universe
+            scan_assets = [s for s in self.config.assets if s not in symbols_with_positions]
 
         # --- Update market states for execution engine ---
         market_state_svc = self._services.get("market_state")

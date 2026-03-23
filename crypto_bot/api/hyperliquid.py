@@ -342,6 +342,18 @@ class HyperliquidClient:
         return markets
 
     @with_retry(max_attempts=3)
+    async def get_all_mids(self) -> dict[str, float]:
+        """Get mid prices for ALL assets in a single API call.
+
+        Returns:
+            Dict mapping symbol -> mid price (e.g., {"BTC": 70912.0, "ETH": 3800.5})
+        """
+        self._ensure_connected()
+        async with self._rate_limiter.info:
+            raw = await self._run_sync(lambda: self._info.all_mids())
+        return {symbol: float(price) for symbol, price in raw.items()}
+
+    @with_retry(max_attempts=3)
     async def get_market_summary(self, symbol: str) -> dict:
         """
         Get summary for a specific market.
