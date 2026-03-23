@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Optional
 
 from .model import FlagTraderModel
 from .prompt import PromptBuilder
+from .trade_logger import FlagTradeLogger, TradeRecord
 
 logger = logging.getLogger(__name__)
 
@@ -62,10 +64,12 @@ class FlagTraderAgent:
         config: FlagTraderConfig,
         model: FlagTraderModel,
         prompt_builder: PromptBuilder,
+        trade_logger: Optional[FlagTradeLogger] = None,
     ) -> None:
         self.config = config
         self.model = model
         self.prompt_builder = prompt_builder
+        self.trade_logger = trade_logger
         self._trade_history: list[str] = []  # recent action names for prompt context
 
     async def scan_and_decide(
@@ -144,6 +148,26 @@ class FlagTraderAgent:
             "FLAG-Trader | %s | action=%s | value=%.4f | log_prob=%.4f",
             symbol, action_name, state_value, float(log_prob),
         )
+
+        # Log every decision for retraining data
+        if self.trade_logger:
+            closes = [c["close"] for c in candles]
+            candles_summary = {
+                "last_close": closes[-1] if closes else 0.0,
+                "pct_change_20": ((closes[-1] / closes[0]) - 1) * 100 if len(closes) >= 2 and closes[0] != 0 else 0.0,
+                "volume_avg": sum(c["volume"] for c in candles) / len(candles) if candles else 0.0,
+            }
+            record = TradeRecord(
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                symbol=symbol,
+                action=action_name,
+                action_id=action_id,
+                confidence=state_value,
+                log_prob=float(log_prob),
+                candles_summary=candles_summary,
+                portfolio=portfolio,
+            )
+            self.trade_logger.log_decision(record)
 
         # Only return actionable decisions (Buy/Sell) above confidence threshold
         if action_id == 1:  # Hold

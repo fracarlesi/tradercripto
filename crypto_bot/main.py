@@ -69,6 +69,7 @@ from .services.whatsapp_service import WhatsAppService
 from .flag_trader.agent import FlagTraderAgent, FlagTraderConfig, TradeDecision
 from .flag_trader.model import FlagTraderModel
 from .flag_trader.prompt import PromptBuilder
+from .flag_trader.trade_logger import FlagTradeLogger
 
 # API Client
 from .api.hyperliquid import HyperliquidClient
@@ -314,6 +315,7 @@ class ConservativeBot:
 
         # FLAG-Trader
         self._flag_agent: Optional[FlagTraderAgent] = None
+        self._trade_logger: Optional[FlagTradeLogger] = None
 
         # Services
         self._services: Dict[str, Any] = {}
@@ -401,10 +403,15 @@ class ConservativeBot:
         model.eval()  # Set to inference mode
         prompt_builder = PromptBuilder(candle_window=ft_cfg.candle_window)
 
+        # Trade logger for retraining data
+        self._trade_logger = FlagTradeLogger(log_dir=Path("data/trade_logs"))
+        logger.info("Trade logger initialized: %s", self._trade_logger.log_dir)
+
         self._flag_agent = FlagTraderAgent(
             config=ft_cfg,
             model=model,
             prompt_builder=prompt_builder,
+            trade_logger=self._trade_logger,
         )
 
         logger.info(
@@ -905,6 +912,40 @@ class ConservativeBot:
         return True
 
     # =========================================================================
+    # Trade Logger Callback
+    # =========================================================================
+
+    async def _on_fill_for_trade_logger(self, message: Any) -> None:
+        """Update trade logger with outcome when a position closes."""
+        if not self._trade_logger:
+            return
+        payload = message.payload
+        if payload.get("event") != "position_closed":
+            return
+
+        symbol = payload.get("symbol", "")
+        position_data = payload.get("position", {})
+        opened_at = position_data.get("opened_at")
+
+        hold_minutes = 0.0
+        if opened_at:
+            try:
+                opened_dt = datetime.fromisoformat(opened_at)
+                hold_minutes = (datetime.now(timezone.utc) - opened_dt).total_seconds() / 60.0
+            except (ValueError, TypeError):
+                pass
+
+        self._trade_logger.update_outcome(
+            symbol=symbol,
+            entry_price=float(payload.get("entry_price", 0)),
+            exit_price=float(payload.get("exit_price", 0)),
+            pnl_usd=float(payload.get("realized_pnl", 0)),
+            pnl_pct=float(payload.get("pnl_pct", 0)),
+            exit_reason=payload.get("exit_reason", "unknown"),
+            hold_duration_minutes=hold_minutes,
+        )
+
+    # =========================================================================
     # Health Monitoring
     # =========================================================================
 
@@ -1068,6 +1109,10 @@ class ConservativeBot:
             self._init_services()
 
             await self._start_services()
+
+            # Subscribe trade logger to fill events for outcome tracking
+            if self._bus and self._trade_logger:
+                await self._bus.subscribe(Topic.FILLS, self._on_fill_for_trade_logger)
 
             # SAFETY: Check for config mismatches with existing positions
             await self._startup_safety_check()
