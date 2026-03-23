@@ -12,6 +12,7 @@ Based on FLAG-Trader paper Algorithm 1.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from pathlib import Path
 from typing import Optional
@@ -341,32 +342,18 @@ class PPOTrainer:
                 b_advantages = advantages[batch_idx].to(self.model.device)
                 b_returns = returns[batch_idx].to(self.model.device)
 
-                # Forward pass with optional AMP
-                if use_amp:
-                    with torch.amp.autocast("cuda"):
-                        new_log_probs, new_values, entropy = self.model.evaluate_actions(
-                            b_input_ids, b_attention_mask, b_actions
-                        )
-                else:
+                # Forward + loss computation (all under AMP if CUDA)
+                amp_ctx = torch.amp.autocast("cuda") if use_amp else contextlib.nullcontext()
+                with amp_ctx:
                     new_log_probs, new_values, entropy = self.model.evaluate_actions(
                         b_input_ids, b_attention_mask, b_actions
                     )
-
-                # PPO clipped surrogate
-                ratio = torch.exp(new_log_probs - b_old_log_probs)
-                surr1 = ratio * b_advantages
-                surr2 = torch.clamp(ratio, 1.0 - self.clip_range, 1.0 + self.clip_range) * b_advantages
-                policy_loss = -torch.min(surr1, surr2).mean()
-
-                # Value loss (MSE)
-                value_loss = nn.functional.mse_loss(new_values, b_returns)
-
-                # Total loss
-                loss = (
-                    policy_loss
-                    + self.value_loss_coef * value_loss
-                    - self.entropy_coef * entropy.mean()
-                )
+                    ratio = torch.exp(new_log_probs - b_old_log_probs)
+                    surr1 = ratio * b_advantages
+                    surr2 = torch.clamp(ratio, 1.0 - self.clip_range, 1.0 + self.clip_range) * b_advantages
+                    policy_loss = -torch.min(surr1, surr2).mean()
+                    value_loss = nn.functional.mse_loss(new_values, b_returns)
+                    loss = policy_loss + self.value_loss_coef * value_loss - self.entropy_coef * entropy.mean()
 
                 self.optimizer.zero_grad()
                 if use_amp and scaler is not None:
