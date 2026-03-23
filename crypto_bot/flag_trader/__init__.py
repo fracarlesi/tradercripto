@@ -6,6 +6,7 @@ LLM-based trading agent using PPO/RL, inspired by FLAG-Trader paper.
 Components: Gymnasium environment, prompt builder, data collector, reward function.
 """
 
+from .agent import FlagTraderAgent, FlagTraderConfig, TradeDecision
 from .data_collector import HyperliquidDataCollector
 from .environment import HyperliquidTradingEnv
 from .model import FlagTraderModel
@@ -21,6 +22,9 @@ from .autoresearch import AutoResearcher, ExperimentResult, ResearchState
 from .walk_forward import WalkForwardResult, WalkForwardValidator, WindowResult
 
 __all__ = [
+    "FlagTraderAgent",
+    "FlagTraderConfig",
+    "TradeDecision",
     "HyperliquidTradingEnv",
     "FlagTraderModel",
     "PPOTrainer",

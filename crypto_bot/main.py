@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """
-HLQuantBot v4 - XGBoost ML Trade Selector
-==========================================
+HLQuantBot v5 - FLAG-Trader LLM Decisor
+=========================================
 
-Trading system with ML-based trade selection and strict risk controls.
+Trading system with FLAG-Trader (LLM + PPO) trade decisions and strict risk controls.
 
 Architecture:
-    MarketState → XGBoost.predict(features) → P(TP) → RiskManager → Execution
+    Candles -> FlagTraderModel.get_action(prompt) -> Buy/Sell/Hold -> RiskManager -> Execution
 
 This orchestrator:
 1. Loads configuration from trading.yaml
-2. Initializes core services (message bus)
-3. Loads pre-trained XGBoost model
-4. Scans all assets, predicts P(TP) for each direction
-5. Executes top-N candidates by P(TP) descending
+2. Initializes core services (message bus, kill switch, risk, execution)
+3. Loads pre-trained FLAG-Trader model (DeepSeek/Qwen + policy/value heads)
+4. Scans top-N assets by volume, builds prompts from candle data
+5. Executes actionable decisions through risk manager pipeline
 
 Author: Francesco Carlesi
 """
@@ -28,22 +28,20 @@ import logging
 import os
 import signal
 import sys
-import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
-import numpy as np
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from .core.enums import Topic
-from .core.models import Direction, MarketState, Regime, Setup, SetupType
+from .core.models import Direction, Regime, Setup, SetupType
 
 # Services
 from .services.message_bus import MessageBus
@@ -53,7 +51,6 @@ from .services.market_state import (
     create_market_state_service,
 )
 from .services.risk_manager import (
-    RiskManagerService,
     RiskConfig,
     create_risk_manager,
 )
@@ -67,6 +64,11 @@ from .services.execution_engine import (
 )
 from .services.telegram_service import TelegramService
 from .services.whatsapp_service import WhatsAppService
+
+# FLAG-Trader
+from .flag_trader.agent import FlagTraderAgent, FlagTraderConfig, TradeDecision
+from .flag_trader.model import FlagTraderModel
+from .flag_trader.prompt import PromptBuilder
 
 # API Client
 from .api.hyperliquid import HyperliquidClient
@@ -165,12 +167,6 @@ class ConservativeConfig:
     regime_confirmation_bars: int
     regime_exit_grace_minutes: int
 
-    # ML Model
-    ml_model_path: str
-    ml_min_probability: float
-    ml_retrain_interval_days: int
-    ml_retrain_days: int
-
     # Execution
     prefer_limit: bool
     max_slippage_pct: float
@@ -179,23 +175,6 @@ class ConservativeConfig:
     limit_timeout_seconds: int
     maker_reprice_interval_seconds: int
     maker_max_reprices: int
-
-    # Volume Breakout
-    volume_breakout_enabled: bool
-    volume_breakout_min_volume_ratio: float
-    volume_breakout_min_candle_body_pct: float
-    volume_breakout_min_atr_pct: float
-    volume_breakout_rsi_min: float
-    volume_breakout_rsi_max: float
-    volume_breakout_allowed_regimes: List[str]
-
-    # Momentum Burst
-    momentum_burst_enabled: bool
-    momentum_burst_min_rsi_slope: float
-    momentum_burst_min_candle_body_pct: float
-    momentum_burst_max_rsi_entry: float
-    momentum_burst_min_volume_ratio: float
-    momentum_burst_allowed_regimes: List[str]
 
     # Momentum Fade Exit
     momentum_exit_enabled: bool
@@ -207,11 +186,8 @@ class ConservativeConfig:
     testnet: bool
     dry_run: bool
 
-    # Short filters (WS3)
-    btc_macro_gate_shorts: bool = False
-    short_rsi_min: float = 35.0
-    short_rsi_max: float = 100.0
-    ml_short_threshold_offset: float = 0.0
+    # FLAG-Trader
+    flag_trader_config: Dict[str, Any]
 
     @classmethod
     def from_yaml(cls, path: str) -> "ConservativeConfig":
@@ -229,11 +205,8 @@ class ConservativeConfig:
         stops = get_section("stops")
         regime = get_section("regime")
         execution = get_section("execution")
-        ml = get_section("ml_model")
-        vb = get_section("volume_breakout")
-        mb = get_section("momentum_burst")
-        me = get_section("stops").get("momentum_exit", {})
-        filters = get_section("filters")
+        me = stops.get("momentum_exit", {})
+        flag_trader = get_section("flag_trader")
 
         # Parse universe mode and assets
         universe_mode = universe.get("mode", "manual")
@@ -268,7 +241,7 @@ class ConservativeConfig:
             weekly_loss_pct=ks.get("weekly_loss_pct", 15.0),
             max_drawdown_pct=ks.get("max_drawdown_pct", 30.0),
             initial_atr_mult=stops.get("initial_atr_mult", 2.5),
-            trailing_atr_mult=stops.get("trailing_atr_mult", 0),  # Safe default: disabled
+            trailing_atr_mult=stops.get("trailing_atr_mult", 0),
             minimal_roi=stops.get("minimal_roi", {}),
             stop_loss_pct=stops.get("stop_loss_pct", 0.8),
             take_profit_pct=stops.get("take_profit_pct", 1.6),
@@ -280,11 +253,6 @@ class ConservativeConfig:
             choppiness_range_min=regime.get("choppiness_range_min", 60.0),
             regime_confirmation_bars=regime.get("confirmation_bars", 3),
             regime_exit_grace_minutes=regime.get("regime_exit_grace_minutes", 5),
-            ml_model_path=ml.get("model_path", "models/trade_model.joblib"),
-            ml_min_probability=ml.get("min_probability", 0.50),
-            # ml_mode removed — regime gate always active (trend strategy)
-            ml_retrain_interval_days=ml.get("retrain_interval_days", 3),
-            ml_retrain_days=ml.get("retrain_days", 30),
             prefer_limit=execution.get("prefer_limit", True),
             max_slippage_pct=execution.get("max_slippage_pct", 0.1),
             max_spread_pct=execution.get("max_spread_pct", 0.10),
@@ -292,29 +260,13 @@ class ConservativeConfig:
             limit_timeout_seconds=execution.get("limit_timeout_seconds", 60),
             maker_reprice_interval_seconds=execution.get("maker_reprice_interval_seconds", 10),
             maker_max_reprices=execution.get("maker_max_reprices", 6),
-            volume_breakout_enabled=vb.get("enabled", True),
-            volume_breakout_min_volume_ratio=vb.get("min_volume_ratio", 2.0),
-            volume_breakout_min_candle_body_pct=vb.get("min_candle_body_pct", 0.3),
-            volume_breakout_min_atr_pct=vb.get("min_atr_pct", 0.15),
-            volume_breakout_rsi_min=vb.get("rsi_min", 25.0),
-            volume_breakout_rsi_max=vb.get("rsi_max", 80.0),
-            volume_breakout_allowed_regimes=vb.get("allowed_regimes", ["chaos", "trend"]),
-            momentum_burst_enabled=mb.get("enabled", True),
-            momentum_burst_min_rsi_slope=mb.get("min_rsi_slope", 8.0),
-            momentum_burst_min_candle_body_pct=mb.get("min_candle_body_pct", 0.3),
-            momentum_burst_max_rsi_entry=mb.get("max_rsi_entry", 75.0),
-            momentum_burst_min_volume_ratio=mb.get("min_volume_ratio", 1.2),
-            momentum_burst_allowed_regimes=mb.get("allowed_regimes", ["chaos", "trend"]),
-            momentum_exit_enabled=me.get("enabled", False),  # Safe default: disabled
+            momentum_exit_enabled=me.get("enabled", False),
             momentum_exit_min_age_minutes=me.get("min_age_minutes", 15),
             momentum_exit_min_profit_pct=me.get("min_profit_pct", 0.1),
             momentum_exit_rsi_slope_threshold=me.get("rsi_slope_threshold", 1.0),
             testnet=env.lower() == "testnet",
             dry_run=data.get("dry_run", False),
-            btc_macro_gate_shorts=filters.get("btc_macro_gate_shorts", False),
-            short_rsi_min=filters.get("short_rsi_min", 35.0),
-            short_rsi_max=filters.get("short_rsi_max", 100.0),
-            ml_short_threshold_offset=ml.get("short_threshold_offset", 0.0),
+            flag_trader_config=flag_trader if flag_trader else {},
         )
 
 
@@ -324,14 +276,14 @@ class ConservativeConfig:
 
 class ConservativeBot:
     """
-    Main orchestrator for ML-based trading system.
+    Main orchestrator for FLAG-Trader LLM-based trading system.
 
     Architecture:
-        MarketState → XGBoost(features) → P(TP) → RiskManager → Execution
+        Candles -> FlagTraderModel(prompt) -> action -> RiskManager -> Execution
 
     Critical design principles:
-    1. XGBoost predicts P(TP) for every asset/direction
-    2. Execute top-N candidates sorted by P(TP)
+    1. FLAG-Trader model decides Buy/Sell/Hold for each asset
+    2. Execute actionable decisions through risk manager pipeline
     3. Kill switch ALWAYS active
     4. Physical gates: cooldown, protections, spread, max_positions
     """
@@ -360,6 +312,9 @@ class ConservativeBot:
         self._bus: Optional[MessageBus] = None
         self._exchange: Optional[HyperliquidClient] = None
 
+        # FLAG-Trader
+        self._flag_agent: Optional[FlagTraderAgent] = None
+
         # Services
         self._services: Dict[str, Any] = {}
 
@@ -372,7 +327,7 @@ class ConservativeBot:
         self._strategy_task: Optional[asyncio.Task] = None
         self._health_task: Optional[asyncio.Task] = None
 
-        # Consecutive scan error counter for ntfy alerts (#17)
+        # Consecutive scan error counter for ntfy alerts
         self._consecutive_scan_errors: int = 0
 
     # =========================================================================
@@ -416,6 +371,49 @@ class ConservativeBot:
             self._config.max_drawdown_pct,
         )
         return self._config
+
+    def _init_flag_trader(self) -> FlagTraderAgent:
+        """Initialize FLAG-Trader model and agent."""
+        ft_cfg = FlagTraderConfig.from_dict(self.config.flag_trader_config)
+
+        logger.info(
+            "Loading FLAG-Trader model: %s (device=%s)",
+            ft_cfg.model_name, ft_cfg.device,
+        )
+
+        model = FlagTraderModel(
+            model_name=ft_cfg.model_name,
+            device=ft_cfg.device,
+        )
+
+        # Load trained checkpoint if it exists
+        checkpoint = Path(ft_cfg.checkpoint_path)
+        if checkpoint.exists():
+            logger.info("Loading checkpoint: %s", checkpoint)
+            model.load_trainable(checkpoint)
+            logger.info("Checkpoint loaded successfully")
+        else:
+            logger.warning(
+                "No checkpoint found at %s -- using base model weights",
+                checkpoint,
+            )
+
+        model.eval()  # Set to inference mode
+        prompt_builder = PromptBuilder(candle_window=ft_cfg.candle_window)
+
+        self._flag_agent = FlagTraderAgent(
+            config=ft_cfg,
+            model=model,
+            prompt_builder=prompt_builder,
+        )
+
+        logger.info(
+            "FLAG-Trader initialized: scan=%d assets, window=%d candles, threshold=%.2f",
+            ft_cfg.max_assets_to_scan,
+            ft_cfg.candle_window,
+            ft_cfg.confidence_threshold,
+        )
+        return self._flag_agent
 
     async def _init_message_bus(self) -> MessageBus:
         """Initialize message bus."""
@@ -463,7 +461,7 @@ class ConservativeBot:
             filtered = [s for s in all_symbols if s not in cfg.exclude_symbols]
             logger.info("After exclusion filter: %d symbols", len(filtered))
 
-            # Apply min_volume_24h filter at startup (not just during scan)
+            # Apply min_volume_24h filter at startup
             min_vol = cfg.min_volume_24h
             if min_vol > 0:
                 volumes = await self._exchange._get_asset_data(
@@ -625,7 +623,7 @@ class ConservativeBot:
             take_profit_pct=cfg.take_profit_pct, stop_loss_pct=cfg.stop_loss_pct,
         )
 
-        # Capital Ladder — progressive scale-up tracking
+        # Capital Ladder
         from .services.capital_ladder import CapitalLadderService
         perf_mon = self._services.get("performance_monitor")
         self._services["capital_ladder"] = CapitalLadderService(
@@ -634,7 +632,7 @@ class ConservativeBot:
             exchange=self._exchange,
         )
 
-        # Wire capital_ladder back into performance_monitor for Account Snapshot
+        # Wire capital_ladder back into performance_monitor
         if perf_mon:
             perf_mon._capital_ladder = self._services.get("capital_ladder")
 
@@ -649,26 +647,24 @@ class ConservativeBot:
         )
 
     # =========================================================================
-    # Evaluation Loop
+    # Evaluation Loop -- FLAG-Trader
     # =========================================================================
 
     async def _strategy_loop(self) -> None:
-        """Main evaluation loop: scan all assets with ML model.
+        """Main evaluation loop: scan assets with FLAG-Trader model.
 
-        Scans are aligned to the 15-minute bar close + 30s buffer, so the bot
-        always evaluates freshly closed candles rather than mid-candle data.
-        This means scans fire at ~XX:00:30, XX:15:30, XX:30:30, XX:45:30 UTC.
+        Aligned to 15-minute bar close + 30s buffer for consistency.
         """
-        logger.info("ML evaluation loop started")
+        logger.info("FLAG-Trader evaluation loop started")
 
         await asyncio.sleep(10)  # Let services initialize
 
         bar_seconds = 15 * 60  # 15m bars
-        buffer = 30  # seconds after bar close to let data feed update
+        buffer = 30
 
         while self._running and not self._shutdown_event.is_set():
             try:
-                await self._evaluate_all_assets()
+                await self._evaluate_with_flag_trader()
                 self._consecutive_scan_errors = 0
 
                 # Align next scan to the next 15m bar close + buffer
@@ -677,16 +673,15 @@ class ConservativeBot:
                 next_bar_close = (current_ts // bar_seconds + 1) * bar_seconds
                 sleep_seconds = next_bar_close + buffer - current_ts
                 if sleep_seconds <= 0:
-                    sleep_seconds = bar_seconds  # fallback: full bar
+                    sleep_seconds = bar_seconds
 
                 next_scan_time = datetime.fromtimestamp(
                     current_ts + sleep_seconds, tz=timezone.utc
                 )
                 logger.info(
-                    "Next scan at %s UTC (in %ds, aligned to bar close + %ds)",
+                    "Next scan at %s UTC (in %ds)",
                     next_scan_time.strftime("%H:%M:%S"),
                     sleep_seconds,
-                    buffer,
                 )
                 try:
                     await asyncio.wait_for(
@@ -714,11 +709,16 @@ class ConservativeBot:
                     })
                 await asyncio.sleep(60)
 
-    async def _evaluate_all_assets(self) -> None:
-        """Evaluate all assets with XGBoost ML model.
+    async def _evaluate_with_flag_trader(self) -> None:
+        """Evaluate assets with FLAG-Trader model.
 
-        Flow: MarketState → extract features → predict P(TP) → sort → execute top N
+        Flow: Physical gates -> Get portfolio -> FlagTraderAgent.scan_and_decide()
+              -> For each decision: create Setup -> validate spread -> publish to risk manager
         """
+        if not self._flag_agent or not self._exchange:
+            logger.warning("FLAG-Trader agent or exchange not initialized")
+            return
+
         # --- Physical gates ---
         kill_switch = self._services.get("kill_switch")
         if kill_switch and not kill_switch.is_trading_allowed():
@@ -737,363 +737,67 @@ class ConservativeBot:
                 )
                 return
 
-        # --- Get market states ---
-        market_state_svc = self._services.get("market_state")
-        if not market_state_svc:
-            return
-
-        states = market_state_svc.get_all_states()
-        if not states:
-            logger.warning("No market states available")
-            return
-
-        # --- Filter out stale market states (#23) ---
-        now = datetime.now(timezone.utc)
-        scan_interval_seconds = self.config.scan_interval_minutes * 60
-        max_age = timedelta(seconds=scan_interval_seconds * 2)
-        fresh_states = {
-            sym: state for sym, state in states.items()
-            if state.timestamp and (now - state.timestamp) <= max_age
-        }
-        stale_count = len(states) - len(fresh_states)
-        if stale_count > 0:
-            logger.warning("Filtered %d stale market states (max age %ds)", stale_count, scan_interval_seconds * 2)
-        states = fresh_states
-        if not states:
-            logger.warning("All market states are stale, skipping evaluation")
-            return
-
-        # --- Update counterfactual logger with fresh market states ---
-        cf_logger = self._services.get("counterfactual_logger")
-        if cf_logger and states:
-            cf_logger.update_market_states(states)
-
-        # --- Update execution engine with fresh market states ---
-        exec_engine = self._services.get("execution")
-        if exec_engine and states:
-            exec_engine.update_market_states(states)
-
-        # --- Score all assets ---
-        candidates: list[tuple[str, Setup, float, str]] = []
-        all_scores: list[tuple[str, float]] = []  # diagnostic: track ALL scores
-        symbols_with_positions: set = set()
-
-        if risk_manager:
-            symbols_with_positions = set(risk_manager._open_positions.keys())
-
-        threshold = self.config.ml_min_probability
-
-        vb_enabled = self.config.volume_breakout_enabled
-        mb_enabled = self.config.momentum_burst_enabled
-
-        vb_allowed_regimes = {r.lower() for r in self.config.volume_breakout_allowed_regimes}
-        mb_allowed_regimes = {r.lower() for r in self.config.momentum_burst_allowed_regimes}
-
-        # BTC state for ML context features (altcoins use BTC as macro indicator)
-        btc_state = states.get("BTC")
-
-        regime_skipped: int = 0
-        breakout_evaluated: int = 0
-        burst_evaluated: int = 0
-        sl_pct_frac = self.config.stop_loss_pct / 100  # e.g. 1.0 -> 0.01
-        min_ema_gap_pct = 0.001  # Fix 4: minimum 0.10% EMA9/EMA21 gap
-
-        for symbol, state in states.items():
-            if symbol in symbols_with_positions:
-                continue
-
-            # Fix 2: Enforce min_volume_24h filter
-            if state.volume_24h is not None and float(state.volume_24h) < self.config.min_volume_24h:
-                logger.debug("Skipping %s: 24h volume $%.0f < $%.0f min", symbol, float(state.volume_24h), self.config.min_volume_24h)
-                continue
-
-            # Fix 3: ATR vs SL gate — skip if single candle range exceeds stop loss
-            if state.atr_pct is not None and float(state.atr_pct) > self.config.stop_loss_pct:
-                logger.debug("Skipping %s: ATR %.2f%% > SL %.2f%%", symbol, float(state.atr_pct), self.config.stop_loss_pct)
-                continue
-
-            best_prob = -1.0
-            best_direction: Direction = Direction.FLAT
-            best_reason = ""
-            best_setup_type = SetupType.MOMENTUM
-            best_signal_type = 0.0
-
-            # Track highest score across all paths (for counterfactual near-miss logging)
-            top_scored_prob = 0.0
-            top_scored_direction: Direction = Direction.FLAT
-
-            # --- PATH 1 (existing): TREND only → EMA direction → ML(signal_type=0.0) ---
-            if state.regime == Regime.TREND:
-                direction = state.trend_direction
-                if direction != Direction.FLAT:
-                    # Fix 4: Minimum EMA gap — skip noise crossovers
-                    ema_gap_ok = True
-                    if state.ema9 is not None and state.ema21 is not None and float(state.ema21) > 0:
-                        ema_gap = abs(float(state.ema9) - float(state.ema21)) / float(state.ema21)
-                        if ema_gap < min_ema_gap_pct:
-                            ema_gap_ok = False
-                            logger.debug("Skipping %s EMA: gap %.4f%% < %.4f%% min", symbol, ema_gap * 100, min_ema_gap_pct * 100)
-
-                    # Gate: Funding rate filter (skip if paying excessive funding)
-                    funding_ok = True
-                    if direction == Direction.LONG and state.funding_rate and float(state.funding_rate) > 0.0005:
-                        funding_ok = False
-                    if direction == Direction.SHORT and state.funding_rate and float(state.funding_rate) < -0.0005:
-                        funding_ok = False
-
-                    # Gate: Multi-timeframe alignment (1h EMA9/EMA21 must agree with direction)
-                    mtf_aligned = True
-                    if state.ema9_1h is not None and state.ema21_1h is not None:
-                        if direction == Direction.LONG and float(state.ema9_1h) <= float(state.ema21_1h):
-                            mtf_aligned = False
-                        elif direction == Direction.SHORT and float(state.ema9_1h) >= float(state.ema21_1h):
-                            mtf_aligned = False
-
-                    # Gate: RSI window for SHORT entries (configurable)
-                    rsi_ok = True
-                    if direction == Direction.SHORT and state.rsi:
-                        rsi_val = float(state.rsi)
-                        if rsi_val < self.config.short_rsi_min or rsi_val > self.config.short_rsi_max:
-                            rsi_ok = False
-
-                    # Gate: BTC macro gate — block shorts when BTC in uptrend
-                    btc_gate_ok = True
-                    if direction == Direction.SHORT and self.config.btc_macro_gate_shorts and btc_state is not None:
-                        btc_ema9 = float(btc_state.ema9) if btc_state.ema9 is not None else 0.0
-                        btc_ema21 = float(btc_state.ema21) if btc_state.ema21 is not None else 0.0
-                        if btc_ema9 > btc_ema21:
-                            btc_gate_ok = False
-                            logger.debug("SKIP %s SHORT: BTC in uptrend (EMA9 %.2f > EMA21 %.2f)", symbol, btc_ema9, btc_ema21)
-
-                    if funding_ok and mtf_aligned and rsi_ok and ema_gap_ok and btc_gate_ok:
-                        dir_float = 1.0 if direction == Direction.LONG else -1.0
-                        # TODO: replace with new model inference
-                        prob, reason = 0.0, "no_model"
-                        all_scores.append((f"{symbol}/ema", prob))
-                        if prob > top_scored_prob:
-                            top_scored_prob = prob
-                            top_scored_direction = direction
-                        ema_eff_threshold = threshold + (self.config.ml_short_threshold_offset if direction == Direction.SHORT else 0.0)
-                        if prob >= ema_eff_threshold and prob > best_prob:
-                            best_prob = prob
-                            best_direction = direction
-                            best_reason = reason
-                            best_setup_type = SetupType.MOMENTUM
-                            best_signal_type = 0.0
-
-            # --- PATH 2: CHAOS+TREND → volume check → price direction → ML(signal_type=1.0) ---
-            if vb_enabled and state.regime.value.lower() in vb_allowed_regimes:
-                vb_direction = self._breakout_direction(state)
-                # Gate: Funding rate filter
-                if vb_direction == Direction.LONG and state.funding_rate and float(state.funding_rate) > 0.0005:
-                    vb_direction = Direction.FLAT
-                if vb_direction == Direction.SHORT and state.funding_rate and float(state.funding_rate) < -0.0005:
-                    vb_direction = Direction.FLAT
-                # Fix 5: RSI direction alignment — don't long overbought, don't short oversold
-                if vb_direction == Direction.LONG and state.rsi and float(state.rsi) > 70:
-                    vb_direction = Direction.FLAT
-                if vb_direction == Direction.SHORT and state.rsi:
-                    vb_rsi = float(state.rsi)
-                    if vb_rsi < self.config.short_rsi_min or vb_rsi > self.config.short_rsi_max:
-                        vb_direction = Direction.FLAT
-                # Gate: BTC macro gate — block shorts when BTC in uptrend
-                if vb_direction == Direction.SHORT and self.config.btc_macro_gate_shorts and btc_state is not None:
-                    btc_ema9 = float(btc_state.ema9) if btc_state.ema9 is not None else 0.0
-                    btc_ema21 = float(btc_state.ema21) if btc_state.ema21 is not None else 0.0
-                    if btc_ema9 > btc_ema21:
-                        logger.debug("SKIP %s VB SHORT: BTC in uptrend (EMA9 %.2f > EMA21 %.2f)", symbol, btc_ema9, btc_ema21)
-                        vb_direction = Direction.FLAT
-                if vb_direction != Direction.FLAT and self._is_volume_breakout(state):
-                    breakout_evaluated += 1
-                    vb_dir_float = 1.0 if vb_direction == Direction.LONG else -1.0
-                    # TODO: replace with new model inference
-                    prob, reason = 0.0, "no_model"
-                    all_scores.append((f"{symbol}/vb", prob))
-                    if prob > top_scored_prob:
-                        top_scored_prob = prob
-                        top_scored_direction = vb_direction
-                    vb_eff_threshold = threshold + (self.config.ml_short_threshold_offset if vb_direction == Direction.SHORT else 0.0)
-                    if prob >= vb_eff_threshold and prob > best_prob:
-                        best_prob = prob
-                        best_direction = vb_direction
-                        best_reason = reason
-                        best_setup_type = SetupType.VOLUME_BREAKOUT
-                        best_signal_type = 1.0
-
-            # --- PATH 3: CHAOS+TREND → RSI acceleration → ML(signal_type=2.0) ---
-            if mb_enabled and state.regime.value.lower() in mb_allowed_regimes:
-                if self._is_momentum_burst(state):
-                    mb_direction = self._momentum_burst_direction(state)
-                    # Gate: Funding rate filter
-                    if mb_direction == Direction.LONG and state.funding_rate and float(state.funding_rate) > 0.0005:
-                        mb_direction = Direction.FLAT
-                    if mb_direction == Direction.SHORT and state.funding_rate and float(state.funding_rate) < -0.0005:
-                        mb_direction = Direction.FLAT
-                    # Fix 5: RSI direction alignment — don't long overbought, don't short oversold
-                    if mb_direction == Direction.LONG and state.rsi and float(state.rsi) > 70:
-                        mb_direction = Direction.FLAT
-                    if mb_direction == Direction.SHORT and state.rsi:
-                        mb_rsi = float(state.rsi)
-                        if mb_rsi < self.config.short_rsi_min or mb_rsi > self.config.short_rsi_max:
-                            mb_direction = Direction.FLAT
-                    # Gate: BTC macro gate — block shorts when BTC in uptrend
-                    if mb_direction == Direction.SHORT and self.config.btc_macro_gate_shorts and btc_state is not None:
-                        btc_ema9 = float(btc_state.ema9) if btc_state.ema9 is not None else 0.0
-                        btc_ema21 = float(btc_state.ema21) if btc_state.ema21 is not None else 0.0
-                        if btc_ema9 > btc_ema21:
-                            logger.debug("SKIP %s MB SHORT: BTC in uptrend (EMA9 %.2f > EMA21 %.2f)", symbol, btc_ema9, btc_ema21)
-                            mb_direction = Direction.FLAT
-                    if mb_direction != Direction.FLAT:
-                        burst_evaluated += 1
-                        mb_dir_float = 1.0 if mb_direction == Direction.LONG else -1.0
-                        # TODO: replace with new model inference
-                        prob, reason = 0.0, "no_model"
-                        all_scores.append((f"{symbol}/mb", prob))
-                        if prob > top_scored_prob:
-                            top_scored_prob = prob
-                            top_scored_direction = mb_direction
-                        mb_eff_threshold = threshold + (self.config.ml_short_threshold_offset if mb_direction == Direction.SHORT else 0.0)
-                        if prob >= mb_eff_threshold and prob > best_prob:
-                            best_prob = prob
-                            best_direction = mb_direction
-                            best_reason = reason
-                            best_setup_type = SetupType.MOMENTUM_BURST
-                            best_signal_type = 2.0
-
-            # No path fired above threshold
-            if best_prob < threshold:
-                # Counterfactual: log near-miss ML rejections (prob within 0.10 of threshold)
-                if (cf_logger and top_scored_prob > 0
-                        and top_scored_prob >= threshold - 0.10
-                        and top_scored_direction != Direction.FLAT):
-                    cf_logger.log_rejection(
-                        symbol=symbol,
-                        direction=top_scored_direction.value,
-                        entry_price=float(state.close),
-                        reason="ml_threshold",
-                        ml_probability=top_scored_prob,
-                    )
-
-                regime_in_any = (
-                    state.regime == Regime.TREND
-                    or (vb_enabled and state.regime.value.lower() in vb_allowed_regimes)
-                    or (mb_enabled and state.regime.value.lower() in mb_allowed_regimes)
-                )
-                if not regime_in_any:
-                    regime_skipped += 1
-                elif state.trend_direction == Direction.FLAT and state.regime == Regime.TREND:
-                    regime_skipped += 1
-                continue
-
-            # Create Setup
-            sl_pct = Decimal(str(self.config.stop_loss_pct))
-            entry_price = state.close
-            if best_direction == Direction.LONG:
-                stop_price = entry_price * (Decimal("1") - sl_pct / Decimal("100"))
-            else:
-                stop_price = entry_price * (Decimal("1") + sl_pct / Decimal("100"))
-
-            setup = Setup(
-                id=f"ml_{uuid.uuid4().hex[:8]}",
-                symbol=symbol,
-                timestamp=datetime.now(timezone.utc),
-                setup_type=best_setup_type,
-                direction=best_direction,
-                regime=state.regime,
-                entry_price=entry_price,
-                stop_price=stop_price,
-                stop_distance_pct=sl_pct,
-                atr=state.atr,
-                atr_pct=state.atr_pct,
-                adx=state.adx,
-                rsi=state.rsi,
-                setup_quality=Decimal(str(round(best_prob, 4))),
-                confidence=Decimal(str(round(best_prob, 4))),
-            )
-
-            signal_labels = {0.0: "ML_SELECT", 1.0: "VOL_BREAKOUT", 2.0: "MOM_BURST"}
-            signal_label = signal_labels.get(best_signal_type, "ML_SELECT")
-            logger.info(
-                "%s | %s %s | P(TP)=%.1f%% | regime=%s | %s",
-                signal_label,
-                best_direction.value.upper(), symbol, best_prob * 100,
-                state.regime.value.upper(), best_reason,
-            )
-            candidates.append((symbol, setup, best_prob, best_reason))
-
-        # --- Diagnostic: log P(TP) distribution for evaluated assets ---
-        if all_scores:
-            all_scores.sort(key=lambda x: x[1], reverse=True)
-            top5 = all_scores[:5]
-            above = sum(1 for _, p in all_scores if p >= threshold)
-            below_near = sum(1 for _, p in all_scores if threshold - 0.05 <= p < threshold)
-            below_far = sum(1 for _, p in all_scores if p < threshold - 0.05)
-            logger.info(
-                "P(TP) distribution | top5: %s | above %.0f%%: %d, near-miss (%.0f%%-%.0f%%): %d, far below: %d, total scored: %d",
-                ", ".join(f"{s}={p:.1%}" for s, p in top5),
-                threshold * 100, above,
-                (threshold - 0.05) * 100, threshold * 100, below_near,
-                below_far, len(all_scores),
-            )
-
-        # Count assets evaluated
-        total_evaluated = len(all_scores)
-        logger.info(
-            "Scan: %d assets, %d scored (%d breakout, %d burst), %d skipped, %d candidates (threshold=%.2f, vb=%s, mb=%s)",
-            len(states), total_evaluated, breakout_evaluated, burst_evaluated,
-            regime_skipped, len(candidates), threshold,
-            "ON" if vb_enabled else "OFF",
-            "ON" if mb_enabled else "OFF",
-        )
-
-        # --- Sort by P(TP) desc, execute top N ---
-        if not candidates:
-            return
-
-        # Cross-sectional momentum rank as tiebreaker (80% ML + 20% momentum)
-        if len(candidates) > 1:
-            # Momentum proxy: signed EMA spread = (ema9 - ema21) / ema21
-            # Captures both direction and magnitude of momentum
-            momentums: list[float] = []
-            for c in candidates:
-                sym = c[0]
-                st = states.get(sym)
-                if st is not None and st.ema9 is not None and st.ema21 is not None:
-                    ema21_val = float(st.ema21)
-                    if ema21_val != 0:
-                        momentums.append(abs(float(st.ema9) - ema21_val) / ema21_val)
-                    else:
-                        momentums.append(0.0)
-                else:
-                    momentums.append(0.0)
-            ranks = (np.argsort(np.argsort(momentums)).astype(float) + 1) / len(momentums)
-            candidates = [
-                (c[0], c[1], 0.8 * c[2] + 0.2 * ranks[i], c[3])
-                for i, c in enumerate(candidates)
-            ]
-
-        candidates.sort(key=lambda x: x[2], reverse=True)
-
+        # --- Check available position slots ---
         if risk_manager:
             pos_count = len(risk_manager._open_positions) + len(risk_manager._pending_intents)
             available_slots = max(0, self.config.max_positions - pos_count)
+            if available_slots == 0:
+                logger.info("All %d position slots full, skipping scan", self.config.max_positions)
+                return
         else:
             available_slots = self.config.max_positions
 
-        ranking_str = ", ".join(f"{c[0]}({c[2]:.2f})" for c in candidates)
-        if available_slots > 0:
-            logger.info(
-                "Collected %d candidates, %d slots available: [%s]",
-                len(candidates), available_slots, ranking_str,
-            )
-        else:
-            logger.info(
-                "Found %d candidates but all %d slots full: [%s]",
-                len(candidates), self.config.max_positions, ranking_str,
-            )
+        # --- Get portfolio state for prompt context ---
+        portfolio = {"cash_balance": 0.0, "asset_position": 0.0, "total_account_value": 0.0}
+        try:
+            account = await self._exchange.get_account_state()
+            equity = float(account.get("equity", 0))
+            portfolio = {
+                "cash_balance": equity,
+                "asset_position": 0.0,
+                "total_account_value": equity,
+            }
+        except Exception as e:
+            logger.warning("Could not fetch account state: %s", e)
 
+        # --- Filter assets: skip those with open positions ---
+        symbols_with_positions: set = set()
+        if risk_manager:
+            symbols_with_positions = set(risk_manager._open_positions.keys())
+
+        scan_assets = [s for s in self.config.assets if s not in symbols_with_positions]
+
+        # --- Update market states for execution engine ---
+        market_state_svc = self._services.get("market_state")
+        if market_state_svc:
+            states = market_state_svc.get_all_states()
+            exec_engine = self._services.get("execution")
+            if exec_engine and states:
+                exec_engine.update_market_states(states)
+
+            cf_logger = self._services.get("counterfactual_logger")
+            if cf_logger and states:
+                cf_logger.update_market_states(states)
+
+        # --- Run FLAG-Trader model ---
+        decisions = await self._flag_agent.scan_and_decide(
+            assets=scan_assets,
+            candle_fetcher=self._exchange,
+            portfolio=portfolio,
+        )
+
+        if not decisions:
+            logger.info("FLAG-Trader: no actionable decisions this scan")
+            return
+
+        logger.info(
+            "FLAG-Trader: %d actionable decisions, %d slots available",
+            len(decisions), available_slots,
+        )
+
+        # --- Execute decisions ---
         executed = 0
-        for _, setup, _, _ in candidates:
+        for decision in decisions:
             if executed >= available_slots:
                 break
             if risk_manager:
@@ -1101,162 +805,98 @@ class ConservativeBot:
                 if cur_count >= self.config.max_positions:
                     logger.info("All slots filled during execution, stopping")
                     break
-            if await self._execute_setup(setup):
+
+            success = await self._execute_flag_decision(decision)
+            if success:
                 executed += 1
+                self._flag_agent.record_action(decision.action_name)
 
-    def _is_volume_breakout(self, state: MarketState) -> bool:
-        """Check if current candle qualifies as a volume breakout.
+    async def _execute_flag_decision(self, decision: TradeDecision) -> bool:
+        """Convert a FLAG-Trader decision into a Setup and execute it.
 
-        Conditions:
-        - volume_ratio >= config threshold (volume spike vs SMA20)
-        - candle body >= config threshold (volume moved the price)
-        - atr_pct >= config threshold (market is alive)
-        - RSI within config bounds (not in extremes)
+        Returns True if the setup was forwarded to risk manager.
         """
-        cfg = self.config
-        vol_ratio = float(state.volume_ratio) if state.volume_ratio is not None else 0.0
-        if vol_ratio < cfg.volume_breakout_min_volume_ratio:
+        # Map action to direction
+        if decision.action == 2:  # Buy
+            direction = Direction.LONG
+        elif decision.action == 0:  # Sell
+            direction = Direction.SHORT
+        else:
             return False
 
-        close = float(state.close)
-        open_price = float(state.open)
-        if open_price <= 0:
-            return False
-        candle_body_pct = abs(close - open_price) / open_price * 100
-        if candle_body_pct < cfg.volume_breakout_min_candle_body_pct:
-            return False
+        # Get current price from market state or exchange
+        market_state_svc = self._services.get("market_state")
+        states = market_state_svc.get_all_states() if market_state_svc else {}
+        state = states.get(decision.symbol)
 
-        if float(state.atr_pct) < cfg.volume_breakout_min_atr_pct:
-            return False
-
-        rsi = float(state.rsi)
-        if not (cfg.volume_breakout_rsi_min <= rsi <= cfg.volume_breakout_rsi_max):
-            return False
-
-        return True
-
-    @staticmethod
-    def _breakout_direction(state: MarketState) -> Direction:
-        """Determine breakout direction from price momentum (NOT EMA).
-
-        LONG: close > open AND close > prev_close
-        SHORT: close < open AND close < prev_close
-        """
-        close = float(state.close)
-        open_price = float(state.open)
-        prev_close = float(state.prev_close) if state.prev_close is not None else close
-
-        if close > open_price and close > prev_close:
-            return Direction.LONG
-        if close < open_price and close < prev_close:
-            return Direction.SHORT
-        return Direction.FLAT
-
-    def _is_momentum_burst(self, state: MarketState) -> bool:
-        """Check if current bar qualifies as a momentum burst.
-
-        Conditions:
-        - RSI slope (rsi_slope from MarketState) >= config threshold
-        - Price > EMA9 for LONG (close < EMA9 for SHORT)
-        - Candle body >= config threshold
-        - RSI <= max_rsi_entry for LONG (>= 100-max for SHORT)
-        - Volume ratio >= config threshold
-        """
-        cfg = self.config
-        rsi_slope = float(state.rsi_slope)
-
-        # Need significant RSI movement in either direction
-        if abs(rsi_slope) < cfg.momentum_burst_min_rsi_slope:
+        if state is not None:
+            entry_price = state.close
+            atr = state.atr
+            atr_pct = state.atr_pct
+            adx = state.adx
+            rsi = state.rsi
+            regime = state.regime
+        else:
+            logger.warning("No MarketState for %s, skipping", decision.symbol)
             return False
 
-        close = float(state.close)
-        open_price = float(state.open)
-        if open_price <= 0:
-            return False
+        # Calculate stop price
+        sl_pct = Decimal(str(self.config.stop_loss_pct))
+        if direction == Direction.LONG:
+            stop_price = entry_price * (Decimal("1") - sl_pct / Decimal("100"))
+        else:
+            stop_price = entry_price * (Decimal("1") + sl_pct / Decimal("100"))
 
-        candle_body_pct = abs(close - open_price) / open_price * 100
-        if candle_body_pct < cfg.momentum_burst_min_candle_body_pct:
-            return False
+        setup = Setup(
+            id=f"flag_{uuid.uuid4().hex[:8]}",
+            symbol=decision.symbol,
+            timestamp=datetime.now(timezone.utc),
+            setup_type=SetupType.MOMENTUM,
+            direction=direction,
+            regime=regime,
+            entry_price=entry_price,
+            stop_price=stop_price,
+            stop_distance_pct=sl_pct,
+            atr=atr,
+            atr_pct=atr_pct,
+            adx=adx,
+            rsi=rsi,
+            setup_quality=Decimal(str(round(abs(decision.confidence), 4))),
+            confidence=Decimal(str(round(abs(decision.confidence), 4))),
+        )
 
-        vol_ratio = float(state.volume_ratio) if state.volume_ratio is not None else 0.0
-        if vol_ratio < cfg.momentum_burst_min_volume_ratio:
-            return False
+        logger.info(
+            "FLAG-Trader | %s %s | confidence=%.4f | regime=%s | entry=$%s",
+            direction.value.upper(),
+            decision.symbol,
+            decision.confidence,
+            regime.value.upper(),
+            entry_price,
+        )
 
-        return True
-
-    def _momentum_burst_direction(self, state: MarketState) -> Direction:
-        """Determine momentum burst direction from RSI slope + price action.
-
-        LONG: RSI rising + close > open + close > EMA9 + RSI <= max_entry
-        SHORT: RSI falling + close < open + close < EMA9 + RSI >= (100-max_entry)
-        """
-        cfg = self.config
-        rsi_slope = float(state.rsi_slope)
-        close = float(state.close)
-        open_price = float(state.open)
-        ema9 = float(state.ema9) if state.ema9 is not None else close
-        rsi = float(state.rsi)
-
-        if (rsi_slope >= cfg.momentum_burst_min_rsi_slope
-                and close > ema9
-                and close > open_price
-                and rsi <= cfg.momentum_burst_max_rsi_entry):
-            return Direction.LONG
-
-        if (rsi_slope <= -cfg.momentum_burst_min_rsi_slope
-                and close < ema9
-                and close < open_price
-                and rsi >= (100 - cfg.momentum_burst_max_rsi_entry)):
-            return Direction.SHORT
-
-        return Direction.FLAT
-
-    async def _execute_setup(self, setup: Setup) -> bool:
-        """Execute a setup: check spread and tick size, then publish to risk manager.
-
-        Returns True if setup was forwarded, False if skipped.
-        """
-        # Check bid-ask spread before entering
+        # --- Spread check ---
         if self._exchange:
             spread_pct = await self._exchange.get_spread_pct(setup.symbol)
             if spread_pct > self.config.max_spread_pct:
                 logger.info(
-                    "SKIP %s: bid-ask spread %.3f%% > max %.2f%% (illiquid)",
+                    "SKIP %s: spread %.3f%% > max %.2f%%",
                     setup.symbol, spread_pct, self.config.max_spread_pct,
                 )
-                cf_logger = self._services.get("counterfactual_logger")
-                if cf_logger:
-                    cf_logger.log_rejection(
-                        symbol=setup.symbol,
-                        direction=setup.direction.value,
-                        entry_price=float(setup.entry_price),
-                        reason="spread",
-                        ml_probability=float(getattr(setup, "confidence", 0) or 0),
-                    )
                 return False
 
-        # Check tick size vs TP/SL — skip if rounding would collapse stops
-        price = float(setup.entry_price)
+        # --- Tick size check ---
+        price = float(entry_price)
         if price > 0:
             from math import log10, floor
             magnitude = floor(log10(price))
             max_decimals = min(4, max(0, 4 - magnitude))
             min_tick = 10 ** (-max_decimals)
-            tp_distance = price * self.config.stop_loss_pct / 100  # SL is smaller than TP
+            tp_distance = price * self.config.stop_loss_pct / 100
             if tp_distance < min_tick * 1.5:
                 logger.info(
-                    "SKIP %s: price $%.6f too low for TP/SL (tick=%.6f, SL_dist=%.6f)",
-                    setup.symbol, price, min_tick, tp_distance,
+                    "SKIP %s: price $%.6f too low for TP/SL",
+                    setup.symbol, price,
                 )
-                cf_logger = self._services.get("counterfactual_logger")
-                if cf_logger:
-                    cf_logger.log_rejection(
-                        symbol=setup.symbol,
-                        direction=setup.direction.value,
-                        entry_price=price,
-                        reason="tick_size",
-                        ml_probability=float(getattr(setup, "confidence", 0) or 0),
-                    )
                 return False
 
         # Publish setup for risk manager
@@ -1310,16 +950,7 @@ class ConservativeBot:
         logger.info("All services started")
 
     async def _startup_safety_check(self) -> None:
-        """Check for config mismatches with existing positions at startup.
-
-        Emits warnings (log + ntfy) but does NOT close positions or modify
-        orders — the operator decides what to do.
-
-        Checks:
-        1. Open positions > max_positions
-        2. Leverage mismatch between config and exchange
-        3. Duplicate reduce-only orders
-        """
+        """Check for config mismatches with existing positions at startup."""
         execution = self._services.get("execution")
         if not execution:
             return
@@ -1330,7 +961,6 @@ class ConservativeBot:
 
         warnings: list[str] = []
 
-        # 1. Position count vs max_positions
         max_pos = self.config.max_positions
         if len(positions) > max_pos:
             msg = (
@@ -1341,7 +971,6 @@ class ConservativeBot:
             logger.warning(msg)
             warnings.append(msg)
 
-        # 2. Leverage mismatch
         configured_leverage = self.config.leverage
         for symbol, pos in positions.items():
             pos_leverage = getattr(pos, "leverage", None)
@@ -1353,7 +982,6 @@ class ConservativeBot:
                 logger.warning(msg)
                 warnings.append(msg)
 
-        # 3. Duplicate reduce-only orders
         try:
             open_orders = await self._exchange.get_open_orders()
             for symbol in positions:
@@ -1371,7 +999,6 @@ class ConservativeBot:
         except Exception as e:
             logger.warning("Could not check orders for safety audit: %s", e)
 
-        # Send ntfy alert if any warnings found
         if warnings:
             ntfy = self._services.get("ntfy") or self._services.get("whatsapp")
             alert_text = "STARTUP SAFETY CHECK\n" + "\n".join(warnings)
@@ -1387,14 +1014,7 @@ class ConservativeBot:
             logger.info("Startup safety check: all clear")
 
     async def _init_regime_for_open_positions(self) -> None:
-        """Initialize confirmed regime to TREND for symbols with open positions.
-
-        After a restart, MarketStateService has an empty _confirmed_regime dict.
-        The first reading would become confirmed immediately, bypassing the
-        N-bar confirmation requirement. This seeds TREND for any symbol where
-        the execution engine already has an open position, so regime change
-        confirmation works correctly from the first scan.
-        """
+        """Initialize confirmed regime to TREND for symbols with open positions."""
         execution = self._services.get("execution")
         market_state_svc = self._services.get("market_state")
         if not execution or not market_state_svc:
@@ -1429,7 +1049,7 @@ class ConservativeBot:
             return
 
         logger.info("=" * 60)
-        logger.info("HLQuantBot v4 - XGBoost ML Starting")
+        logger.info("HLQuantBot v5 - FLAG-Trader LLM Starting")
         logger.info("=" * 60)
 
         try:
@@ -1442,6 +1062,9 @@ class ConservativeBot:
             await self._init_exchange()
             await self._load_dynamic_assets()
 
+            # Initialize FLAG-Trader model
+            self._init_flag_trader()
+
             self._init_services()
 
             await self._start_services()
@@ -1449,12 +1072,11 @@ class ConservativeBot:
             # SAFETY: Check for config mismatches with existing positions
             await self._startup_safety_check()
 
-            # Initialize confirmed regime for open positions to prevent
-            # false regime changes after restart (Problem 4 fix)
+            # Initialize confirmed regime for open positions
             await self._init_regime_for_open_positions()
 
             self._strategy_task = asyncio.create_task(
-                self._strategy_loop(), name="ml_evaluation_loop",
+                self._strategy_loop(), name="flag_trader_loop",
             )
             self._health_task = asyncio.create_task(
                 self._health_loop(), name="health_loop",
@@ -1470,14 +1092,14 @@ class ConservativeBot:
                 if self.kill_switch:
                     await self.kill_switch.update_equity(Decimal(str(equity)))
 
-            effective_threshold = self.config.ml_min_probability
+            ft_cfg = FlagTraderConfig.from_dict(self.config.flag_trader_config)
             logger.info("=" * 60)
             logger.info(
-                "HLQuantBot v4 Running (%s) | ML threshold: %.0f%%",
+                "HLQuantBot v5 Running (%s) | FLAG-Trader: %s",
                 "TESTNET" if self.config.testnet else "MAINNET",
-                effective_threshold * 100,
+                ft_cfg.model_name,
             )
-            logger.info("Assets: %d", len(self.config.assets))
+            logger.info("Assets: %d | Confidence threshold: %.2f", len(self.config.assets), ft_cfg.confidence_threshold)
             logger.info("Risk per trade: %.1f%% | Max DD: %.1f%%",
                         self.config.per_trade_pct, self.config.max_drawdown_pct)
             logger.info("=" * 60)
@@ -1493,7 +1115,7 @@ class ConservativeBot:
             return
 
         logger.info("=" * 60)
-        logger.info("HLQuantBot v4 Stopping")
+        logger.info("HLQuantBot v5 Stopping")
         logger.info("=" * 60)
 
         self._running = False
@@ -1515,7 +1137,7 @@ class ConservativeBot:
             await self._exchange.disconnect()
 
         logger.info("=" * 60)
-        logger.info("HLQuantBot v4 Stopped")
+        logger.info("HLQuantBot v5 Stopped")
         logger.info("=" * 60)
 
     async def run(self) -> None:
@@ -1559,6 +1181,8 @@ class ConservativeBot:
             except Exception as e:
                 service_status[name] = {"healthy": False, "message": str(e)}
 
+        ft_cfg = FlagTraderConfig.from_dict(self.config.flag_trader_config) if self._config else None
+
         return {
             "running": self._running,
             "start_time": self._start_time.isoformat() if self._start_time else None,
@@ -1571,6 +1195,7 @@ class ConservativeBot:
                 "testnet": self.config.testnet if self._config else True,
                 "risk_per_trade": self.config.per_trade_pct if self._config else 0,
                 "max_drawdown": self.config.max_drawdown_pct if self._config else 0,
+                "flag_trader_model": ft_cfg.model_name if ft_cfg else "N/A",
             },
             "services": service_status,
         }
@@ -1589,7 +1214,7 @@ async def main(config_path: str = "crypto_bot/config/trading.yaml") -> None:
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="HLQuantBot v4 - XGBoost ML Trading System")
+    parser = argparse.ArgumentParser(description="HLQuantBot v5 - FLAG-Trader LLM Trading System")
     parser.add_argument("-c", "--config", default="crypto_bot/config/trading.yaml")
     parser.add_argument("-v", "--verbose", action="store_true")
 

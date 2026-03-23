@@ -303,7 +303,21 @@ metrics:
   track_by_regime: true
 
 # -----------------------------------------------------------------------------
-# ML Model - XGBoost trade selector
+# FLAG-Trader — LLM-based trade decisor (replaces XGBoost)
+# -----------------------------------------------------------------------------
+flag_trader:
+  enabled: true
+  model_name: "HuggingFaceTB/SmolLM2-135M-Instruct"
+  checkpoint_path: "models/flag_trader/checkpoint_final.pt"
+  device: "cpu"
+  scan_interval_seconds: 300
+  max_assets_to_scan: 10
+  candle_window: 20
+  candle_interval: "15m"
+  confidence_threshold: 0.6
+
+# -----------------------------------------------------------------------------
+# ML Model - XGBoost trade selector (LEGACY — replaced by flag_trader)
 # -----------------------------------------------------------------------------
 ml_model:
   enabled: true
