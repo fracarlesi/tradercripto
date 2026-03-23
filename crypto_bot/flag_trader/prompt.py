@@ -111,12 +111,18 @@ class PromptBuilder:
             - "Buy"
             - Action: Buy
             - buy / SELL / Hold (case-insensitive)
+            - <think>...</think> {"Action": "Buy"} (Qwen thinking mode)
 
         Returns:
             0 = Sell, 1 = Hold, 2 = Buy.
             Defaults to 1 (Hold) if parsing fails.
         """
         text = llm_output.strip()
+
+        # Strip Qwen-style thinking blocks
+        think_match = re.search(r"</think>\s*", text)
+        if think_match:
+            text = text[think_match.end():].strip()
 
         # Try JSON parse first
         try:

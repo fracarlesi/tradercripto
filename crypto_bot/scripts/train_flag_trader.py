@@ -70,6 +70,7 @@ def main() -> None:
     parser.add_argument("--eval-every", type=int, default=25, help="Evaluate every N updates")
     parser.add_argument("--save-every", type=int, default=50, help="Save checkpoint every N updates")
     parser.add_argument("--model-name", type=str, default="HuggingFaceTB/SmolLM2-135M-Instruct", help="HuggingFace model ID")
+    parser.add_argument("--device", type=str, default="auto", choices=["auto", "cpu", "cuda", "mps"], help="Device (default: auto)")
     args = parser.parse_args()
 
     # Load data
@@ -78,7 +79,7 @@ def main() -> None:
 
     # Create components
     print(f"Loading model {args.model_name}...")
-    model = FlagTraderModel(model_name=args.model_name, device="cpu")
+    model = FlagTraderModel(model_name=args.model_name, device=args.device)
     prompt_builder = PromptBuilder()
 
     train_env = HyperliquidTradingEnv(candles=train_candles)
