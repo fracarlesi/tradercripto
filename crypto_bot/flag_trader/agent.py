@@ -37,6 +37,17 @@ class TradeDecision:
 
 
 @dataclass
+class ExitDecision:
+    """Decision on whether to close an existing position."""
+
+    symbol: str
+    should_close: bool
+    action_name: str  # what the model said (BUY/SELL/HOLD)
+    confidence: float
+    reason: str  # "model_reversal" or "hold"
+
+
+@dataclass
 class FlagTraderConfig:
     """Configuration for the FLAG-Trader agent."""
 
@@ -199,6 +210,109 @@ class FlagTraderAgent:
             action_name=action_name,
             confidence=state_value,
             log_prob=float(log_prob),
+        )
+
+    async def evaluate_position(
+        self,
+        symbol: str,
+        direction: str,  # "long" or "short"
+        entry_price: float,
+        pnl_pct: float,
+        candle_fetcher: Any,
+        portfolio: dict[str, float] | None = None,
+    ) -> ExitDecision:
+        """Evaluate whether an open position should be closed.
+
+        Uses the LLM to decide: if model says opposite direction
+        (LONG+SELL or SHORT+BUY), the position should be closed.
+        """
+        if portfolio is None:
+            portfolio = {"cash_balance": 0.0, "asset_position": 0.0, "total_account_value": 0.0}
+
+        candles_raw = await candle_fetcher.get_candles(
+            symbol,
+            interval=self.config.candle_interval,
+            limit=self.config.candle_window + 5,
+        )
+
+        if not candles_raw or len(candles_raw) < self.config.candle_window:
+            logger.debug("Insufficient candle data for position eval %s", symbol)
+            return ExitDecision(
+                symbol=symbol, should_close=False, action_name="HOLD",
+                confidence=0.0, reason="insufficient_data",
+            )
+
+        candles = self._candles_to_prompt_format(candles_raw)
+        history = {
+            "recent_rewards": [],
+            "net_values": [],
+            "actions": self._trade_history[-10:],
+        }
+
+        similar_text = ""
+        if self.trade_memory_rag:
+            ms_dict = self._build_market_state_dict(candles)
+            similar = self.trade_memory_rag.find_similar_trades(symbol, ms_dict)
+            similar_text = self.trade_memory_rag.format_for_prompt(similar)
+
+        position_info = {
+            "direction": direction,
+            "symbol": symbol,
+            "entry_price": entry_price,
+            "pnl_pct": pnl_pct,
+        }
+
+        prompt = self.prompt_builder.build_prompt(
+            candles, portfolio, history,
+            similar_trades_text=similar_text,
+            position_info=position_info,
+        )
+        action_id, state_value, log_prob = self.model.get_action(prompt)
+        action_name = ACTION_NAMES.get(action_id, "HOLD")
+
+        # Determine if model wants to reverse position
+        should_close = False
+        reason = "hold"
+        if direction == "long" and action_id == 0:  # LONG + SELL
+            should_close = True
+            reason = "model_reversal"
+        elif direction == "short" and action_id == 2:  # SHORT + BUY
+            should_close = True
+            reason = "model_reversal"
+
+        logger.info(
+            "FLAG-Trader EXIT eval | %s %s | model=%s | value=%.4f | close=%s",
+            direction.upper(), symbol, action_name, state_value, should_close,
+        )
+
+        # Log decision
+        if self.trade_logger:
+            closes = [c["close"] for c in candles]
+            candles_summary = {
+                "last_close": closes[-1] if closes else 0.0,
+                "pct_change_20": ((closes[-1] / closes[0]) - 1) * 100 if len(closes) >= 2 and closes[0] != 0 else 0.0,
+                "volume_avg": sum(c["volume"] for c in candles) / len(candles) if candles else 0.0,
+            }
+            ms_summary = self._build_market_state_dict(candles) if candles else None
+            record = TradeRecord(
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                symbol=symbol,
+                action=f"EXIT_EVAL_{action_name}",
+                action_id=action_id,
+                confidence=state_value,
+                log_prob=float(log_prob),
+                candles_summary=candles_summary,
+                portfolio=portfolio,
+                market_state_summary=ms_summary,
+            )
+            self.trade_logger.log_decision(record)
+
+        return ExitDecision(
+            symbol=symbol,
+            should_close=should_close,
+            action_name=action_name,
+            confidence=state_value,
+            reason=reason,
         )
 
     @staticmethod

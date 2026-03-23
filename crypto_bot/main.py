@@ -67,7 +67,7 @@ from .services.telegram_service import TelegramService
 from .services.whatsapp_service import WhatsAppService
 
 # FLAG-Trader
-from .flag_trader.agent import FlagTraderAgent, FlagTraderConfig, TradeDecision
+from .flag_trader.agent import ExitDecision, FlagTraderAgent, FlagTraderConfig, TradeDecision
 from .flag_trader.model import FlagTraderModel
 from .flag_trader.prompt import PromptBuilder
 from .flag_trader.trade_logger import FlagTradeLogger
@@ -750,13 +750,10 @@ class ConservativeBot:
                 )
                 return
 
-        # --- Check available position slots ---
+        # --- Check available position slots (used later for new trades) ---
         if risk_manager:
             pos_count = len(risk_manager._open_positions) + len(risk_manager._pending_intents)
             available_slots = max(0, self.config.max_positions - pos_count)
-            if available_slots == 0:
-                logger.info("All %d position slots full, skipping scan", self.config.max_positions)
-                return
         else:
             available_slots = self.config.max_positions
 
@@ -778,14 +775,64 @@ class ConservativeBot:
         if risk_manager:
             symbols_with_positions = set(risk_manager._open_positions.keys())
 
+        # --- Phase 1: Evaluate open positions for early exit ---
+        if risk_manager and symbols_with_positions:
+            for symbol in list(symbols_with_positions):
+                # If triggered_symbols is set, only evaluate triggered ones
+                if triggered_symbols and symbol not in triggered_symbols:
+                    continue
+                pos = risk_manager._open_positions.get(symbol)
+                if not pos:
+                    continue
+                try:
+                    # Calculate PnL %
+                    entry_px = float(pos.get("entry_price", 0))
+                    mark_px = float(pos.get("mark_price", entry_px))
+                    side = pos.get("side", "long")
+                    if entry_px > 0:
+                        if side == "long":
+                            pnl_pct = ((mark_px / entry_px) - 1.0) * 100.0
+                        else:
+                            pnl_pct = ((entry_px / mark_px) - 1.0) * 100.0 if mark_px > 0 else 0.0
+                    else:
+                        pnl_pct = 0.0
+
+                    exit_decision = await self._flag_agent.evaluate_position(
+                        symbol=symbol,
+                        direction=side,
+                        entry_price=entry_px,
+                        pnl_pct=pnl_pct,
+                        candle_fetcher=self._exchange,
+                        portfolio=portfolio,
+                    )
+                    if exit_decision.should_close:
+                        logger.info(
+                            "FLAG-Trader EXIT | CLOSE %s %s | confidence=%.4f | reason=%s",
+                            side.upper(), symbol, exit_decision.confidence, exit_decision.reason,
+                        )
+                        exec_engine = self._services.get("execution")
+                        if exec_engine:
+                            await exec_engine.close_position(symbol)
+                except Exception as e:
+                    logger.warning("Error evaluating position %s: %s", symbol, e)
+
+        # --- Phase 2: Evaluate new trade candidates (no open position) ---
         if triggered_symbols:
-            # Event-driven: only evaluate the assets that triggered
             scan_assets = [s for s in triggered_symbols if s not in symbols_with_positions]
             logger.info("Targeted scan: %d triggered assets → %d after position filter",
                         len(triggered_symbols), len(scan_assets))
         else:
-            # Scheduled fallback: scan top N from universe
             scan_assets = [s for s in self.config.assets if s not in symbols_with_positions]
+
+        # --- Recheck slots after exit evaluations ---
+        if risk_manager:
+            pos_count = len(risk_manager._open_positions) + len(risk_manager._pending_intents)
+            available_slots = max(0, self.config.max_positions - pos_count)
+
+        if not scan_assets or available_slots == 0:
+            if available_slots == 0:
+                logger.info("All %d position slots full, skipping new trade scan", self.config.max_positions)
+            return
 
         # --- Update market states for execution engine ---
         market_state_svc = self._services.get("market_state")

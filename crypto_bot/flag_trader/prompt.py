@@ -29,6 +29,7 @@ class PromptBuilder:
         portfolio: dict[str, float],
         history: dict[str, list[Any]],
         similar_trades_text: str = "",
+        position_info: dict[str, Any] | None = None,
     ) -> str:
         """Build a structured prompt from market state.
 
@@ -75,6 +76,17 @@ class PromptBuilder:
         prompt += json.dumps(state, indent=2)
         if similar_trades_text:
             prompt += "\n\n" + similar_trades_text
+        if position_info:
+            direction = position_info.get("direction", "long").upper()
+            symbol = position_info.get("symbol", "?")
+            entry_price = position_info.get("entry_price", 0.0)
+            pnl_pct = position_info.get("pnl_pct", 0.0)
+            prompt += (
+                f"\n\nCurrent Position:\n"
+                f"You are currently {direction} {symbol} from ${entry_price:.2f}, "
+                f"unrealized PnL: {pnl_pct:+.1f}%\n"
+                f"Consider whether to maintain or reverse your position."
+            )
         prompt += (
             '\n\nOutput Action: Format your answer as JSON: '
             '{"Action": "Buy"}, {"Action": "Sell"}, or {"Action": "Hold"}'
