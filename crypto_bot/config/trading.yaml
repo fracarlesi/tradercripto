@@ -307,8 +307,8 @@ metrics:
 # -----------------------------------------------------------------------------
 flag_trader:
   enabled: true
-  model_name: "HuggingFaceTB/SmolLM2-135M-Instruct"
-  checkpoint_path: "models/flag_trader/checkpoint_final.pt"
+  model_name: "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
+  checkpoint_path: "models/flag_trader_deepseek/final_model.pt"
   device: "cpu"
   scan_interval_seconds: 300
   max_assets_to_scan: 10
