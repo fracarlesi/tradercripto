@@ -54,12 +54,15 @@ class FlagTraderModel(nn.Module):
         self.device = _resolve_device(device)
         self.model_name = model_name
 
-        # Load pretrained LLM
+        # Load pretrained LLM - always load in float32 for compatibility
+        # Some models (e.g. Qwen 3.5) use bfloat16 internally which MPS doesn't support
         self.llm = AutoModelForCausalLM.from_pretrained(
             model_name,
             torch_dtype=torch.float32,
             trust_remote_code=True,
         )
+        # Force ALL parameters to float32 (some models have mixed dtypes internally)
+        self.llm = self.llm.float()
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_name, trust_remote_code=True
         )
@@ -199,6 +202,8 @@ class FlagTraderModel(nn.Module):
             (logits, value) where logits is (batch, 3) and value is (batch, 1).
         """
         hidden = self._extract_last_hidden(input_ids, attention_mask)
+        # Ensure float32 for heads (some models use bfloat16 internally)
+        hidden = hidden.float()
         logits = self.policy_head(hidden)
         value = self.value_head(hidden)
         return logits, value
