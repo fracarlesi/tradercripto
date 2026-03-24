@@ -1,56 +1,113 @@
-"""Autonomous research loop for FLAG-Trader.
+"""Autonomous research loop for FLAG-Trader (DeepSeek / model-driven).
 
-Iterates through hyperparameter experiments, keeping improvements.
+Trains models with different hyperparameters and validates with the replay engine.
+Designed to run on RunPod (GPU) -- training AND replay on the same machine.
 
 Usage:
     python -m scripts.run_autoresearch --data-dir data/candles --max-experiments 20 --time-budget 300
+    python -m scripts.run_autoresearch --device cuda --time-budget 600  # RunPod with GPU
 """
 
 import argparse
 import logging
+import sys
 from pathlib import Path
+
+# Ensure project root is on sys.path
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from crypto_bot.flag_trader.autoresearch import AutoResearcher
 from crypto_bot.flag_trader.data_collector import HyperliquidDataCollector
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s | %(message)s",
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     datefmt="%H:%M:%S",
 )
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="FLAG-Trader Autoresearch")
-    parser.add_argument("--data-dir", default="data/candles")
-    parser.add_argument("--max-experiments", type=int, default=20)
-    parser.add_argument("--time-budget", type=float, default=300, help="Minutes")
-    parser.add_argument("--results", default="experiments.json")
-    parser.add_argument("--train-months", type=int, default=4)
-    parser.add_argument("--test-months", type=int, default=2)
-    args = parser.parse_args()
+def load_candles_by_symbol(
+    data_dir: Path,
+    assets: list[str] | None = None,
+) -> dict[str, list[dict]]:
+    """Load candle data from parquet files.
 
-    # Load candles
-    collector = HyperliquidDataCollector(Path(args.data_dir))
+    Args:
+        data_dir: Directory containing parquet files.
+        assets: Optional list of symbols to load. If None, loads all available.
+
+    Returns:
+        Dict mapping symbol -> list of candle dicts.
+    """
+    collector = HyperliquidDataCollector(data_dir=data_dir)
     available = collector.list_available()
     if not available:
-        print(f"No data in {args.data_dir}. Run download_candles.py first.")
-        return
+        raise FileNotFoundError(f"No candle data in {data_dir}. Run download_candles.py first.")
 
-    # Use largest available dataset
-    all_candles = []
-    for symbol in available:
+    if assets:
+        symbols = [s for s in assets if s in available]
+        missing = [s for s in assets if s not in available]
+        if missing:
+            logging.warning("Requested assets not found: %s", ", ".join(missing))
+    else:
+        symbols = available
+
+    result: dict[str, list[dict]] = {}
+    for symbol in symbols:
         df = collector.load_candles(symbol)
-        all_candles.append(df[["open", "high", "low", "close", "volume"]].values)
+        candles = [
+            {
+                "open": float(row["open"]),
+                "high": float(row["high"]),
+                "low": float(row["low"]),
+                "close": float(row["close"]),
+                "volume": float(row["volume"]),
+            }
+            for _, row in df.iterrows()
+        ]
+        result[symbol] = candles
 
-    candles = max(all_candles, key=len)
-    print(f"Using {len(candles)} candles for research")
+    total_bars = sum(len(c) for c in result.values())
+    logging.info("Loaded %d assets, %d total candles", len(result), total_bars)
+    return result
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="FLAG-Trader Autoresearch (DeepSeek)")
+    parser.add_argument("--data-dir", default="data/candles", help="Candle parquet directory")
+    parser.add_argument("--assets", nargs="+", default=None, help="Symbols to use (default: all)")
+    parser.add_argument("--max-experiments", type=int, default=20, help="Max experiments to run")
+    parser.add_argument("--time-budget", type=float, default=300, help="Time budget in minutes")
+    parser.add_argument("--results", default="experiments.json", help="Results JSON file")
+    parser.add_argument(
+        "--device", default="auto", choices=["auto", "cpu", "cuda", "mps"],
+        help="Device for model (default: auto-detect)",
+    )
+    parser.add_argument(
+        "--model-name", default=None,
+        help="Override model name (default: DeepSeek-R1-Distill-Qwen-1.5B)",
+    )
+    args = parser.parse_args()
+
+    data_dir = Path(args.data_dir)
+    if not data_dir.is_absolute():
+        data_dir = PROJECT_ROOT / data_dir
+
+    # Load candles
+    candles_by_symbol = load_candles_by_symbol(data_dir, args.assets)
+
+    # Build baseline config override
+    baseline_config: dict = {}
+    if args.model_name:
+        baseline_config["model_name"] = args.model_name
 
     researcher = AutoResearcher(
-        candles=candles,
+        candles_by_symbol=candles_by_symbol,
+        baseline_config=baseline_config,
         results_file=Path(args.results),
-        train_months=args.train_months,
-        test_months=args.test_months,
+        device=args.device,
     )
 
     researcher.run(
