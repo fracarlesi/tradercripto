@@ -400,6 +400,19 @@ def df_to_candle_list(df: pd.DataFrame) -> list[dict]:
     return records
 
 
+def resolve_assets(assets: list[str], data_dir: Path, interval: str = "15m") -> list[str]:
+    """Resolve asset list. If ['all'], scan data_dir for cached parquets."""
+    if len(assets) == 1 and assets[0].lower() == "all":
+        collector = HyperliquidDataCollector(data_dir=data_dir)
+        available = collector.list_available()
+        if not available:
+            logger.warning("No cached parquet files found in %s", data_dir)
+            return []
+        logger.info("Found %d cached assets: %s", len(available), ", ".join(available))
+        return available
+    return assets
+
+
 async def fetch_or_load_candles(
     assets: list[str],
     days: int,
@@ -443,7 +456,7 @@ def parse_args() -> argparse.Namespace:
         description="FLAG-Trader Replay Engine -- backtest on historical candles"
     )
     parser.add_argument("--days", type=int, default=7, help="Days of history to replay")
-    parser.add_argument("--assets", nargs="+", default=["BTC", "ETH", "SOL"], help="Assets to replay")
+    parser.add_argument("--assets", nargs="+", default=["all"], help="Assets to replay (default: 'all' = all cached parquets in data-dir)")
     parser.add_argument("--model", default="HuggingFaceTB/SmolLM2-135M-Instruct", help="HuggingFace model name")
     parser.add_argument("--checkpoint", default="models/flag_trader_deepseek/final_model.pt", help="Checkpoint path")
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"])
@@ -502,9 +515,14 @@ async def main() -> None:
             module.training = False
     logger.info("Model loaded successfully")
 
-    # 2. Fetch/load candles
+    # 2. Resolve assets and fetch/load candles
+    assets = resolve_assets(args.assets, data_dir, interval="15m")
+    if not assets:
+        logger.error("No assets to replay. Add parquet files to %s or specify --assets.", data_dir)
+        sys.exit(1)
+
     candles_by_symbol = await fetch_or_load_candles(
-        assets=args.assets,
+        assets=assets,
         days=args.days,
         data_dir=data_dir,
         interval="15m",
