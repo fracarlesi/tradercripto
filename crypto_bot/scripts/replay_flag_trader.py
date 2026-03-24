@@ -28,6 +28,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from crypto_bot.flag_trader.data_collector import HyperliquidDataCollector
+from crypto_bot.flag_trader.market_context import compute_market_context
 from crypto_bot.flag_trader.model import FlagTraderModel
 from crypto_bot.flag_trader.prompt import PromptBuilder
 
@@ -131,6 +132,7 @@ class FlagTraderReplay:
         self.position_pct: float = config.get("position_pct", 0.25)
         self.maker_fee: float = 0.0002  # 0.02%
         self.taker_fee: float = 0.0005  # 0.05%
+        self.use_market_context: bool = config.get("use_market_context", True)
         self._action_history: list[str] = []
 
     def run(
@@ -226,7 +228,11 @@ class FlagTraderReplay:
                     for c in window
                 ]
 
-                action_id, confidence, tp_pct, sl_pct = self._evaluate_symbol(candles_prompt)
+                # Pass all candles up to current bar for market context
+                all_candles_to_now = all_candles[: bar_idx + 1]
+                action_id, confidence, tp_pct, sl_pct = self._evaluate_symbol(
+                    candles_prompt, all_candles=all_candles_to_now, symbol=symbol,
+                )
 
                 # Only act on BUY/SELL above threshold
                 if action_id == 1:  # HOLD
@@ -281,7 +287,12 @@ class FlagTraderReplay:
 
         return self._build_result(closed_trades, equity, equity_curve, max_dd_pct)
 
-    def _evaluate_symbol(self, candles: list[dict[str, float]]) -> tuple[int, float, float, float]:
+    def _evaluate_symbol(
+        self,
+        candles: list[dict[str, float]],
+        all_candles: list[dict] | None = None,
+        symbol: str = "",
+    ) -> tuple[int, float, float, float]:
         """Run model inference, same as live agent."""
         portfolio = {
             "cash_balance": 0.0,
@@ -293,7 +304,12 @@ class FlagTraderReplay:
             "net_values": [],
             "actions": self._action_history[-10:],
         }
-        prompt = self.prompt_builder.build_prompt(candles, portfolio, history)
+        market_ctx = None
+        if self.use_market_context and all_candles:
+            market_ctx = compute_market_context(all_candles, symbol=symbol)
+        prompt = self.prompt_builder.build_prompt(
+            candles, portfolio, history, market_context=market_ctx,
+        )
         action_id, state_value, _log_prob, tp_pct, sl_pct = self.model.get_action(prompt)
         return action_id, state_value, tp_pct, sl_pct
 
@@ -468,6 +484,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-hold", type=int, default=24, help="Max hold bars before forced close")
     parser.add_argument("--data-dir", default="data/candles", help="Candle data directory")
     parser.add_argument("--position-pct", type=float, default=0.25, help="Position size as fraction of equity")
+    parser.add_argument("--no-context", action="store_true", help="Disable market context in prompt (for A/B testing)")
     return parser.parse_args()
 
 
@@ -545,10 +562,12 @@ async def main() -> None:
             "max_hold_bars": args.max_hold,
             "candle_window": 20,
             "position_pct": args.position_pct,
+            "use_market_context": not args.no_context,
         },
     )
 
-    logger.info("Starting replay: %d assets, scan_every=%d ...", len(candles_by_symbol), args.scan_every)
+    ctx_label = "ON" if not args.no_context else "OFF"
+    logger.info("Starting replay: %d assets, scan_every=%d, market_context=%s ...", len(candles_by_symbol), args.scan_every, ctx_label)
     result = replay.run(candles_by_symbol, scan_every=args.scan_every)
 
     # 4. Print report

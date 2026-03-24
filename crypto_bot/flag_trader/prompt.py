@@ -30,6 +30,7 @@ class PromptBuilder:
         history: dict[str, list[Any]],
         similar_trades_text: str = "",
         position_info: dict[str, Any] | None = None,
+        market_context: dict | list[dict] | None = None,
     ) -> str:
         """Build a structured prompt from market state.
 
@@ -57,8 +58,32 @@ class PromptBuilder:
             "- A trade must move at least 0.07% in your favor just to break even.\n"
             "- Avoid opening positions unless expected move significantly exceeds fees.\n\n"
             "Legible Actions: Choose from {Buy, Sell, Hold}\n\n"
-            "Current State:\n"
         )
+
+        # Insert market context (longer timeframe) before candle data
+        if market_context:
+            prompt += "Market Context (longer timeframe):\n"
+            items = market_context if isinstance(market_context, list) else [market_context]
+            for symbol_ctx in items:
+                s = symbol_ctx.get("symbol", "?")
+                prompt += f"  {s}: "
+                parts: list[str] = []
+                if "pct_24h" in symbol_ctx:
+                    parts.append(f"24h: {symbol_ctx['pct_24h']:+.1f}%")
+                if "pct_3d" in symbol_ctx:
+                    parts.append(f"3d: {symbol_ctx['pct_3d']:+.1f}%")
+                if "pct_7d" in symbol_ctx:
+                    parts.append(f"7d: {symbol_ctx['pct_7d']:+.1f}%")
+                if "vol_ratio" in symbol_ctx:
+                    parts.append(f"vol_ratio: {symbol_ctx['vol_ratio']:.1f}x")
+                if "rsi_4h" in symbol_ctx:
+                    parts.append(f"RSI(4h): {symbol_ctx['rsi_4h']:.0f}")
+                if "trend" in symbol_ctx:
+                    parts.append(f"trend: {symbol_ctx['trend']}")
+                prompt += " | ".join(parts) + "\n"
+            prompt += "\n"
+
+        prompt += "Current State:\n"
 
         state = {
             "historical_prices": normalized,
