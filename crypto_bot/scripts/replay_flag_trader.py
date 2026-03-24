@@ -73,6 +73,8 @@ class ReplayResult:
     total_trades: int
     avg_trade_duration_bars: float
     equity_curve: list[float] = field(default_factory=list)
+    trigger_events: int = 0
+    trigger_by_asset: dict[str, int] = field(default_factory=dict)
 
     def print_report(self, days: int, assets: list[str], period_start: str = "", period_end: str = "") -> None:
         print()
@@ -95,6 +97,13 @@ class ReplayResult:
         print(f"  Max Drawdown:  {self.max_drawdown_pct:.1f}%")
         print(f"  Sharpe (daily):{self.sharpe_ratio:.2f}")
         print(f"  Avg Duration:  {self.avg_trade_duration_bars:.1f} bars ({self.avg_trade_duration_bars * 15 / 60:.1f}h)")
+        if self.trigger_events > 0:
+            avg_per_day = self.trigger_events / max(days, 1)
+            print("-" * 55)
+            print(f"  Trigger events:  {self.trigger_events} (avg {avg_per_day:.1f}/day)")
+            if self.trigger_by_asset:
+                parts = [f"{sym}: {cnt}" for sym, cnt in sorted(self.trigger_by_asset.items(), key=lambda x: -x[1])]
+                print(f"  Assets triggered: {', '.join(parts)}")
         print("-" * 55)
         print("  Trade Log:")
         for i, t in enumerate(self.trades, 1):
@@ -133,7 +142,12 @@ class FlagTraderReplay:
         self.maker_fee: float = 0.0002  # 0.02%
         self.taker_fee: float = 0.0005  # 0.05%
         self.use_market_context: bool = config.get("use_market_context", True)
+        self.trigger_mode: bool = config.get("trigger_mode", True)
+        self.trigger_threshold: float = config.get("trigger_threshold", 2.0)
+        self.trigger_lookback: int = config.get("trigger_lookback", 20)
         self._action_history: list[str] = []
+        self._trigger_events: int = 0
+        self._trigger_by_asset: dict[str, int] = {}
 
     def run(
         self,
@@ -203,19 +217,44 @@ class FlagTraderReplay:
             if dd > max_dd_pct:
                 max_dd_pct = dd
 
-            # 3. Evaluate new entries (only on scan intervals, and if we have room)
-            if step % scan_every != 0:
-                continue
+            # 3. Evaluate new entries
             if len(open_trades) >= self.max_positions:
                 continue
 
-            for symbol, all_candles in candles_by_symbol.items():
+            # Determine which assets to evaluate this step
+            if self.trigger_mode:
+                # Trigger-based: only evaluate assets with significant price moves
+                candidates: list[tuple[str, float]] = []
+                if bar_idx >= self.trigger_lookback:
+                    for symbol, all_candles in candles_by_symbol.items():
+                        if any(t.symbol == symbol for t in open_trades):
+                            continue
+                        current_close = all_candles[bar_idx]["close"]
+                        past_close = all_candles[bar_idx - self.trigger_lookback]["close"]
+                        if past_close <= 0:
+                            continue
+                        pct_move = abs(current_close - past_close) / past_close * 100
+                        if pct_move >= self.trigger_threshold:
+                            candidates.append((symbol, pct_move))
+                            self._trigger_events += 1
+                            self._trigger_by_asset[symbol] = self._trigger_by_asset.get(symbol, 0) + 1
+                # Sort by largest move first
+                candidates.sort(key=lambda x: -x[1])
+                symbols_to_eval = [sym for sym, _ in candidates]
+            else:
+                # Old behavior: scan every N bars
+                if step % scan_every != 0:
+                    continue
+                symbols_to_eval = [
+                    sym for sym in candles_by_symbol
+                    if not any(t.symbol == sym for t in open_trades)
+                ]
+
+            for symbol in symbols_to_eval:
                 if len(open_trades) >= self.max_positions:
                     break
-                # Skip if already in a position on this symbol
-                if any(t.symbol == symbol for t in open_trades):
-                    continue
 
+                all_candles = candles_by_symbol[symbol]
                 window = all_candles[bar_idx - self.candle_window + 1 : bar_idx + 1]
                 candles_prompt = [
                     {
@@ -395,6 +434,8 @@ class FlagTraderReplay:
             total_trades=len(trades),
             avg_trade_duration_bars=avg_dur,
             equity_curve=equity_curve,
+            trigger_events=self._trigger_events,
+            trigger_by_asset=dict(self._trigger_by_asset),
         )
 
 
@@ -485,6 +526,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-dir", default="data/candles", help="Candle data directory")
     parser.add_argument("--position-pct", type=float, default=0.25, help="Position size as fraction of equity")
     parser.add_argument("--no-context", action="store_true", help="Disable market context in prompt (for A/B testing)")
+    parser.add_argument("--trigger-mode", action="store_true", default=True, help="Trigger-based: evaluate only assets moving >threshold%%")
+    parser.add_argument("--no-trigger-mode", action="store_true", help="Disable trigger mode (scan all assets every N bars)")
+    parser.add_argument("--trigger-threshold", type=float, default=2.0, help="Price move %% to trigger evaluation")
+    parser.add_argument("--trigger-lookback", type=int, default=20, help="Bars to look back for price move (20=5h in 15m candles)")
     return parser.parse_args()
 
 
@@ -551,6 +596,7 @@ async def main() -> None:
 
     # 3. Run replay
     prompt_builder = PromptBuilder(candle_window=20)
+    trigger_mode = args.trigger_mode and not args.no_trigger_mode
     replay = FlagTraderReplay(
         model=model,
         prompt_builder=prompt_builder,
@@ -563,11 +609,15 @@ async def main() -> None:
             "candle_window": 20,
             "position_pct": args.position_pct,
             "use_market_context": not args.no_context,
+            "trigger_mode": trigger_mode,
+            "trigger_threshold": args.trigger_threshold,
+            "trigger_lookback": args.trigger_lookback,
         },
     )
 
     ctx_label = "ON" if not args.no_context else "OFF"
-    logger.info("Starting replay: %d assets, scan_every=%d, market_context=%s ...", len(candles_by_symbol), args.scan_every, ctx_label)
+    trigger_label = f"ON (>{args.trigger_threshold}%, lookback={args.trigger_lookback})" if trigger_mode else "OFF"
+    logger.info("Starting replay: %d assets, trigger=%s, market_context=%s ...", len(candles_by_symbol), trigger_label, ctx_label)
     result = replay.run(candles_by_symbol, scan_every=args.scan_every)
 
     # 4. Print report
