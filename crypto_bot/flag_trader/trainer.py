@@ -22,6 +22,7 @@ import torch
 import torch.nn as nn
 
 from .environment import HyperliquidTradingEnv
+from .market_context import compute_market_context
 from .model import FlagTraderModel
 from .prompt import PromptBuilder
 
@@ -165,10 +166,32 @@ class PPOTrainer:
         self.optimizer = torch.optim.AdamW(model.get_trainable_params(), lr=lr)
         self.buffer = RolloutBuffer()
 
-    def _obs_to_prompt(self, obs: dict[str, np.ndarray]) -> str:
-        """Convert env observation to prompt string."""
+    def _obs_to_prompt(
+        self,
+        obs: dict[str, np.ndarray],
+        env: HyperliquidTradingEnv | None = None,
+    ) -> str:
+        """Convert env observation to prompt string, with optional market context."""
         candles, portfolio, history = obs_to_prompt_inputs(obs)
-        return self.prompt_builder.build_prompt(candles, portfolio, history)
+        market_ctx = None
+        if env is not None:
+            # Extract all candles up to current step for longer-term context
+            all_candles_np = env.candles[: env._step_idx]
+            all_candles_list = [
+                {
+                    "open": float(row[0]),
+                    "high": float(row[1]),
+                    "low": float(row[2]),
+                    "close": float(row[3]),
+                    "volume": float(row[4]),
+                }
+                for row in all_candles_np
+            ]
+            symbol = getattr(env, "symbol", "")
+            market_ctx = compute_market_context(all_candles_list, symbol=symbol)
+        return self.prompt_builder.build_prompt(
+            candles, portfolio, history, market_context=market_ctx,
+        )
 
     @torch.no_grad()
     def collect_rollout(
@@ -192,7 +215,7 @@ class PPOTrainer:
         all_rewards: list[float] = []
 
         for _ in range(num_steps):
-            prompt = self._obs_to_prompt(obs)
+            prompt = self._obs_to_prompt(obs, env=env)
             result = self.model.get_action(prompt, return_tokens=True)
             action, value, log_prob, tp_pct, sl_pct, input_ids, attention_mask = result
 
@@ -325,9 +348,8 @@ class PPOTrainer:
         # Batch tokenize once (or use cached tokens)
         all_input_ids, all_attention_masks = self._pad_and_batch_tokens()
 
-        # AMP scaler for CUDA mixed precision
+        # Use bfloat16 autocast on CUDA (no GradScaler needed)
         use_amp = self.model.device.type == "cuda"
-        scaler = torch.amp.GradScaler("cuda", enabled=use_amp) if use_amp else None
 
         total_policy_loss = 0.0
         total_value_loss = 0.0
@@ -352,7 +374,7 @@ class PPOTrainer:
                 b_returns = returns[batch_idx].to(self.model.device)
 
                 # Forward + loss computation (all under AMP if CUDA)
-                amp_ctx = torch.amp.autocast("cuda") if use_amp else contextlib.nullcontext()
+                amp_ctx = torch.amp.autocast("cuda", dtype=torch.bfloat16) if use_amp else contextlib.nullcontext()
                 with amp_ctx:
                     new_log_probs, new_values, entropy, pred_tp, pred_sl = self.model.evaluate_actions(
                         b_input_ids, b_attention_mask, b_actions
@@ -381,16 +403,9 @@ class PPOTrainer:
                     )
 
                 self.optimizer.zero_grad()
-                if use_amp and scaler is not None:
-                    scaler.scale(loss).backward()
-                    scaler.unscale_(self.optimizer)
-                    nn.utils.clip_grad_norm_(self.model.get_trainable_params(), self.max_grad_norm)
-                    scaler.step(self.optimizer)
-                    scaler.update()
-                else:
-                    loss.backward()
-                    nn.utils.clip_grad_norm_(self.model.get_trainable_params(), self.max_grad_norm)
-                    self.optimizer.step()
+                loss.backward()
+                nn.utils.clip_grad_norm_(self.model.get_trainable_params(), self.max_grad_norm)
+                self.optimizer.step()
 
                 # Accumulate stats
                 total_policy_loss += policy_loss.item()
@@ -519,7 +534,7 @@ class PPOTrainer:
             ep_length = 0
 
             while True:
-                prompt = self._obs_to_prompt(obs)
+                prompt = self._obs_to_prompt(obs, env=env)
                 action, _, _, tp_pct, sl_pct = self.model.get_action(prompt)
                 env.set_tp_sl(tp_pct, sl_pct)
                 obs, reward, terminated, truncated, info = env.step(action)
