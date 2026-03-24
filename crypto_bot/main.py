@@ -774,12 +774,24 @@ class ConservativeBot:
         except Exception as e:
             logger.warning("Could not fetch account state: %s", e)
 
+        logger.info(
+            "EVAL START | equity=$%.2f | margin=$%.2f | leverage=%.1fx | positions=%d/%d | trigger=%s",
+            portfolio.get("total_account_value", 0),
+            portfolio.get("asset_position", 0),
+            portfolio.get("leverage_used", 0),
+            len(risk_manager._open_positions) if risk_manager else 0,
+            self.config.max_positions,
+            "targeted" if triggered_symbols else "scheduled",
+        )
+
         # --- Determine which assets to evaluate ---
         symbols_with_positions: set = set()
         if risk_manager:
             symbols_with_positions = set(risk_manager._open_positions.keys())
 
         # --- Phase 1: Evaluate open positions for early exit ---
+        positions_evaluated = 0
+        positions_closed = 0
         if risk_manager and symbols_with_positions:
             for symbol in list(symbols_with_positions):
                 # If triggered_symbols is set, only evaluate triggered ones
@@ -788,6 +800,7 @@ class ConservativeBot:
                 pos = risk_manager._open_positions.get(symbol)
                 if not pos:
                     continue
+                positions_evaluated += 1
                 try:
                     # Calculate PnL %
                     entry_px = float(pos.get("entry_price", 0))
@@ -817,8 +830,11 @@ class ConservativeBot:
                         exec_engine = self._services.get("execution")
                         if exec_engine:
                             await exec_engine.close_position(symbol)
+                            positions_closed += 1
                 except Exception as e:
                     logger.warning("Error evaluating position %s: %s", symbol, e)
+
+            logger.info("EVAL PHASE1 | %d positions evaluated, %d closed", positions_evaluated, positions_closed)
 
         # --- Phase 2: Evaluate new trade candidates (no open position) ---
         if triggered_symbols:
@@ -881,6 +897,11 @@ class ConservativeBot:
             if success:
                 executed += 1
                 self._flag_agent.record_action(decision.action_name)
+
+        logger.info(
+            "EVAL PHASE2 | %d assets scanned, %d actionable, %d executed",
+            len(scan_assets), len(decisions), executed,
+        )
 
     async def _execute_flag_decision(self, decision: TradeDecision) -> bool:
         """Convert a FLAG-Trader decision into a Setup and execute it.

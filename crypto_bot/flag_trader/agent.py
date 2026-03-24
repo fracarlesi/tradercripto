@@ -9,6 +9,7 @@ Scans assets, builds prompts from candle data, and returns trade decisions.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -164,12 +165,22 @@ class FlagTraderAgent:
             similar_text = self.trade_memory_rag.format_for_prompt(similar)
 
         prompt = self.prompt_builder.build_prompt(candles, portfolio, history, similar_trades_text=similar_text)
+
+        logger.info(
+            "FLAG-Trader INPUT | %s | candles=%d | last_close=%.2f | portfolio=$%.2f | similar_trades=%d",
+            symbol, len(candles), candles[-1]["close"], portfolio.get("total_account_value", 0),
+            len(similar) if self.trade_memory_rag and similar else 0,
+        )
+        logger.debug("FLAG-Trader PROMPT | %s | %s", symbol, prompt[:500])
+
+        start = time.monotonic()
         action_id, state_value, log_prob, tp_pct, sl_pct = self.model.get_action(prompt)
+        elapsed = time.monotonic() - start
         action_name = ACTION_NAMES.get(action_id, "HOLD")
 
         logger.info(
-            "FLAG-Trader | %s | action=%s | value=%.4f | tp=%.1f%% | sl=%.1f%%",
-            symbol, action_name, state_value, tp_pct, sl_pct,
+            "FLAG-Trader | %s | action=%s | value=%.4f | tp=%.1f%% | sl=%.1f%% | time=%.1fs",
+            symbol, action_name, state_value, tp_pct, sl_pct, elapsed,
         )
 
         # Log every decision for retraining data
@@ -192,6 +203,7 @@ class FlagTraderAgent:
                 candles_summary=candles_summary,
                 portfolio=portfolio,
                 market_state_summary=ms_summary,
+                prompt_summary=prompt[:200],
             )
             self.trade_logger.log_decision(record)
 
@@ -271,7 +283,16 @@ class FlagTraderAgent:
             similar_trades_text=similar_text,
             position_info=position_info,
         )
+
+        logger.info(
+            "FLAG-Trader POSITION INPUT | %s | direction=%s | entry=%.2f | pnl=%.1f%% | candles=%d",
+            symbol, direction, entry_price, pnl_pct, len(candles),
+        )
+        logger.debug("FLAG-Trader PROMPT | %s | %s", symbol, prompt[:500])
+
+        start = time.monotonic()
         action_id, state_value, log_prob, _tp, _sl = self.model.get_action(prompt)
+        elapsed = time.monotonic() - start
         action_name = ACTION_NAMES.get(action_id, "HOLD")
 
         # Determine if model wants to reverse position
@@ -285,8 +306,8 @@ class FlagTraderAgent:
             reason = "model_reversal"
 
         logger.info(
-            "FLAG-Trader EXIT eval | %s %s | model=%s | value=%.4f | close=%s",
-            direction.upper(), symbol, action_name, state_value, should_close,
+            "FLAG-Trader EXIT eval | %s %s | model=%s | value=%.4f | close=%s | time=%.1fs",
+            direction.upper(), symbol, action_name, state_value, should_close, elapsed,
         )
 
         # Log decision

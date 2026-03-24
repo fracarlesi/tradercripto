@@ -43,6 +43,7 @@ class TradeRecord:
     exit_reason: Optional[str] = None  # "take_profit", "stop_loss", "timeout", etc.
     hold_duration_minutes: Optional[float] = None
     market_state_summary: Optional[dict] = None  # {rsi, adx, regime, atr_pct, ema9_slope}
+    prompt_summary: str = ""  # First 200 chars of prompt for audit trail
 
 
 class FlagTradeLogger:

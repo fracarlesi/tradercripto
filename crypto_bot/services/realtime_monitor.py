@@ -170,6 +170,10 @@ class RealtimeMonitorService:
             if len(self._price_snapshots[symbol]) >= 2:
                 oldest_price = self._price_snapshots[symbol][0][1]
                 pct_move = abs(price - oldest_price) / oldest_price * 100
+                if pct_move >= 1.0:
+                    direction = "+" if price > oldest_price else "-"
+                    logger.debug("Price move | %s | %s%.1f%% in 5min", symbol, direction, pct_move)
+
                 if pct_move >= self.price_move_threshold:
                     direction = "+" if price > oldest_price else "-"
                     triggered_symbols.append(symbol)
@@ -275,4 +279,10 @@ class RealtimeMonitorService:
         event = self._pending_trigger
         self._pending_trigger = None
         self._last_trigger = now
+
+        logger.info(
+            "TRIGGER | %s | symbols=%s | priority=%d",
+            event.reason, ",".join(event.symbols) if event.symbols else "all", event.priority,
+        )
+
         return True, f"{event.reason}: {event.details}", event.symbols
