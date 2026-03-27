@@ -54,8 +54,8 @@ class ExitDecision:
 class FlagTraderConfig:
     """Configuration for the FLAG-Trader agent."""
 
-    model_name: str = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
-    checkpoint_path: str = "models/flag_trader_deepseek/final_model.pt"
+    model_name: str = "Qwen/Qwen2.5-0.5B-Instruct"
+    checkpoint_path: str = "models/flag_trader_qwen/final_model.pt"
     device: str = "cpu"
     scan_interval_seconds: int = 300
     max_assets_to_scan: int = 10
@@ -159,17 +159,18 @@ class FlagTraderAgent:
 
         # RAG: find similar past trades for prompt injection
         similar_text = ""
+        similar: list[dict] = []
         if self.trade_memory_rag:
             ms_dict = self._build_market_state_dict(candles)
             similar = self.trade_memory_rag.find_similar_trades(symbol, ms_dict)
-            similar_text = self.trade_memory_rag.format_for_prompt(similar)
+            similar_text = self.trade_memory_rag.format_for_prompt(similar, symbol=symbol)
 
         prompt = self.prompt_builder.build_prompt(candles, portfolio, history, similar_trades_text=similar_text)
 
         logger.info(
             "FLAG-Trader INPUT | %s | candles=%d | last_close=%.2f | portfolio=$%.2f | similar_trades=%d",
             symbol, len(candles), candles[-1]["close"], portfolio.get("total_account_value", 0),
-            len(similar) if self.trade_memory_rag and similar else 0,
+            len(similar),
         )
         logger.debug("FLAG-Trader PROMPT | %s | %s", symbol, prompt[:500])
 
@@ -268,8 +269,14 @@ class FlagTraderAgent:
         similar_text = ""
         if self.trade_memory_rag:
             ms_dict = self._build_market_state_dict(candles)
-            similar = self.trade_memory_rag.find_similar_trades(symbol, ms_dict)
-            similar_text = self.trade_memory_rag.format_for_prompt(similar)
+            # Find trades that entered in the same direction as current position
+            entry_action = "BUY" if direction == "long" else "SELL"
+            similar = self.trade_memory_rag.find_similar_trades(
+                symbol, ms_dict, current_action=entry_action,
+            )
+            similar_text = self.trade_memory_rag.format_for_prompt(
+                similar, symbol=symbol, current_action=entry_action,
+            )
 
         position_info = {
             "direction": direction,
