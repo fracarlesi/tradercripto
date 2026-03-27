@@ -11,7 +11,7 @@ Architecture:
 This orchestrator:
 1. Loads configuration from trading.yaml
 2. Initializes core services (message bus, kill switch, risk, execution)
-3. Loads pre-trained FLAG-Trader model (DeepSeek/Qwen + policy/value heads)
+3. Loads pre-trained FLAG-Trader model (Qwen 0.5B + policy/value heads)
 4. Scans top-N assets by volume, builds prompts from candle data
 5. Executes actionable decisions through risk manager pipeline
 
@@ -792,6 +792,7 @@ class ConservativeBot:
         # --- Phase 1: Evaluate open positions for early exit ---
         positions_evaluated = 0
         positions_closed = 0
+        recently_closed: set[str] = set()  # Anti-churn: block same-cycle re-entry
         if risk_manager and symbols_with_positions:
             for symbol in list(symbols_with_positions):
                 # If triggered_symbols is set, only evaluate triggered ones
@@ -814,6 +815,21 @@ class ConservativeBot:
                     else:
                         pnl_pct = 0.0
 
+                    # Anti-churn: skip model_reversal if position too young
+                    opened_at = pos.get("opened_at")
+                    if opened_at:
+                        if isinstance(opened_at, str):
+                            from datetime import datetime as _dt
+                            opened_at = _dt.fromisoformat(opened_at)
+                        age_minutes = (datetime.now(timezone.utc) - opened_at).total_seconds() / 60
+                        min_hold = self.config.flag_trader_config.get("min_hold_minutes", 30)
+                        if age_minutes < min_hold:
+                            logger.info(
+                                "FLAG-Trader EXIT SKIPPED | %s %s too young (%.1f min < %d min)",
+                                side.upper(), symbol, age_minutes, min_hold,
+                            )
+                            continue
+
                     exit_decision = await self._flag_agent.evaluate_position(
                         symbol=symbol,
                         direction=side,
@@ -823,13 +839,27 @@ class ConservativeBot:
                         portfolio=portfolio,
                     )
                     if exit_decision.should_close:
+                        # Anti-churn: don't close if profit doesn't cover fees
+                        min_net_profit = self.config.flag_trader_config.get("min_net_profit_pct_to_close", 0.15)
+                        if 0 < pnl_pct < min_net_profit:
+                            logger.info(
+                                "FLAG-Trader EXIT SKIPPED | %s %s | pnl=%.3f%% < min_net_profit=%.2f%% (fees not covered)",
+                                side.upper(), symbol, pnl_pct, min_net_profit,
+                            )
+                            continue
+
                         logger.info(
-                            "FLAG-Trader EXIT | CLOSE %s %s | confidence=%.4f | reason=%s",
-                            side.upper(), symbol, exit_decision.confidence, exit_decision.reason,
+                            "FLAG-Trader EXIT | CLOSE %s %s | confidence=%.4f | reason=%s | pnl=%.3f%%",
+                            side.upper(), symbol, exit_decision.confidence, exit_decision.reason, pnl_pct,
                         )
                         exec_engine = self._services.get("execution")
                         if exec_engine:
+                            # Set exit_reason before closing for proper cooldown
+                            active_pos = getattr(exec_engine, 'active_positions', {}).get(symbol)
+                            if active_pos and hasattr(active_pos, 'exit_reason'):
+                                active_pos.exit_reason = exit_decision.reason
                             await exec_engine.close_position(symbol)
+                            recently_closed.add(symbol)
                             positions_closed += 1
                 except Exception as e:
                     logger.warning("Error evaluating position %s: %s", symbol, e)
@@ -837,12 +867,14 @@ class ConservativeBot:
             logger.info("EVAL PHASE1 | %d positions evaluated, %d closed", positions_evaluated, positions_closed)
 
         # --- Phase 2: Evaluate new trade candidates (no open position) ---
+        # Exclude recently closed symbols to prevent same-cycle re-entry (anti-churn)
+        blocked = symbols_with_positions | recently_closed
         if triggered_symbols:
-            scan_assets = [s for s in triggered_symbols if s not in symbols_with_positions]
-            logger.info("Targeted scan: %d triggered assets → %d after position filter",
+            scan_assets = [s for s in triggered_symbols if s not in blocked]
+            logger.info("Targeted scan: %d triggered assets → %d after position+churn filter",
                         len(triggered_symbols), len(scan_assets))
         else:
-            scan_assets = [s for s in self.config.assets if s not in symbols_with_positions]
+            scan_assets = [s for s in self.config.assets if s not in blocked]
 
         # --- Recheck slots after exit evaluations ---
         if risk_manager:
@@ -953,8 +985,8 @@ class ConservativeBot:
             atr_pct=atr_pct,
             adx=adx,
             rsi=rsi,
-            setup_quality=Decimal(str(round(abs(decision.confidence), 4))),
-            confidence=Decimal(str(round(abs(decision.confidence), 4))),
+            setup_quality=Decimal(str(round(min(abs(decision.confidence), 1.0), 4))),
+            confidence=Decimal(str(round(min(abs(decision.confidence), 1.0), 4))),
             model_tp_pct=round(decision.tp_pct, 2),
             model_sl_pct=round(decision.sl_pct, 2),
         )

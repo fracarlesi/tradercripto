@@ -409,6 +409,7 @@ class RiskManagerService(BaseService):
                     "size": payload.get("size", 0),
                     "entry_price": payload.get("entry_price", 0),
                     "notional": payload.get("notional", 0),
+                    "opened_at": datetime.now(timezone.utc),
                 }
                 self.clear_pending_intent(symbol)
                 self._logger.info("Position tracked from fill: %s", symbol)
@@ -417,16 +418,20 @@ class RiskManagerService(BaseService):
                 self._open_positions.pop(symbol, None)
                 self.clear_pending_intent(symbol)
 
-                # Post-close cooldown: longer after losses to prevent churning
+                # Post-close cooldown: scaled by exit reason to prevent churning
                 exit_reason = payload.get("exit_reason", "")
                 now = datetime.now(timezone.utc)
                 if exit_reason == "stop_loss":
-                    self._post_close_cooldown[symbol] = now + timedelta(minutes=30)
-                    self._logger.info(
-                        "Post-loss cooldown: %s blocked for 30min", symbol
-                    )
+                    cooldown_min = 30
+                elif exit_reason == "model_reversal":
+                    cooldown_min = 15  # model flipped — wait for clearer signal
                 else:
-                    self._post_close_cooldown[symbol] = now + timedelta(minutes=5)
+                    cooldown_min = 10  # TP or unknown — moderate cooldown
+                self._post_close_cooldown[symbol] = now + timedelta(minutes=cooldown_min)
+                self._logger.info(
+                    "Post-close cooldown: %s blocked for %dmin (reason=%s)",
+                    symbol, cooldown_min, exit_reason or "unknown",
+                )
 
                 # Track per-symbol daily trades
                 today_key = now.strftime("%Y-%m-%d")

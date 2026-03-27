@@ -307,14 +307,16 @@ metrics:
 # -----------------------------------------------------------------------------
 flag_trader:
   enabled: true
-  model_name: "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
-  checkpoint_path: "models/flag_trader_deepseek/final_model.pt"
+  model_name: "Qwen/Qwen2.5-0.5B-Instruct"
+  checkpoint_path: "models/flag_trader_qwen/final_model.pt"
   device: "cpu"
   scan_interval_seconds: 300
   max_assets_to_scan: 10
   candle_window: 20
   candle_interval: "15m"
   confidence_threshold: 0.6
+  min_hold_minutes: 30          # Anti-churn: don't close position younger than this
+  min_net_profit_pct_to_close: 0.15  # Anti-churn: don't close if profit < fees (~3x round-trip)
 
 # -----------------------------------------------------------------------------
 # ML Model - XGBoost trade selector (LEGACY — replaced by flag_trader)
