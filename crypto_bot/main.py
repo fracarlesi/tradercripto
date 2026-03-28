@@ -937,16 +937,6 @@ class ConservativeBot:
             return
 
         risk_manager = self._services.get("risk_manager")
-        if risk_manager:
-            is_cooldown, cooldown_state = await risk_manager.check_cooldown_required()
-            if is_cooldown and cooldown_state:
-                remaining = cooldown_state.time_remaining()
-                logger.warning(
-                    "Trading paused by COOLDOWN: %s (resuming in %d min)",
-                    cooldown_state.reason.value if cooldown_state.reason else "unknown",
-                    remaining // 60 if remaining else 0,
-                )
-                return
 
         # --- Check available position slots ---
         if risk_manager:
