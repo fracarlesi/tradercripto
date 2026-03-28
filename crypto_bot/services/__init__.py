@@ -51,13 +51,6 @@ from .risk_manager import (
     create_risk_manager,
 )
 
-from .kill_switch import (
-    KillSwitchService,
-    KillSwitchConfig,
-    KillSwitchEvent,
-    create_kill_switch,
-)
-
 __all__ = [
     # Message Bus
     "MessageBus",
@@ -85,11 +78,6 @@ __all__ = [
     "RiskManagerService",
     "RiskConfig",
     "create_risk_manager",
-    # Kill Switch
-    "KillSwitchService",
-    "KillSwitchConfig",
-    "KillSwitchEvent",
-    "create_kill_switch",
 ]
 
 __version__ = "3.0.0"  # Momentum scalper update

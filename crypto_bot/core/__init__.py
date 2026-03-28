@@ -8,7 +8,6 @@ from .models import (
     Regime,
     Direction,
     SetupType,
-    KillSwitchStatus,
     LLMDecision,
     EquitySnapshot,
 )
@@ -22,7 +21,6 @@ __all__ = [
     "Regime",
     "Direction",
     "SetupType",
-    "KillSwitchStatus",
     "LLMDecision",
     "EquitySnapshot",
     "Topic",

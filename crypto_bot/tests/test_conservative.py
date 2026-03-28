@@ -22,8 +22,48 @@ from crypto_bot.core.models import (
     Regime,
     Direction,
     SetupType,
-    KillSwitchStatus,
 )
+
+
+# =============================================================================
+# Helpers — default field values for Pydantic models in tests
+# =============================================================================
+
+# Default Setup fields added by FLAG-Trader refactor
+_SETUP_DEFAULTS: dict[str, object] = dict(
+    atr_pct=Decimal("0.5"),
+    model_tp_pct=2.5,
+    model_sl_pct=1.0,
+    llm_approved=True,
+    llm_confidence=Decimal("0.7"),
+    llm_reason="test",
+    entry_reason="test",
+    entry_confidence=0.7,
+    entry_trigger_details="",
+)
+
+
+def _make_setup(**overrides: object) -> Setup:
+    """Create a Setup with sensible test defaults.  Override any field via kwargs."""
+    defaults: dict[str, object] = dict(
+        id="setup_test",
+        symbol="BTC",
+        timestamp=datetime.now(timezone.utc),
+        setup_type=SetupType.TREND_BREAKOUT,
+        direction=Direction.LONG,
+        regime=Regime.TREND,
+        entry_price=Decimal("96000"),
+        stop_price=Decimal("94500"),
+        stop_distance_pct=Decimal("1.56"),
+        atr=Decimal("500"),
+        adx=Decimal("35"),
+        rsi=Decimal("55"),
+        setup_quality=Decimal("0.75"),
+        confidence=Decimal("0.8"),
+    )
+    defaults.update(_SETUP_DEFAULTS)
+    defaults.update(overrides)
+    return Setup(**defaults)  # type: ignore[arg-type]
 
 
 # =============================================================================
@@ -134,22 +174,7 @@ def market_state_chaos():
 @pytest.fixture
 def valid_setup():
     """Create a valid trading setup."""
-    return Setup(
-        id="setup_test_001",
-        symbol="BTC",
-        timestamp=datetime.now(timezone.utc),
-        setup_type=SetupType.TREND_BREAKOUT,
-        direction=Direction.LONG,
-        regime=Regime.TREND,
-        entry_price=Decimal("96000"),
-        stop_price=Decimal("94500"),
-        stop_distance_pct=Decimal("1.56"),
-        atr=Decimal("500"),
-        adx=Decimal("35"),
-        rsi=Decimal("55"),
-        setup_quality=Decimal("0.75"),
-        confidence=Decimal("0.8"),
-    )
+    return _make_setup(id="setup_test_001")
 
 
 # =============================================================================
@@ -198,6 +223,7 @@ class TestModels:
             stop_price=Decimal("94500"),
             risk_amount=Decimal("150"),
             risk_pct=Decimal("0.5"),
+            atr_pct=Decimal("0.5"),
         )
         assert intent.position_size == Decimal("0.1")
         assert intent.risk_amount == Decimal("150")
@@ -225,18 +251,10 @@ class TestServiceConfigs:
         from crypto_bot.services import RiskConfig
 
         config = RiskConfig()
-        assert config.per_trade_pct == 0.5
-        assert config.max_positions == 2
-        assert config.leverage == 1.0
-
-    def test_kill_switch_config(self):
-        """Test KillSwitchConfig defaults."""
-        from crypto_bot.services import KillSwitchConfig
-
-        config = KillSwitchConfig()
-        assert config.daily_loss_pct == 2.0
-        assert config.weekly_loss_pct == 5.0
-        assert config.max_drawdown_pct == 15.0
+        assert config.min_per_trade_pct == 10.0
+        assert config.max_per_trade_pct == 30.0
+        assert config.min_leverage == 2
+        assert config.max_leverage == 5
 
 
 
@@ -254,104 +272,53 @@ class TestRiskManager:
         assert create_risk_manager is not None
 
     def test_position_size_calculation_default_confidence(self):
-        """Test risk-based position sizing with default confidence (Kelly minimum)."""
+        """Test risk-based position sizing with default confidence (0.5 -> min risk)."""
         from crypto_bot.services.risk_manager import RiskManagerService, RiskConfig
 
-        config = RiskConfig(per_trade_pct=5.0)
+        config = RiskConfig(min_per_trade_pct=10.0, max_per_trade_pct=30.0)
         service = RiskManagerService(config=config)
 
         # Set equity
         service._current_equity = Decimal("10000")
 
-        # Create a setup with default confidence=0.5
-        # Kelly at p=0.5 returns minimum 2%, so risk = 10000 * 0.02 = 200
-        setup = Setup(
+        # Setup with default confidence=0.5 (below threshold 0.6 -> min_per_trade_pct)
+        setup = _make_setup(
             id="test_setup",
-            symbol="BTC",
-            timestamp=datetime.now(timezone.utc),
-            setup_type=SetupType.TREND_BREAKOUT,
-            direction=Direction.LONG,
-            regime=Regime.TREND,
-            entry_price=Decimal("96000"),
             stop_price=Decimal("94560"),  # 1.5% stop distance
             stop_distance_pct=Decimal("1.5"),
-            atr=Decimal("500"),
-            adx=Decimal("35"),
-            rsi=Decimal("55"),
+            confidence=Decimal("0.5"),
         )
 
         # Calculate risk
         params = service._calculate_risk_params(setup)
 
-        # Kelly minimum at p=0.5: risk_pct = 0.02, risk_amount = 10000 * 0.02 = 200
-        assert params.risk_amount == Decimal("200")
+        # Confidence 0.5 <= threshold 0.6 -> min_per_trade_pct = 10%
+        # risk_amount = 10000 * 0.10 = 1000
+        assert params.risk_amount == Decimal("1000")
         assert params.size_approved is True
 
     def test_position_size_no_confidence(self):
-        """Test risk-based position sizing without confidence (config fallback)."""
+        """Test risk-based position sizing without confidence (uses min risk)."""
         from crypto_bot.services.risk_manager import RiskManagerService, RiskConfig
 
-        config = RiskConfig(per_trade_pct=5.0)
+        config = RiskConfig(min_per_trade_pct=10.0, max_per_trade_pct=30.0)
         service = RiskManagerService(config=config)
         service._current_equity = Decimal("10000")
 
-        # Setup with confidence=0 -> falls back to per_trade_pct
-        setup = Setup(
+        # Setup with confidence=0 -> uses min_per_trade_pct
+        setup = _make_setup(
             id="test_setup_no_conf",
-            symbol="BTC",
-            timestamp=datetime.now(timezone.utc),
-            setup_type=SetupType.TREND_BREAKOUT,
-            direction=Direction.LONG,
-            regime=Regime.TREND,
-            entry_price=Decimal("96000"),
             stop_price=Decimal("94560"),
             stop_distance_pct=Decimal("1.5"),
-            atr=Decimal("500"),
-            adx=Decimal("35"),
-            rsi=Decimal("55"),
             confidence=Decimal("0"),
         )
 
         params = service._calculate_risk_params(setup)
 
-        # Fallback: risk_pct = 5.0 / 100 = 0.05, risk_amount = 10000 * 0.05 = 500
-        assert params.risk_amount == Decimal("500")
+        # Confidence 0 <= threshold 0.6 -> min_per_trade_pct = 10%
+        # risk_amount = 10000 * 0.10 = 1000
+        assert params.risk_amount == Decimal("1000")
         assert params.size_approved is True
-
-
-# =============================================================================
-# Kill Switch Tests
-# =============================================================================
-
-class TestKillSwitch:
-    """Test KillSwitchService."""
-
-    def test_import(self):
-        """Test service can be imported."""
-        from crypto_bot.services import KillSwitchService, create_kill_switch
-        assert KillSwitchService is not None
-        assert create_kill_switch is not None
-
-    def test_initial_state(self):
-        """Test kill switch starts in OK state."""
-        from crypto_bot.services import KillSwitchService
-
-        service = KillSwitchService()
-        assert service.get_status() == KillSwitchStatus.OK
-        assert service.is_trading_allowed() == True
-
-    def test_drawdown_calculation(self):
-        """Test drawdown percentage calculation."""
-        from crypto_bot.services import KillSwitchService
-
-        service = KillSwitchService()
-
-        # Set peak and current equity
-        service._peak_equity = Decimal("10000")
-        service._current_equity = Decimal("9000")
-
-        drawdown = service.get_current_drawdown()
-        assert drawdown == 10.0  # 10% drawdown
 
 
 # =============================================================================
@@ -381,30 +348,15 @@ timeframes:
   bars_to_fetch: 200
 
 risk:
-  per_trade_pct: 5.0
-  max_per_trade_pct: 10.0
-  max_positions: 2
+  min_per_trade_pct: 10.0
+  max_per_trade_pct: 30.0
   max_position_pct: 70
-  max_daily_trades: 8
-
-kill_switch:
-  daily_loss_pct: 2.0
-  weekly_loss_pct: 5.0
-  max_drawdown_pct: 15.0
+  min_leverage: 2
+  max_leverage: 5
 
 regime:
   trend_adx_entry_min: 28
   trend_adx_exit_min: 22
-
-llm:
-  enabled: true
-  max_calls_per_day: 6
-
-strategies:
-  trend_follow:
-    enabled: true
-  trend_momentum:
-    enabled: true
 
 stops:
   stop_loss_pct: 0.8
@@ -423,10 +375,10 @@ dry_run: false
             config = ConservativeConfig.from_yaml(str(config_file))
 
             assert config.assets == ["BTC", "ETH"]  # SOL disabled
-            assert config.per_trade_pct == 5.0
-            assert config.max_per_trade_pct == 10.0
-            assert config.max_daily_trades == 8
-            assert config.max_drawdown_pct == 15.0
+            assert config.min_per_trade_pct == 10.0
+            assert config.max_per_trade_pct == 30.0
+            assert config.min_leverage == 2
+            assert config.max_leverage == 5
             assert config.stop_loss_pct == 0.8
             assert config.take_profit_pct == 1.6
             assert config.testnet is True
@@ -439,96 +391,61 @@ dry_run: false
 # Kelly Sizing Tests
 # =============================================================================
 
-class TestKellySizing:
-    """Test Half-Kelly position sizing based on P(TP)."""
+class TestConfidenceScaling:
+    """Test dynamic risk/leverage scaling based on LLM confidence."""
 
-    def _make_service(self, per_trade_pct: float = 5.0, max_per_trade_pct: float = 10.0):
+    def _make_service(self, min_pct: float = 10.0, max_pct: float = 30.0):
         from crypto_bot.services.risk_manager import RiskManagerService, RiskConfig
-        config = RiskConfig(per_trade_pct=per_trade_pct, max_per_trade_pct=max_per_trade_pct)
+        config = RiskConfig(min_per_trade_pct=min_pct, max_per_trade_pct=max_pct,
+                            min_leverage=2, max_leverage=5)
         service = RiskManagerService(config=config)
         service._current_equity = Decimal("10000")
         return service
 
-    def test_kelly_at_50pct_returns_minimum(self):
-        """At P(TP)=50% (coin flip), Kelly returns minimum 2%."""
-        service = self._make_service()
-        frac = service._kelly_fraction(0.50)
-        assert frac == 0.02
+    def test_scale_by_confidence_at_threshold(self):
+        """At confidence == threshold, returns min_val."""
+        from crypto_bot.services.risk_manager import scale_by_confidence
+        assert scale_by_confidence(0.6, 0.6, 10.0, 30.0) == 10.0
 
-    def test_kelly_below_50pct_returns_minimum(self):
-        """Below 50% probability, Kelly returns minimum 2%."""
-        service = self._make_service()
-        frac = service._kelly_fraction(0.40)
-        assert frac == 0.02
+    def test_scale_by_confidence_below_threshold(self):
+        """Below threshold, returns min_val."""
+        from crypto_bot.services.risk_manager import scale_by_confidence
+        assert scale_by_confidence(0.4, 0.6, 10.0, 30.0) == 10.0
 
-    def test_kelly_at_70pct(self):
-        """At P(TP)=70% with 2:1 RR, Kelly should give meaningful sizing."""
-        service = self._make_service()
-        frac = service._kelly_fraction(0.70, rr_ratio=2.0)
-        # Full Kelly = (0.7*2 - 0.3)/2 = (1.4-0.3)/2 = 0.55
-        # Half-Kelly = 0.275
-        # Clamped to max_per_trade_pct/100 = 0.10
-        assert frac == 0.10
+    def test_scale_by_confidence_at_max(self):
+        """At confidence == 1.0, returns max_val."""
+        from crypto_bot.services.risk_manager import scale_by_confidence
+        assert scale_by_confidence(1.0, 0.6, 10.0, 30.0) == 30.0
 
-    def test_kelly_at_60pct(self):
-        """At P(TP)=60% with 2:1 RR."""
-        service = self._make_service()
-        frac = service._kelly_fraction(0.60, rr_ratio=2.0)
-        # Full Kelly = (0.6*2 - 0.4)/2 = (1.2-0.4)/2 = 0.4
-        # Half-Kelly = 0.2
-        # Clamped to max_per_trade_pct/100 = 0.10
-        assert frac == 0.10
+    def test_scale_by_confidence_midpoint(self):
+        """At midpoint confidence, returns midpoint value."""
+        from crypto_bot.services.risk_manager import scale_by_confidence
+        # threshold=0.6, max=1.0, midpoint confidence = 0.8
+        # ratio = (0.8 - 0.6) / (1.0 - 0.6) = 0.5
+        # result = 10.0 + 0.5 * (30.0 - 10.0) = 20.0
+        assert scale_by_confidence(0.8, 0.6, 10.0, 30.0) == 20.0
 
-    def test_kelly_at_55pct(self):
-        """At P(TP)=55% with 2:1 RR."""
-        service = self._make_service()
-        frac = service._kelly_fraction(0.55, rr_ratio=2.0)
-        # Full Kelly = (0.55*2 - 0.45)/2 = (1.1-0.45)/2 = 0.325
-        # Half-Kelly = 0.1625
-        # Clamped to 0.10
-        assert frac == 0.10
-
-    def test_kelly_clamped_by_max_per_trade_pct(self):
-        """Kelly is clamped to max_per_trade_pct / 100."""
-        service = self._make_service(max_per_trade_pct=5.0)
-        frac = service._kelly_fraction(0.70, rr_ratio=2.0)
-        # Half-Kelly would be 0.275, but clamped to 0.05
-        assert frac == 0.05
-
-    def test_kelly_sizing_applied_in_risk_params(self):
-        """High confidence setup gets larger position than low confidence."""
+    def test_high_confidence_gets_larger_risk(self):
+        """High confidence setup gets larger risk_amount than low confidence."""
         service = self._make_service()
 
-        setup_high = Setup(
+        setup_high = _make_setup(
             id="test_high",
-            symbol="BTC",
-            timestamp=datetime.now(timezone.utc),
             setup_type=SetupType.MOMENTUM,
-            direction=Direction.LONG,
-            regime=Regime.TREND,
-            entry_price=Decimal("96000"),
             stop_price=Decimal("95232"),
             stop_distance_pct=Decimal("0.8"),
-            atr=Decimal("500"),
-            adx=Decimal("35"),
-            rsi=Decimal("55"),
-            confidence=Decimal("0.70"),
+            confidence=Decimal("0.95"),
         )
 
-        setup_low = Setup(
+        setup_low = _make_setup(
             id="test_low",
             symbol="ETH",
-            timestamp=datetime.now(timezone.utc),
             setup_type=SetupType.MOMENTUM,
-            direction=Direction.LONG,
-            regime=Regime.TREND,
             entry_price=Decimal("3000"),
             stop_price=Decimal("2976"),
             stop_distance_pct=Decimal("0.8"),
             atr=Decimal("30"),
-            adx=Decimal("35"),
-            rsi=Decimal("55"),
-            confidence=Decimal("0.50"),
+            confidence=Decimal("0.65"),
         )
 
         params_high = service._calculate_risk_params(setup_high)
@@ -536,8 +453,10 @@ class TestKellySizing:
 
         assert params_high.size_approved is True
         assert params_low.size_approved is True
-        # High confidence (Kelly=10%) should get larger risk_amount than low (Kelly min=2%)
+        # High confidence -> larger risk_amount
         assert params_high.risk_amount > params_low.risk_amount
+        # High confidence -> higher leverage
+        assert params_high.leverage_used > params_low.leverage_used
 
 
 # =============================================================================
@@ -549,7 +468,7 @@ class TestCorrelationFilter:
 
     def _make_service(self):
         from crypto_bot.services.risk_manager import RiskManagerService, RiskConfig
-        config = RiskConfig(per_trade_pct=5.0, max_positions=5)
+        config = RiskConfig(min_per_trade_pct=10.0, max_per_trade_pct=30.0)
         service = RiskManagerService(config=config)
         service._current_equity = Decimal("10000")
         return service
@@ -591,19 +510,15 @@ class TestCorrelationFilter:
         service._open_positions["ETH"] = {"symbol": "ETH", "notional": 5000}
 
         # ARB is in eth_ecosystem with ETH
-        setup = Setup(
+        setup = _make_setup(
             id="test_corr",
             symbol="ARB",
-            timestamp=datetime.now(timezone.utc),
             setup_type=SetupType.MOMENTUM,
-            direction=Direction.LONG,
-            regime=Regime.TREND,
             entry_price=Decimal("1.5"),
             stop_price=Decimal("1.488"),
             stop_distance_pct=Decimal("0.8"),
             atr=Decimal("0.05"),
             adx=Decimal("30"),
-            rsi=Decimal("55"),
             confidence=Decimal("0.60"),
         )
 
@@ -621,7 +536,7 @@ class TestPerSymbolCooldown:
 
     def _make_service(self):
         from crypto_bot.services.risk_manager import RiskManagerService, RiskConfig
-        config = RiskConfig(per_trade_pct=5.0, max_positions=5)
+        config = RiskConfig(min_per_trade_pct=10.0, max_per_trade_pct=30.0)
         service = RiskManagerService(config=config)
         service._current_equity = Decimal("10000")
         return service
@@ -630,19 +545,11 @@ class TestPerSymbolCooldown:
         """First trade on a symbol has no cooldown."""
         service = self._make_service()
 
-        setup = Setup(
+        setup = _make_setup(
             id="test_cd1",
-            symbol="BTC",
-            timestamp=datetime.now(timezone.utc),
             setup_type=SetupType.MOMENTUM,
-            direction=Direction.LONG,
-            regime=Regime.TREND,
-            entry_price=Decimal("96000"),
             stop_price=Decimal("95232"),
             stop_distance_pct=Decimal("0.8"),
-            atr=Decimal("500"),
-            adx=Decimal("35"),
-            rsi=Decimal("55"),
             confidence=Decimal("0.60"),
         )
 
@@ -657,19 +564,11 @@ class TestPerSymbolCooldown:
         # Simulate a recent trade on BTC 1 minute ago
         service._last_trade_time["BTC"] = datetime.now(timezone.utc) - timedelta(minutes=1)
 
-        setup = Setup(
+        setup = _make_setup(
             id="test_cd2",
-            symbol="BTC",
-            timestamp=datetime.now(timezone.utc),
             setup_type=SetupType.MOMENTUM,
-            direction=Direction.LONG,
-            regime=Regime.TREND,
-            entry_price=Decimal("96000"),
             stop_price=Decimal("95232"),
             stop_distance_pct=Decimal("0.8"),
-            atr=Decimal("500"),
-            adx=Decimal("35"),
-            rsi=Decimal("55"),
             confidence=Decimal("0.60"),
         )
 
@@ -685,19 +584,11 @@ class TestPerSymbolCooldown:
         # Simulate an old trade 15 minutes ago (cooldown is 10 min)
         service._last_trade_time["BTC"] = datetime.now(timezone.utc) - timedelta(minutes=15)
 
-        setup = Setup(
+        setup = _make_setup(
             id="test_cd3",
-            symbol="BTC",
-            timestamp=datetime.now(timezone.utc),
             setup_type=SetupType.MOMENTUM,
-            direction=Direction.LONG,
-            regime=Regime.TREND,
-            entry_price=Decimal("96000"),
             stop_price=Decimal("95232"),
             stop_distance_pct=Decimal("0.8"),
-            atr=Decimal("500"),
-            adx=Decimal("35"),
-            rsi=Decimal("55"),
             confidence=Decimal("0.60"),
         )
 
@@ -712,19 +603,14 @@ class TestPerSymbolCooldown:
         # BTC has recent trade
         service._last_trade_time["BTC"] = datetime.now(timezone.utc) - timedelta(minutes=1)
 
-        setup = Setup(
+        setup = _make_setup(
             id="test_cd4",
             symbol="ETH",
-            timestamp=datetime.now(timezone.utc),
             setup_type=SetupType.MOMENTUM,
-            direction=Direction.LONG,
-            regime=Regime.TREND,
             entry_price=Decimal("3000"),
             stop_price=Decimal("2976"),
             stop_distance_pct=Decimal("0.8"),
             atr=Decimal("30"),
-            adx=Decimal("35"),
-            rsi=Decimal("55"),
             confidence=Decimal("0.60"),
         )
 
@@ -743,7 +629,7 @@ class TestIncrementTradeCount:
         """Test trade count increments correctly."""
         from crypto_bot.services.risk_manager import RiskManagerService, RiskConfig
 
-        config = RiskConfig(max_daily_trades=8)
+        config = RiskConfig()
         service = RiskManagerService(config=config)
 
         assert service._trades_today == 0
@@ -758,7 +644,7 @@ class TestIncrementTradeCount:
         from crypto_bot.services.risk_manager import RiskManagerService, RiskConfig
         from crypto_bot.services.message_bus import MessageBus
 
-        config = RiskConfig(max_daily_trades=8)
+        config = RiskConfig()
         bus = MessageBus()
         await bus.start()
 
@@ -778,6 +664,7 @@ class TestIncrementTradeCount:
             stop_price=Decimal("95232"),
             risk_amount=Decimal("50"),
             risk_pct=Decimal("5.0"),
+            atr_pct=Decimal("0.5"),
         )
 
         assert service._trades_today == 0
@@ -798,7 +685,7 @@ class TestDecrementTradeCount:
 
     def _make_service(self):
         from crypto_bot.services.risk_manager import RiskManagerService, RiskConfig
-        config = RiskConfig(max_daily_trades=8)
+        config = RiskConfig()
         service = RiskManagerService(config=config)
         return service
 
@@ -923,17 +810,14 @@ class TestIntegration:
         from crypto_bot.services import (
             create_market_state_service,
             create_risk_manager,
-            create_kill_switch,
         )
 
         # Create without bus/db (dry run)
         market_state = create_market_state_service(testnet=True)
         risk_manager = create_risk_manager()
-        kill_switch = create_kill_switch()
 
         assert market_state is not None
         assert risk_manager is not None
-        assert kill_switch is not None
 
 
 # =============================================================================

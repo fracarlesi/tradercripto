@@ -39,6 +39,36 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
+# Confidence Scaling
+# =============================================================================
+
+def scale_by_confidence(
+    confidence: float,
+    conf_threshold: float,
+    min_val: float,
+    max_val: float,
+) -> float:
+    """Linearly scale a value based on confidence above threshold.
+
+    Maps confidence from [conf_threshold, 1.0] to [min_val, max_val].
+    Confidence at or below threshold returns min_val.
+
+    Args:
+        confidence: LLM confidence score (0.0 to 1.0)
+        conf_threshold: Minimum confidence threshold (e.g. 0.6)
+        min_val: Value at confidence == conf_threshold
+        max_val: Value at confidence == 1.0
+
+    Returns:
+        Scaled value between min_val and max_val
+    """
+    if confidence <= conf_threshold:
+        return min_val
+    ratio = (confidence - conf_threshold) / (1.0 - conf_threshold)
+    return min_val + ratio * (max_val - min_val)
+
+
+# =============================================================================
 # Correlation Groups
 # =============================================================================
 
@@ -64,18 +94,17 @@ CORR_GROUPS: Dict[str, List[str]] = {
 class RiskConfig:
     """Risk management configuration."""
 
-    # Per-trade risk
-    per_trade_pct: float = 0.5        # Risk 0.5% per trade
-    max_per_trade_pct: float = 1.0    # Absolute max
+    # Dynamic per-trade risk (scaled by LLM confidence)
+    min_per_trade_pct: float = 10.0   # risk % at confidence threshold
+    max_per_trade_pct: float = 30.0   # risk % at confidence 1.0
 
-    # Position limits
-    max_positions: int = 2
-    max_exposure_pct: float = 100.0   # Max notional as % of equity
-    max_position_pct: float = 30.0    # Max 30% of capital per trade (conservative)
+    # Exposure limits (safety nets)
+    max_exposure_pct: float = 100.0   # Max total notional as % of equity
+    max_position_pct: float = 30.0    # Max per-position notional as % of equity
 
-    # Leverage
-    leverage: float = 1.0
-    max_leverage: float = 2.0
+    # Dynamic leverage (scaled by LLM confidence)
+    min_leverage: int = 2
+    max_leverage: int = 5
 
     # Stops (conservative: 1.5% SL, 3% TP for 1:2 risk/reward ratio)
     stop_loss_pct: float = 1.5        # Stop loss at 1.5% from entry
@@ -84,9 +113,6 @@ class RiskConfig:
 
     # Slippage
     max_slippage_pct: float = 0.1
-
-    # Daily trade limit
-    max_daily_trades: int = 3  # Max trades per day (resets at UTC midnight)
 
 
 # =============================================================================
@@ -158,9 +184,11 @@ class RiskManagerService(BaseService):
         self._last_trade_day: Optional[datetime] = None
 
         self._logger.info(
-            "RiskManagerService initialized: risk=%.1f%%, max_pos=%d, max_exposure=%.0f%%",
-            self._config.per_trade_pct,
-            self._config.max_positions,
+            "RiskManagerService initialized: risk=%.1f-%.1f%%, leverage=%d-%dx, max_exposure=%.0f%%",
+            self._config.min_per_trade_pct,
+            self._config.max_per_trade_pct,
+            self._config.min_leverage,
+            self._config.max_leverage,
             self._config.max_exposure_pct,
         )
 
@@ -294,18 +322,6 @@ class RiskManagerService(BaseService):
                 float(setup.entry_price),
             )
 
-            # Check daily trade limit before processing (0 = unlimited)
-            today_count = await self._get_today_trade_count()
-            max_daily = self._config.max_daily_trades
-            if max_daily > 0 and today_count >= max_daily:
-                self._logger.warning(
-                    "Daily trade limit reached: %d/%d trades today. Rejecting setup: %s",
-                    today_count,
-                    max_daily,
-                    setup.id,
-                )
-                return
-
             # Calculate risk params
             risk_params = self._calculate_risk_params(setup)
 
@@ -328,8 +344,8 @@ class RiskManagerService(BaseService):
             # Create TradeIntent
             intent = self._create_trade_intent(setup, risk_params)
 
-            # Publish for execution
-            await self._publish_intent(intent)
+            # Publish for execution (include dynamic leverage for execution engine)
+            await self._publish_intent(intent, leverage=int(risk_params.leverage_used))
 
         except Exception as e:
             self._logger.error("Error handling setup: %s", e, exc_info=True)
@@ -344,7 +360,7 @@ class RiskManagerService(BaseService):
         The pending intent is NOT cleared on ``order_submitted`` because the
         position hasn't appeared in ``_open_positions`` yet (synced every 60s).
         Clearing too early creates a TOCTOU race where new trades bypass
-        ``max_positions``.  The intent is cleared later by the
+        the position check.  The intent is cleared later by the
         ``position_opened`` fill event (see ``_handle_fill_event``).
         """
         try:
@@ -482,14 +498,6 @@ class RiskManagerService(BaseService):
         if equity <= 0:
             return _reject("Equity not loaded yet")
 
-        # Check position limits (including pending intents!)
-        total_position_count = len(self._open_positions) + len(self._pending_intents)
-        if total_position_count >= cfg.max_positions:
-            return _reject(
-                f"Max positions reached: {cfg.max_positions} "
-                f"(open={len(self._open_positions)}, pending={len(self._pending_intents)})"
-            )
-
         # Check if already in position or pending for this symbol
         if setup.symbol in self._open_positions:
             return _reject(f"Already in position: {setup.symbol}")
@@ -540,12 +548,26 @@ class RiskManagerService(BaseService):
         if not self._check_correlation(setup.symbol):
             return _reject(f"Correlation filter: {setup.symbol} blocked by open position in same group")
 
-        # Kelly sizing based on setup confidence/probability
-        if hasattr(setup, 'confidence') and setup.confidence and float(setup.confidence) > 0:
-            risk_pct = Decimal(str(self._kelly_fraction(float(setup.confidence))))
-        else:
-            risk_pct = Decimal(str(cfg.per_trade_pct)) / 100
+        # Dynamic risk sizing based on LLM confidence
+        confidence = float(setup.confidence) if setup.confidence else 0.0
+        dynamic_risk_pct = scale_by_confidence(
+            confidence,
+            conf_threshold=0.6,
+            min_val=cfg.min_per_trade_pct,
+            max_val=cfg.max_per_trade_pct,
+        )
+        dynamic_leverage = round(scale_by_confidence(
+            confidence,
+            conf_threshold=0.6,
+            min_val=float(cfg.min_leverage),
+            max_val=float(cfg.max_leverage),
+        ))
+        risk_pct = Decimal(str(dynamic_risk_pct)) / 100
         risk_amount = equity * risk_pct
+        self._logger.info(
+            "Dynamic sizing: confidence=%.2f → risk=%.1f%%, leverage=%dx",
+            confidence, dynamic_risk_pct, dynamic_leverage,
+        )
 
         # Calculate position size from risk
         stop_distance_pct = setup.stop_distance_pct / 100
@@ -620,7 +642,7 @@ class RiskManagerService(BaseService):
             trailing_distance_atr=Decimal(str(cfg.trailing_atr_mult)),
             exposure_pct=exposure_pct,
             total_exposure_pct=self._get_total_exposure_pct() + exposure_pct,
-            leverage_used=Decimal(str(cfg.leverage)),
+            leverage_used=Decimal(str(dynamic_leverage)),
             size_approved=True,
         )
 
@@ -633,25 +655,6 @@ class RiskManagerService(BaseService):
         if self._current_equity <= 0:
             return Decimal("0")
         return (total_notional / self._current_equity) * 100
-
-    def _kelly_fraction(self, prob: float, rr_ratio: float = 2.0) -> float:
-        """Half-Kelly criterion for position sizing.
-
-        Args:
-            prob: Estimated probability of winning (P(TP))
-            rr_ratio: Risk-reward ratio (TP/SL), default 2.0
-
-        Returns:
-            Fractional risk as decimal (e.g. 0.035 = 3.5%)
-        """
-        if prob <= 0.5:
-            return 0.02  # minimum 2% risk
-        q = 1.0 - prob
-        kelly = (prob * rr_ratio - q) / rr_ratio
-        half_kelly = kelly / 2.0
-        # Clamp between 2% and max_per_trade_pct
-        max_frac = float(self._config.max_per_trade_pct) / 100
-        return max(0.02, min(max_frac, half_kelly))
 
     def _check_correlation(self, symbol: str) -> bool:
         """Check if adding this symbol would violate correlation limits.
@@ -681,6 +684,11 @@ class RiskManagerService(BaseService):
 
     def _create_trade_intent(self, setup: Setup, risk: RiskParams) -> TradeIntent:
         """Create TradeIntent from Setup and RiskParams."""
+        # Compute actual risk_pct from risk_amount / equity
+        actual_risk_pct = Decimal("0")
+        if self._current_equity > 0:
+            actual_risk_pct = (risk.risk_amount / self._current_equity) * 100
+
         return TradeIntent(
             id=f"intent_{setup.id}",
             setup_id=setup.id,
@@ -694,14 +702,14 @@ class RiskManagerService(BaseService):
             stop_price=risk.stop_price,
             trailing_atr_mult=risk.trailing_distance_atr,
             risk_amount=risk.risk_amount,
-            risk_pct=Decimal(str(self._config.per_trade_pct)),
+            risk_pct=actual_risk_pct,
             atr_pct=setup.atr_pct,
             regime=setup.regime.value if setup.regime else None,
             prefer_limit=True,
             max_slippage_pct=Decimal(str(self._config.max_slippage_pct)),
         )
 
-    async def _publish_intent(self, intent: TradeIntent) -> None:
+    async def _publish_intent(self, intent: TradeIntent, leverage: Optional[int] = None) -> None:
         """Publish trade intent to message bus."""
         if not self.bus:
             return
@@ -715,7 +723,10 @@ class RiskManagerService(BaseService):
         # Track pending intent to prevent duplicate orders
         self._pending_intents[intent.symbol] = intent
 
-        await self.publish(Topic.TRADE_INTENT, intent.model_dump())
+        intent_data = intent.model_dump()
+        if leverage is not None:
+            intent_data["leverage_used"] = leverage
+        await self.publish(Topic.TRADE_INTENT, intent_data)
 
         effective_risk = float(intent.notional_value) * float(self._config.stop_loss_pct) / 100
         self._logger.info(
@@ -983,7 +994,7 @@ class RiskManagerService(BaseService):
                     f"Duration: {duration_hours}h\n"
                     f"Details: {details}\n"
                     f"Resuming at: {cooldown_until.strftime('%Y-%m-%d %H:%M UTC')}",
-                    emoji="kill_switch"
+                    emoji="warning"
                 )
             except Exception as e:
                 self._logger.warning("Failed to send Telegram alert: %s", e)
@@ -1086,8 +1097,8 @@ class RiskManagerService(BaseService):
             "equity": float(self._current_equity),
             "open_positions": len(self._open_positions),
             "total_exposure_pct": float(self._get_total_exposure_pct()),
-            "max_positions": self._config.max_positions,
-            "risk_per_trade_pct": self._config.per_trade_pct,
+            "risk_per_trade_pct_range": f"{self._config.min_per_trade_pct}-{self._config.max_per_trade_pct}%",
+            "leverage_range": f"{self._config.min_leverage}-{self._config.max_leverage}x",
             "cooldown": cooldown_info,
         }
 

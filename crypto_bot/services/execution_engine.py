@@ -663,9 +663,11 @@ class ExecutionEngineService(BaseService):
                 entry_price = order_result.avg_price or signal["entry_price"]
                 is_long = signal["direction"] == "long"
 
-                # Use model-predicted TP/SL if present, otherwise fall back to config.
-                sl_pct = signal.get("model_sl_pct", self._bot_config.risk.stop_loss_pct) / 100
-                tp_pct = signal.get("model_tp_pct", self._bot_config.risk.take_profit_pct) / 100
+                # Use model-predicted TP/SL (FLAG-Trader heads), fall back to config
+                model_sl = signal.get("model_sl_pct", 0)
+                model_tp = signal.get("model_tp_pct", 0)
+                sl_pct = (model_sl if model_sl and model_sl > 0 else self._bot_config.risk.stop_loss_pct) / 100
+                tp_pct = (model_tp if model_tp and model_tp > 0 else self._bot_config.risk.take_profit_pct) / 100
 
                 # Only compute TP/SL prices if percentages are non-zero
                 if sl_pct > 0 or tp_pct > 0:
@@ -893,12 +895,14 @@ class ExecutionEngineService(BaseService):
         except Exception as e:
             self._logger.warning("Pre-flight spread check failed for %s: %s", symbol, e)
 
-        # Ensure configured leverage is set before placing the order
+        # Set leverage: prefer dynamic per-signal value, fall back to config
+        signal_leverage = signal.get("leverage_used")
         configured_leverage = getattr(self._bot_config.risk, "leverage", None)
-        if configured_leverage:
+        leverage = int(signal_leverage) if signal_leverage else (int(configured_leverage) if configured_leverage else None)
+        if leverage:
             try:
-                await self.client.update_leverage(symbol, int(configured_leverage))
-                self._logger.debug("Leverage set to %dx for %s", configured_leverage, symbol)
+                await self.client.update_leverage(symbol, leverage)
+                self._logger.debug("Leverage set to %dx for %s", leverage, symbol)
             except Exception as e:
                 self._logger.warning("Failed to set leverage for %s: %s", symbol, e)
 
@@ -1839,6 +1843,8 @@ class ExecutionEngineService(BaseService):
         far too wide for a 15m momentum scalper.
 
         Both TP and SL are always calculated from the actual fill price.
+        Model-predicted TP/SL (from FLAG-Trader heads) take priority.
+        The LLM 60s eval loop runs in parallel and can close before TP/SL hit.
 
         ATR data (entry_atr_pct) is still stored on the position for the
         trailing stop system, which uses it independently.
@@ -1848,12 +1854,18 @@ class ExecutionEngineService(BaseService):
             order: Filled entry order
             position: ExecutionPosition to protect
         """
-        # --- LLM-only exit mode: skip TP/SL when config values are 0 ---
+        # Use model-predicted TP/SL (from FLAG-Trader heads)
+        model_sl = signal.get("model_sl_pct", 0)
+        model_tp = signal.get("model_tp_pct", 0)
         cfg_sl = getattr(self._bot_config.risk, "stop_loss_pct", 0)
         cfg_tp = getattr(self._bot_config.risk, "take_profit_pct", 0)
-        if cfg_sl == 0 and cfg_tp == 0:
+
+        sl_pct_raw = model_sl if model_sl and model_sl > 0 else cfg_sl
+        tp_pct_raw = model_tp if model_tp and model_tp > 0 else cfg_tp
+
+        if sl_pct_raw == 0 and tp_pct_raw == 0:
             self._logger.info(
-                "TP/SL SKIPPED for %s: LLM-only exit mode (stop_loss_pct=0, take_profit_pct=0)",
+                "TP/SL SKIPPED for %s: no model predictions and config values are 0",
                 signal["symbol"],
             )
             return
@@ -1885,9 +1897,8 @@ class ExecutionEngineService(BaseService):
         except Exception as e:
             self._logger.warning("Could not fetch open orders to clean up %s: %s", symbol, e)
 
-        # Use model-predicted TP/SL if present, otherwise fall back to config
-        sl_pct = signal.get("model_sl_pct", self._bot_config.risk.stop_loss_pct) / 100
-        tp_pct = signal.get("model_tp_pct", self._bot_config.risk.take_profit_pct) / 100
+        sl_pct = sl_pct_raw / 100
+        tp_pct = tp_pct_raw / 100
 
         # Store ATR on position for trailing stop calculations (if available)
         atr_pct_raw = signal.get("atr_pct", 0)

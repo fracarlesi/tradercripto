@@ -8,6 +8,15 @@
 Per sapere come funziona il sistema, LEGGI SEMPRE il codice sorgente. Questo file contiene solo
 istruzioni stabili (workflow, comandi, standards, regole). La logica di trading cambia spesso.
 
+## Memory Management
+
+- Alla fine di ogni conversazione con cambiamenti significativi, **aggiorna MEMORY.md**
+- Se il sistema di produzione cambia (nuovo modello, nuova architettura, deploy), aggiorna "Current Production Config"
+- Rimuovi info obsolete, non accumulare storia morta
+- Se prendi una decisione importante, loggala nella sezione "Key Decisions"
+
+---
+
 ## Startup: Activate Serena
 
 All'inizio di ogni conversazione, attiva il progetto Serena con:
@@ -40,7 +49,6 @@ crypto_bot/                   # Crypto bot (Hyperliquid DEX) ← MAIN
 ├── core/                     # Pydantic models, enums
 ├── flag_trader/              # LLM agent, model, env, trainer, RAG
 ├── services/                 # Microservices (execution, risk, alerts...)
-├── strategies/               # Legacy (deprecated)
 ├── scripts/                  # Training, replay, download
 └── tests/                    # pytest suite
 

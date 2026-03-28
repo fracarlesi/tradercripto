@@ -8,13 +8,12 @@
 # ---- DIFFERENCES vs trading.yaml (production) ----
 #
 # universe.min_volume_24h:          100000 (prod: 500000)
-# risk.per_trade_pct:               18.0   (prod: 25.0)
+# risk.min_per_trade_pct:           8.0    (prod: 10.0)
 # risk.max_per_trade_pct:           25.0   (prod: 30.0)
-# risk.max_positions:               3      (prod: 1)
 # risk.max_exposure_pct:            270    (prod: 100)
 # risk.max_position_pct:            60     (prod: 85)
-# risk.leverage:                    10     (prod: 3)
-# risk.max_daily_trades:            0      (prod: 3)
+# risk.min_leverage:                2      (prod: 2)
+# risk.max_leverage:                10     (prod: 5)
 # stops:                            SAME as prod (LLM-only exit management)
 # execution.maker_max_reprices:     12     (prod: 6)
 # execution.max_slippage_pct:       0.30   (prod: 0.15)
@@ -100,40 +99,25 @@ timeframes:
 # Risk Management
 # -----------------------------------------------------------------------------
 risk:
-  per_trade_pct: 18.0
-  max_per_trade_pct: 25.0
+  # Dynamic risk scaling (based on LLM confidence)
+  min_per_trade_pct: 8.0        # risk % at confidence threshold (0.6)
+  max_per_trade_pct: 25.0       # risk % at confidence 1.0
 
-  max_positions: 3
   max_exposure_pct: 270
   max_position_pct: 60
 
-  leverage: 10
-  max_daily_trades: 0
+  # Dynamic leverage scaling (based on LLM confidence)
+  min_leverage: 2               # leverage at confidence threshold
+  max_leverage: 10              # leverage at confidence 1.0
 
 # -----------------------------------------------------------------------------
-# Kill Switch
+# Stops — Model-predicted TP/SL + LLM 60s eval loop
 # -----------------------------------------------------------------------------
-kill_switch:
-  enabled: true
-
-  daily_loss_pct: 6.0
-  daily_loss_action: "pause_until_tomorrow"
-
-  weekly_loss_pct: 15.0
-  weekly_loss_action: "pause_3_days"
-
-  max_drawdown_pct: 25.0
-  max_drawdown_action: "stop_all"
-
-  check_interval_seconds: 60
-
-# -----------------------------------------------------------------------------
-# Stops — DISABLED (LLM-only exit management)
-# -----------------------------------------------------------------------------
-# All exit decisions are made by the FLAG-Trader LLM every 60 seconds.
-# No mechanical TP/SL, no max hold time, no trailing stops.
+# Dual exit mechanism:
+# 1. Model-predicted TP/SL placed as orders on the exchange at entry
+# 2. LLM re-evaluates open positions every 60 seconds (can close early)
+# Config values below are fallbacks if model predictions are missing.
 stops:
-  # Legacy fields kept for compatibility — not enforced
   stop_loss_pct: 0
   take_profit_pct: 0
   breakeven_threshold_pct: 99.0

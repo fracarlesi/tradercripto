@@ -10,7 +10,7 @@ Architecture:
 
 This orchestrator:
 1. Loads configuration from trading.yaml
-2. Initializes core services (message bus, kill switch, risk, execution)
+2. Initializes core services (message bus, risk, execution)
 3. Loads pre-trained FLAG-Trader model (Qwen 0.5B + policy/value heads)
 4. Scans top-N assets by volume, builds prompts from candle data
 5. Executes actionable decisions through risk manager pipeline
@@ -54,11 +54,6 @@ from .services.market_state import (
 from .services.risk_manager import (
     RiskConfig,
     create_risk_manager,
-)
-from .services.kill_switch import (
-    KillSwitchService,
-    KillSwitchConfig,
-    create_kill_switch,
 )
 from .services.execution_engine import (
     ExecutionEngineService,
@@ -139,19 +134,13 @@ class ConservativeConfig:
     bars_to_fetch: int
     scan_interval_minutes: int
 
-    # Risk
-    per_trade_pct: float
+    # Risk (dynamic, scaled by LLM confidence)
+    min_per_trade_pct: float
     max_per_trade_pct: float
-    max_positions: int
     max_exposure_pct: float
     max_position_pct: float
-    max_daily_trades: int
-    leverage: float
-
-    # Kill switch
-    daily_loss_pct: float
-    weekly_loss_pct: float
-    max_drawdown_pct: float
+    min_leverage: int
+    max_leverage: int
 
     # Stops
     initial_atr_mult: float
@@ -216,7 +205,6 @@ class ConservativeConfig:
         universe = get_section("universe")
         timeframes = get_section("timeframes")
         risk = get_section("risk")
-        ks = get_section("kill_switch")
         stops = get_section("stops")
         regime = get_section("regime")
         execution = get_section("execution")
@@ -246,16 +234,12 @@ class ConservativeConfig:
             primary_timeframe=timeframes.get("primary", "15m"),
             bars_to_fetch=timeframes.get("bars_to_fetch", 200),
             scan_interval_minutes=timeframes.get("scan_interval_minutes", 5),
-            per_trade_pct=risk.get("per_trade_pct", 5.0),
-            max_per_trade_pct=risk.get("max_per_trade_pct", 10.0),
-            max_positions=risk.get("max_positions", 3),
+            min_per_trade_pct=risk.get("min_per_trade_pct", 10.0),
+            max_per_trade_pct=risk.get("max_per_trade_pct", 30.0),
             max_exposure_pct=risk.get("max_exposure_pct", 300),
             max_position_pct=risk.get("max_position_pct", 70),
-            max_daily_trades=risk.get("max_daily_trades", 8),
-            leverage=risk.get("leverage", 10),
-            daily_loss_pct=ks.get("daily_loss_pct", 8.0),
-            weekly_loss_pct=ks.get("weekly_loss_pct", 15.0),
-            max_drawdown_pct=ks.get("max_drawdown_pct", 30.0),
+            min_leverage=risk.get("min_leverage", 2),
+            max_leverage=risk.get("max_leverage", 5),
             initial_atr_mult=stops.get("initial_atr_mult", 2.5),
             trailing_atr_mult=stops.get("trailing_atr_mult", 0),
             minimal_roi=stops.get("minimal_roi", {}),
@@ -310,12 +294,10 @@ class ConservativeBot:
     Critical design principles:
     1. FLAG-Trader model decides Buy/Sell/Hold for each asset
     2. Execute actionable decisions through risk manager pipeline
-    3. Kill switch ALWAYS active
-    4. Physical gates: cooldown, protections, spread, max_positions
+    3. Physical gates: cooldown, protections, spread
     """
 
     SERVICE_ORDER = [
-        "kill_switch",     # MUST be first - safety critical
         "market_state",    # Data provider
         "risk_manager",    # Sizing
         "execution",       # Order placement
@@ -376,10 +358,6 @@ class ConservativeBot:
         return self._running
 
     @property
-    def kill_switch(self) -> Optional[KillSwitchService]:
-        return self._services.get("kill_switch")
-
-    @property
     def market_state(self) -> Optional[MarketStateService]:
         return self._services.get("market_state")
 
@@ -396,10 +374,12 @@ class ConservativeBot:
             self._raw_config = yaml.safe_load(f)
 
         logger.info(
-            "Config loaded: assets=%s, risk=%.1f%%, max_dd=%.1f%%",
+            "Config loaded: assets=%s, risk=%.1f-%.1f%%, leverage=%d-%dx",
             self._config.assets,
-            self._config.per_trade_pct,
-            self._config.max_drawdown_pct,
+            self._config.min_per_trade_pct,
+            self._config.max_per_trade_pct,
+            self._config.min_leverage,
+            self._config.max_leverage,
         )
         return self._config
 
@@ -535,18 +515,6 @@ class ConservativeBot:
         """Initialize all services."""
         cfg = self.config
 
-        # Kill Switch - CRITICAL, must be first
-        ks_config = KillSwitchConfig(
-            enabled=True,
-            daily_loss_pct=cfg.daily_loss_pct,
-            weekly_loss_pct=cfg.weekly_loss_pct,
-            max_drawdown_pct=cfg.max_drawdown_pct,
-            check_interval_seconds=60,
-        )
-        self._services["kill_switch"] = create_kill_switch(
-            bus=self._bus, config=ks_config,
-        )
-
         # Notifications
         telegram_service = None
         if self._bus is not None:
@@ -572,13 +540,12 @@ class ConservativeBot:
 
         # Risk Manager
         risk_config = RiskConfig(
-            per_trade_pct=cfg.per_trade_pct,
+            min_per_trade_pct=cfg.min_per_trade_pct,
             max_per_trade_pct=cfg.max_per_trade_pct,
-            max_positions=cfg.max_positions,
             max_exposure_pct=cfg.max_exposure_pct,
             max_position_pct=cfg.max_position_pct,
-            max_daily_trades=cfg.max_daily_trades,
-            leverage=cfg.leverage,
+            min_leverage=cfg.min_leverage,
+            max_leverage=cfg.max_leverage,
             trailing_atr_mult=cfg.trailing_atr_mult,
             max_slippage_pct=cfg.max_slippage_pct,
         )
@@ -605,7 +572,7 @@ class ConservativeBot:
             def __init__(self, cfg: ConservativeConfig):
                 self.take_profit_pct = cfg.take_profit_pct
                 self.stop_loss_pct = cfg.stop_loss_pct
-                self.leverage = int(cfg.leverage)
+                self.leverage = cfg.max_leverage  # Use max as default for execution engine
                 self.breakeven_threshold_pct = cfg.breakeven_threshold_pct
 
         class _StopsConfig:
@@ -926,22 +893,15 @@ class ConservativeBot:
 
         risk_manager = self._services.get("risk_manager")
 
-        # --- Check available position slots ---
-        if risk_manager:
-            pos_count = len(risk_manager._open_positions) + len(risk_manager._pending_intents)
-            available_slots = max(0, self.config.max_positions - pos_count)
-        else:
-            available_slots = self.config.max_positions
-
         portfolio = await self._get_portfolio_state()
 
+        pos_count = len(risk_manager._open_positions) if risk_manager else 0
         logger.info(
-            "EVAL START | equity=$%.2f | margin=$%.2f | leverage=%.1fx | positions=%d/%d | trigger=%s",
+            "EVAL START | equity=$%.2f | margin=$%.2f | leverage=%.1fx | positions=%d | trigger=%s",
             portfolio.get("total_account_value", 0),
             portfolio.get("asset_position", 0),
             portfolio.get("leverage_used", 0),
-            len(risk_manager._open_positions) if risk_manager else 0,
-            self.config.max_positions,
+            pos_count,
             "targeted" if triggered_symbols else "full_scan",
         )
 
@@ -958,9 +918,7 @@ class ConservativeBot:
         else:
             scan_assets = [s for s in self.config.assets if s not in blocked]
 
-        if not scan_assets or available_slots == 0:
-            if available_slots == 0:
-                logger.info("All %d position slots full, skipping new trade scan", self.config.max_positions)
+        if not scan_assets:
             return
 
         # --- Update market states for execution engine ---
@@ -987,21 +945,13 @@ class ConservativeBot:
             return
 
         logger.info(
-            "FLAG-Trader: %d actionable decisions, %d slots available",
-            len(decisions), available_slots,
+            "FLAG-Trader: %d actionable decisions",
+            len(decisions),
         )
 
-        # --- Execute decisions ---
+        # --- Execute decisions (no position limit, exposure checked by RiskManager) ---
         executed = 0
         for decision in decisions:
-            if executed >= available_slots:
-                break
-            if risk_manager:
-                cur_count = len(risk_manager._open_positions) + len(risk_manager._pending_intents)
-                if cur_count >= self.config.max_positions:
-                    logger.info("All slots filled during execution, stopping")
-                    break
-
             success = await self._execute_flag_decision(decision)
             if success:
                 executed += 1
@@ -1213,23 +1163,14 @@ class ConservativeBot:
 
         warnings: list[str] = []
 
-        max_pos = self.config.max_positions
-        if len(positions) > max_pos:
-            msg = (
-                f"POSITION OVERFLOW: {len(positions)} open positions "
-                f"but max_positions={max_pos}. "
-                f"Symbols: {list(positions.keys())}"
-            )
-            logger.warning(msg)
-            warnings.append(msg)
+        logger.info("Startup safety check: %d open positions", len(positions))
 
-        configured_leverage = self.config.leverage
         for symbol, pos in positions.items():
             pos_leverage = getattr(pos, "leverage", None)
-            if pos_leverage and pos_leverage != configured_leverage:
+            if pos_leverage and pos_leverage > self.config.max_leverage:
                 msg = (
-                    f"LEVERAGE MISMATCH: {symbol} has {pos_leverage}x "
-                    f"but config says {configured_leverage}x"
+                    f"LEVERAGE WARNING: {symbol} has {pos_leverage}x "
+                    f"but max_leverage={self.config.max_leverage}x"
                 )
                 logger.warning(msg)
                 warnings.append(msg)
@@ -1259,7 +1200,7 @@ class ConservativeBot:
             logger.warning("=" * 60)
             if ntfy and hasattr(ntfy, "send_custom_alert"):
                 try:
-                    await ntfy.send_custom_alert(alert_text, emoji="kill_switch")
+                    await ntfy.send_custom_alert(alert_text, emoji="warning")
                 except Exception:
                     pass
         else:
@@ -1345,8 +1286,6 @@ class ConservativeBot:
             if self._exchange:
                 account = await self._exchange.get_account_state()
                 equity = account.get("equity", 0)
-                if self.kill_switch:
-                    await self.kill_switch.update_equity(Decimal(str(equity)))
 
             ft_cfg = FlagTraderConfig.from_dict(self.config.flag_trader_config)
             logger.info("=" * 60)
@@ -1356,8 +1295,9 @@ class ConservativeBot:
                 ft_cfg.model_name,
             )
             logger.info("Assets: %d | Confidence threshold: %.2f", len(self.config.assets), ft_cfg.confidence_threshold)
-            logger.info("Risk per trade: %.1f%% | Max DD: %.1f%%",
-                        self.config.per_trade_pct, self.config.max_drawdown_pct)
+            logger.info("Risk per trade: %.1f-%.1f%% | Leverage: %d-%dx",
+                        self.config.min_per_trade_pct, self.config.max_per_trade_pct,
+                        self.config.min_leverage, self.config.max_leverage)
             logger.info("=" * 60)
 
         except Exception as e:
@@ -1449,8 +1389,8 @@ class ConservativeBot:
             "config": {
                 "assets": self.config.assets if self._config else [],
                 "testnet": self.config.testnet if self._config else True,
-                "risk_per_trade": self.config.per_trade_pct if self._config else 0,
-                "max_drawdown": self.config.max_drawdown_pct if self._config else 0,
+                "risk_per_trade_range": f"{self.config.min_per_trade_pct}-{self.config.max_per_trade_pct}%" if self._config else "N/A",
+                "leverage_range": f"{self.config.min_leverage}-{self.config.max_leverage}x" if self._config else "N/A",
                 "flag_trader_model": ft_cfg.model_name if ft_cfg else "N/A",
             },
             "services": service_status,
