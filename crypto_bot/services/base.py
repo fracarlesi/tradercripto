@@ -15,39 +15,20 @@ Features:
 - Status tracking (running, stopped, error, starting, stopping)
 
 Usage:
-    class MyService(BaseService):
-        async def _on_start(self) -> None:
-            # Initialize resources
-            await self.bus.subscribe(Topic.MARKET_DATA, self.handle_data)
-        
-        async def _on_stop(self) -> None:
-            # Cleanup resources
-            pass
-        
-        async def _run_iteration(self) -> None:
-            # Main service loop iteration
-            await asyncio.sleep(1)
-        
-        async def _health_check_impl(self) -> bool:
-            # Custom health check
-            return True
-    
-    service = MyService(name="my_service", bus=bus)
-    await service.start()
+    Subclass BaseService and implement _on_start(), _on_stop(), and
+    optionally _run_iteration() and _health_check_impl().
 
 Author: Francesco Carlesi
 """
 
 import asyncio
 import logging
-import time
-import traceback
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Coroutine, Dict, Optional, TypeVar
+from typing import Any, Callable, Coroutine, Dict, Optional
 
 import yaml
 
@@ -84,7 +65,7 @@ class HealthStatus:
     
     healthy: bool
     status: ServiceStatus
-    last_check: datetime = field(default_factory=datetime.utcnow)
+    last_check: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     message: str = ""
     details: Dict[str, Any] = field(default_factory=dict)
     

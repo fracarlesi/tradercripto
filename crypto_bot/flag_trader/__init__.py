@@ -9,7 +9,6 @@ Components: Gymnasium environment, prompt builder, data collector, reward functi
 from .agent import FlagTraderAgent, FlagTraderConfig, TradeDecision
 from .data_collector import HyperliquidDataCollector
 from .trade_logger import FlagTradeLogger, TradeRecord
-from .trade_memory_rag import TradeMemoryRAG
 from .environment import HyperliquidTradingEnv
 from .model import FlagTraderModel
 from .prompt import PromptBuilder
@@ -45,5 +44,4 @@ __all__ = [
     "ResearchState",
     "FlagTradeLogger",
     "TradeRecord",
-    "TradeMemoryRAG",
 ]

@@ -1,10 +1,38 @@
 # =============================================================================
 # HLQuantBot v3.0 - Paper Trading Configuration (Testnet)
 # =============================================================================
-# Identical to trading.yaml except:
-#   - environment: testnet
-#   - Separate ML model path
-#   - Separate ntfy topic
+# This file is loaded via: python main.py -c crypto_bot/config/trading_paper.yaml
+# There is NO config inheritance — this is a standalone copy of trading.yaml.
+# When updating trading.yaml, sync changes here (except intentional differences).
+#
+# ---- DIFFERENCES vs trading.yaml (production) ---- updated 2026-03-28
+#
+# universe.min_volume_24h:          100000 (prod: 500000)
+# universe.exclude_symbols:         missing PAXG (prod has it)
+# risk.per_trade_pct:               18.0   (prod: 25.0)
+# risk.max_per_trade_pct:           25.0   (prod: 30.0)
+# risk.max_positions:               3      (prod: 1 — validation mode)
+# risk.max_exposure_pct:            270    (prod: 100)
+# risk.max_position_pct:            60     (prod: 85)
+# risk.leverage:                    10     (prod: 3)
+# risk.max_leverage:                20     (prod: 5)
+# risk.max_daily_trades:            0      (prod: 3)
+# stops.breakeven_threshold_pct:    1.0    (prod: 99.0 = disabled)
+# stops.max_hold_hours:             MISSING (prod: 6)
+# stops.trailing_atr_mult:          1.5    (prod: 0 = disabled)
+# stops.momentum_exit.enabled:      true   (prod: false)
+# llm.timeout_seconds:              30     (prod: 10)
+# execution.maker_max_reprices:     12     (prod: 6)
+# execution.max_slippage_pct:       0.30   (prod: 0.15)
+# execution.max_spread_pct:         0.15   (prod: 0.08)
+# protections[StoplossGuard].stop_duration_min: 360 (prod: 120)
+# protections:                      has LowPerformance (prod: removed)
+# ml_model.model_path:              trade_model_paper.joblib (prod: trade_model.joblib)
+# ml_model.min_probability:         0.52   (prod: 0.50)
+# ml_model.short_threshold_offset:  MISSING (prod: 0.05)
+# flag_trader:                      MISSING entire section (prod: enabled)
+# filters:                          MISSING entire section (prod: btc_macro_gate etc.)
+# root: environment=testnet, dry_run=false (prod: neither set)
 # =============================================================================
 
 # -----------------------------------------------------------------------------

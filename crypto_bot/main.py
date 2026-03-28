@@ -41,7 +41,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from .core.enums import Topic
-from .core.models import Direction, Regime, Setup, SetupType
+from .core.models import Direction, Setup, SetupType
 
 # Services
 from .services.message_bus import MessageBus
@@ -67,7 +67,7 @@ from .services.telegram_service import TelegramService
 from .services.whatsapp_service import WhatsAppService
 
 # FLAG-Trader
-from .flag_trader.agent import ExitDecision, FlagTraderAgent, FlagTraderConfig, TradeDecision
+from .flag_trader.agent import FlagTraderAgent, FlagTraderConfig, TradeDecision
 from .flag_trader.model import FlagTraderModel
 from .flag_trader.prompt import PromptBuilder
 from .flag_trader.trade_logger import FlagTradeLogger
@@ -661,10 +661,9 @@ class ConservativeBot:
     async def _strategy_loop(self) -> None:
         """Main evaluation loop: scan assets with FLAG-Trader model.
 
-        Uses RealtimeMonitorService for event-driven triggering:
-        - Scheduled scan every 5 min (fallback)
-        - Price move >2% on top assets
-        - Position PnL threshold breach
+        Purely event-driven via RealtimeMonitorService:
+        - Price move >2% on universe assets
+        - Position PnL threshold breach (±3%)
         - New fill detected
 
         Cooldown of 60s between triggers to avoid LLM spam.
@@ -781,7 +780,7 @@ class ConservativeBot:
             portfolio.get("leverage_used", 0),
             len(risk_manager._open_positions) if risk_manager else 0,
             self.config.max_positions,
-            "targeted" if triggered_symbols else "scheduled",
+            "targeted" if triggered_symbols else "full_scan",
         )
 
         # --- Determine which assets to evaluate ---
