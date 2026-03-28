@@ -4,13 +4,13 @@ Realtime Monitor Service
 
 Monitors market prices and open positions in real-time,
 triggering LLM evaluation only when meaningful events occur:
-- Scheduled scan every 5 minutes (top N by volume, fallback)
 - Large price move (>2%) on ANY universe asset in 5 minutes
-- Position PnL exceeds threshold
+- Position PnL exceeds threshold (±3%)
 - New fill detected
 
-Key design: uses a single `get_all_mids()` call per poll (1 API call)
-to monitor ALL assets in the universe, not a per-asset loop.
+Purely event-driven: NO scheduled fallback scan.
+Uses a single `get_all_mids()` call per poll (1 API call, every 10s)
+to monitor ALL assets in the universe.
 
 When a trigger fires, it includes which specific symbols caused it,
 so the LLM evaluates ONLY those assets instead of scanning everything.
@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 class TriggerEvent:
     """An event that should trigger LLM evaluation."""
 
-    reason: str       # "scheduled_scan", "price_move", "position_pnl", "new_fill"
+    reason: str       # "price_move", "position_pnl", "new_fill"
     details: str      # "BTC +2.3% in 5min", "ETH position -5% PnL"
     symbols: list[str] = field(default_factory=list)  # which assets to evaluate
     priority: int = 0  # Higher = more urgent
@@ -55,12 +55,10 @@ class RealtimeMonitorService:
         self.poll_interval: float = 10.0          # seconds between polls
         self.price_move_threshold: float = 2.0    # % move in 5 min
         self.pnl_threshold: float = 3.0           # % PnL on position
-        self.scheduled_interval: float = 300.0    # 5 min fallback
 
         # Internal state
         self._price_snapshots: dict[str, list[tuple[float, float]]] = defaultdict(list)
         self._last_fill_id: str = ""
-        self._last_scheduled: float = 0.0
         self._last_trigger: float = 0.0
         self._min_trigger_cooldown: float = 60.0  # min 60s between triggers
         self._pending_trigger: Optional[TriggerEvent] = None
@@ -79,7 +77,6 @@ class RealtimeMonitorService:
         if self._running:
             return
         self._running = True
-        self._last_scheduled = time.time()
         self._task = asyncio.create_task(self._poll_loop(), name="realtime_monitor")
         logger.info(
             "RealtimeMonitorService started (poll=%ds, cooldown=%ds, universe=%d assets)",
@@ -106,7 +103,6 @@ class RealtimeMonitorService:
         """Poll every 10 seconds for trigger conditions."""
         while self._running:
             try:
-                await self._check_scheduled_scan()
                 await self._check_price_moves()
                 await self._check_position_pnl()
                 await self._check_new_fills()
@@ -119,22 +115,6 @@ class RealtimeMonitorService:
     # =========================================================================
     # Trigger checks
     # =========================================================================
-
-    async def _check_scheduled_scan(self) -> None:
-        """Trigger a full scan every 5 minutes as fallback.
-
-        Scheduled scans pass NO specific symbols — the main loop
-        will use its default top-N selection.
-        """
-        now = time.time()
-        if now - self._last_scheduled >= self.scheduled_interval:
-            self._last_scheduled = now
-            self._set_trigger(TriggerEvent(
-                reason="scheduled_scan",
-                details="5min periodic scan",
-                symbols=[],  # empty = scan top N (default behavior)
-                priority=1,
-            ))
 
     async def _check_price_moves(self) -> None:
         """Check ALL universe assets for >2% moves in 5 minutes.

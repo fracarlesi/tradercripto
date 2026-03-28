@@ -110,8 +110,52 @@ def compute_calmar_delta(pnl_history: list[float]) -> float:
     return current - previous
 
 
+
+def compute_enhanced_sharpe(
+    pnl_history: list[float],
+    risk_free_rate: float = 0.0,
+    trade_opened: bool = False,
+    trade_closed_profit: bool | None = None,
+) -> float:
+    """Enhanced Sharpe delta con bonus/penalità per segnale più chiaro.
+
+    Componenti:
+    1. Base: sharpe_delta (esistente)
+    2. PnL bonus: +0.1 se trade chiuso in profitto, -0.1 se chiuso in loss
+    3. Fee penalty: -0.01 se trade aperto (scoraggia overtrading)
+
+    I parametri extra (trade_opened, trade_closed_profit) sono opzionali.
+    Se non forniti, si comporta come sharpe_delta normale.
+
+    Args:
+        pnl_history: List of per-step PnL values (at least 2 for a delta).
+        risk_free_rate: Annualized risk-free rate (default 0).
+        trade_opened: Whether a new trade was opened this step.
+        trade_closed_profit: True if trade closed in profit, False if in loss,
+            None if no trade was closed this step.
+
+    Returns:
+        Enhanced reward combining Sharpe delta with trade-level signals.
+    """
+    # 1. Base component: standard Sharpe delta
+    reward = compute_sharpe_delta(pnl_history, risk_free_rate)
+
+    # 2. PnL bonus/penalty on trade close
+    if trade_closed_profit is True:
+        reward += 0.1
+    elif trade_closed_profit is False:
+        reward -= 0.1
+
+    # 3. Fee penalty on trade open (discourages overtrading)
+    if trade_opened:
+        reward -= 0.01
+
+    return reward
+
+
 REWARD_FUNCTIONS: dict[str, Callable[..., float]] = {
     "sharpe_delta": compute_sharpe_delta,
     "sortino_delta": compute_sortino_delta,
     "calmar_delta": compute_calmar_delta,
+    "enhanced_sharpe": compute_enhanced_sharpe,
 }

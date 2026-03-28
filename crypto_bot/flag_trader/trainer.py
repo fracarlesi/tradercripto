@@ -35,12 +35,12 @@ def obs_to_prompt_inputs(
     """Convert environment observation (numpy arrays) to PromptBuilder format.
 
     Args:
-        obs: Dict with 'candles' (N,5), 'portfolio' (4,), 'history' (10,).
+        obs: Dict with 'candles' (N,8), 'portfolio' (4,), 'history' (10,).
 
     Returns:
         (candles_list, portfolio_dict, history_dict) ready for PromptBuilder.build_prompt().
     """
-    candles_arr = obs["candles"]  # (window_size, 5) -- O, H, L, C, V
+    candles_arr = obs["candles"]  # (window_size, 8) -- O, H, L, C, V, funding_proxy, oi_proxy, vol_delta
     candles_list = [
         {
             "open": float(row[0]),
@@ -48,6 +48,9 @@ def obs_to_prompt_inputs(
             "low": float(row[2]),
             "close": float(row[3]),
             "volume": float(row[4]),
+            "funding_proxy": float(row[5]),
+            "oi_proxy": float(row[6]),
+            "vol_delta": float(row[7]),
         }
         for row in candles_arr
     ]
@@ -244,6 +247,103 @@ class PPOTrainer:
             "mean_reward": float(np.mean(all_rewards)) if all_rewards else 0.0,
             "num_episodes_completed": len(episode_returns),
             "mean_episode_return": float(np.mean(episode_returns)) if episode_returns else 0.0,
+        }
+
+    @torch.no_grad()
+    def collect_rollout_multi_asset(
+        self,
+        envs: dict[str, HyperliquidTradingEnv],
+        num_steps: int = 200,
+        steps_per_block: int = 20,
+    ) -> dict[str, float]:
+        """Collect rollout rotating across multiple asset environments in BLOCKS.
+
+        Instead of picking a random asset at every step (which gives ~2-3 steps
+        per asset with 200 steps / 74 assets — not enough to complete a trade),
+        this method does `steps_per_block` consecutive steps on the same asset
+        before rotating to the next one.
+
+        This allows the model to:
+        1. Open a position
+        2. Manage it across several steps
+        3. Close it (or let TP/SL trigger)
+        4. Receive meaningful reward
+
+        Args:
+            envs: Mapping of symbol name to trading environment.
+            num_steps: Total number of steps to collect across all envs.
+            steps_per_block: Consecutive steps on the same asset before rotating.
+
+        Returns:
+            Stats dict with mean_reward, num_episodes_completed,
+            mean_episode_return, and num_assets_used.
+        """
+        if not envs:
+            raise ValueError("envs dict must not be empty")
+
+        self.model.eval()
+        self.buffer.clear()
+
+        env_names = list(envs.keys())
+        rng = np.random.default_rng()
+        rng.shuffle(env_names)  # type: ignore[arg-type]
+
+        # Maintain per-env state: current observation and episode return
+        obs_map: dict[str, dict[str, np.ndarray]] = {}
+        episode_return_map: dict[str, float] = {}
+        for name, env in envs.items():
+            obs_map[name], _ = env.reset()
+            episode_return_map[name] = 0.0
+
+        episode_returns: list[float] = []
+        all_rewards: list[float] = []
+        assets_used: set[str] = set()
+
+        total_collected: int = 0
+        asset_idx: int = 0
+
+        while total_collected < num_steps:
+            # Round-robin through shuffled asset list
+            name = env_names[asset_idx % len(env_names)]
+            asset_idx += 1
+            env = envs[name]
+            assets_used.add(name)
+
+            # Run a block of consecutive steps on this asset
+            block_steps = min(steps_per_block, num_steps - total_collected)
+            for _ in range(block_steps):
+                obs = obs_map[name]
+
+                prompt = self._obs_to_prompt(obs, env=env)
+                result = self.model.get_action(prompt, return_tokens=True)
+                action, value, log_prob, tp_pct, sl_pct, input_ids, attention_mask = result
+
+                env.set_tp_sl(tp_pct, sl_pct)
+                next_obs, reward, terminated, truncated, info = env.step(action)
+                done = terminated or truncated
+
+                self.buffer.add(
+                    prompt, action, reward, value, log_prob, done,
+                    input_ids=input_ids, attention_mask=attention_mask,
+                )
+                self.buffer.tp_pcts.append(tp_pct)
+                self.buffer.sl_pcts.append(sl_pct)
+                episode_return_map[name] += reward
+                all_rewards.append(reward)
+                total_collected += 1
+
+                if done:
+                    episode_returns.append(episode_return_map[name])
+                    episode_return_map[name] = 0.0
+                    obs_map[name], _ = env.reset()
+                else:
+                    obs_map[name] = next_obs
+
+        return {
+            "mean_reward": float(np.mean(all_rewards)) if all_rewards else 0.0,
+            "num_episodes_completed": len(episode_returns),
+            "mean_episode_return": float(np.mean(episode_returns)) if episode_returns else 0.0,
+            "num_assets_used": len(assets_used),
         }
 
     def compute_gae(

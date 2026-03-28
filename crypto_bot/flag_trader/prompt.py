@@ -128,7 +128,11 @@ class PromptBuilder:
     def _normalize_candles(
         self, candles: list[dict[str, float]]
     ) -> list[dict[str, float]]:
-        """Normalize prices as pct change from the first candle's close."""
+        """Normalize prices as pct change from the first candle's close.
+
+        Proxy features (funding_proxy, oi_proxy, vol_delta) are passed through
+        as-is since they are already normalized by the environment.
+        """
         if not candles:
             return []
 
@@ -137,17 +141,21 @@ class PromptBuilder:
             base_close = 1.0
 
         dp = self.decimal_places
+        proxy_keys = ("funding_proxy", "oi_proxy", "vol_delta")
         normalized: list[dict[str, float]] = []
         for c in candles:
-            normalized.append(
-                {
-                    "open": round((c["open"] / base_close - 1.0), dp),
-                    "high": round((c["high"] / base_close - 1.0), dp),
-                    "low": round((c["low"] / base_close - 1.0), dp),
-                    "close": round((c["close"] / base_close - 1.0), dp),
-                    "volume": round(c["volume"], dp),
-                }
-            )
+            entry: dict[str, float] = {
+                "open": round((c["open"] / base_close - 1.0), dp),
+                "high": round((c["high"] / base_close - 1.0), dp),
+                "low": round((c["low"] / base_close - 1.0), dp),
+                "close": round((c["close"] / base_close - 1.0), dp),
+                "volume": round(c["volume"], dp),
+            }
+            # Include proxy features if present
+            for key in proxy_keys:
+                if key in c:
+                    entry[key] = round(c[key], dp)
+            normalized.append(entry)
         return normalized
 
     def parse_action(self, llm_output: str) -> int:

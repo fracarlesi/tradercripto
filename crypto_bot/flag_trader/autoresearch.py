@@ -103,20 +103,24 @@ class AutoResearcher:
         "max_grad_norm": 0.5,
         "window_size": 20,
         "transaction_cost_bps": 7,  # realistic: 0.07% round-trip
-        "reward_fn": "sharpe_delta",
-        "ppo_updates": 100,
-        "steps_per_rollout": 50,
+        "reward_fn": "enhanced_sharpe",
+        "ppo_updates": 1000,
+        "steps_per_rollout": 200,
+        "warmstart_steps": 500,
+        "max_train_assets": 30,
     }
 
     EXPERIMENT_GRID: list[dict[str, Any]] = [
         # Reward function -- what the model optimizes for
-        {"param": "reward_fn", "values": ["sharpe_delta", "sortino_delta", "calmar_delta"]},
+        {"param": "reward_fn", "values": ["enhanced_sharpe", "sortino_delta", "calmar_delta"]},
         # Learning rate -- how fast it learns
-        {"param": "lr", "values": [1e-5, 3e-5, 1e-4]},
+        {"param": "lr", "values": [1e-5, 3e-5, 5e-5]},
         # Training duration -- how long it learns
-        {"param": "ppo_updates", "values": [50, 100, 200]},
+        {"param": "ppo_updates", "values": [500, 1000, 2000]},
+        # Number of training assets -- top N by data length
+        {"param": "max_train_assets", "values": [15, 30]},
         # Steps per rollout -- how much experience per update
-        {"param": "steps_per_rollout", "values": [30, 50, 100]},
+        {"param": "steps_per_rollout", "values": [100, 200, 500]},
         # Architecture -- how much of the LLM to fine-tune
         {"param": "freeze_pct", "values": [0.7, 0.8, 0.9]},
         # PPO hyperparams
@@ -124,6 +128,8 @@ class AutoResearcher:
         {"param": "entropy_coef", "values": [0.005, 0.01, 0.05]},
         # Context window -- how much history the model sees
         {"param": "window_size", "values": [20, 50]},
+        # Supervised warm-start steps (0 = disabled)
+        {"param": "warmstart_steps", "values": [0, 250, 500]},
     ]
 
     # Replay config (not tuned -- mirrors production)
@@ -217,8 +223,12 @@ class AutoResearcher:
         # Run baseline if no best_score yet
         if self.state.best_score == 0.0:
             logger.info("Running baseline (train + replay)...")
-            baseline_metrics = self._run_experiment(self.config)
+            baseline_metrics, baseline_model = self._run_experiment(self.config)
             self.state.best_score = baseline_metrics.score
+            best_checkpoint_path = Path("models/flag_trader_best/best_model.pt")
+            best_checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+            baseline_model.save_trainable(best_checkpoint_path)
+            logger.info("Saved baseline model to %s", best_checkpoint_path)
             logger.info(
                 "Baseline: score=%.4f (Sharpe=%.3f, PF=%.2f, WR=%.1f%%, PnL=%.2f%%)",
                 baseline_metrics.score, baseline_metrics.sharpe,
@@ -251,7 +261,7 @@ class AutoResearcher:
             test_config = {**self.state.best_config, param: value}
 
             exp_start = time.time()
-            replay_metrics = self._run_experiment(test_config)
+            replay_metrics, exp_model = self._run_experiment(test_config)
             exp_duration = time.time() - exp_start
 
             improvement = replay_metrics.score - self.state.best_score
@@ -294,6 +304,10 @@ class AutoResearcher:
                 )
                 self.state.best_config[param] = value
                 self.state.best_score = replay_metrics.score
+                best_checkpoint_path = Path("models/flag_trader_best/best_model.pt")
+                best_checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+                exp_model.save_trainable(best_checkpoint_path)
+                logger.info("Saved best model to %s", best_checkpoint_path)
             else:
                 logger.info(
                     "DISCARDED: %s=%s (score %.4f vs baseline %.4f, PnL %.2f%%)",
@@ -316,7 +330,7 @@ class AutoResearcher:
                 queue.append({"param": group["param"], "value": value})
         return queue
 
-    def _run_experiment(self, config: dict[str, Any]) -> ReplayMetrics:
+    def _run_experiment(self, config: dict[str, Any]) -> tuple[ReplayMetrics, FlagTraderModel]:
         """Train model with config, then validate with replay engine."""
         from .environment import HyperliquidTradingEnv
         from .model import FlagTraderModel
@@ -332,8 +346,25 @@ class AutoResearcher:
             device=self.device,
         )
 
-        # 2. Create trainer with config params
+        # 2. Create prompt builder
         prompt_builder = PromptBuilder(candle_window=window_size)
+
+        # 3. Supervised warm-start (if enabled)
+        warmstart_steps = config.get("warmstart_steps", 0)
+        if warmstart_steps > 0:
+            from .supervised_warmstart import SupervisedWarmStart
+
+            ws = SupervisedWarmStart(
+                model, prompt_builder, lr=config.get("lr", 3e-5),
+            )
+            ws_stats = ws.train(
+                self.train_candles_by_symbol,
+                num_steps=warmstart_steps,
+                window_size=window_size,
+            )
+            logger.info("Warm-start done (%d steps): %s", warmstart_steps, ws_stats)
+
+        # 4. Create trainer with config params
         trainer = PPOTrainer(
             model=model,
             prompt_builder=prompt_builder,
@@ -347,43 +378,63 @@ class AutoResearcher:
             max_grad_norm=config.get("max_grad_norm", 0.5),
         )
 
-        # 3. Build training candles as numpy array from the longest symbol
-        # (PPO env expects numpy array of shape (N, 5))
-        longest_symbol = max(
-            self.train_candles_by_symbol, key=lambda s: len(self.train_candles_by_symbol[s])
-        )
-        train_list = self.train_candles_by_symbol[longest_symbol]
-        train_np = np.array(
-            [[c["open"], c["high"], c["low"], c["close"], c["volume"]] for c in train_list],
-            dtype=np.float64,
-        )
-
-        reward_fn_name = config.get("reward_fn", "sharpe_delta")
+        # 5. Build training environments for ALL symbols (multi-asset)
+        reward_fn_name = config.get("reward_fn", "enhanced_sharpe")
         if reward_fn_name not in REWARD_FUNCTIONS:
             raise ValueError(
                 f"Unknown reward_fn '{reward_fn_name}'. Available: {list(REWARD_FUNCTIONS.keys())}"
             )
+        reward_fn = REWARD_FUNCTIONS[reward_fn_name]
 
-        train_env = HyperliquidTradingEnv(
-            candles=train_np,
-            window_size=window_size,
-            transaction_cost_bps=config.get("transaction_cost_bps", 7),
-        )
+        train_envs: dict[str, HyperliquidTradingEnv] = {}
+        for symbol, candles_list in self.train_candles_by_symbol.items():
+            candles_np = np.array(
+                [[c["open"], c["high"], c["low"], c["close"], c["volume"]] for c in candles_list],
+                dtype=np.float64,
+            )
+            if candles_np.shape[0] <= window_size:
+                logger.debug("Skipping %s: only %d bars (need >%d)", symbol, candles_np.shape[0], window_size)
+                continue
+            train_envs[symbol] = HyperliquidTradingEnv(
+                candles=candles_np,
+                window_size=window_size,
+                transaction_cost_bps=config.get("transaction_cost_bps", 7),
+                reward_fn=reward_fn,
+            )
 
-        # 4. Train with PPO
-        ppo_updates = config.get("ppo_updates", 100)
-        steps_per_rollout = config.get("steps_per_rollout", 50)
+        if not train_envs:
+            raise ValueError("No training environments could be created")
+
+        # 5b. Subset to top N assets by data length (most data = most liquid)
+        max_train: int = config.get("max_train_assets", 30)
+        if len(train_envs) > max_train:
+            total_available = len(train_envs)
+            sorted_symbols: list[str] = sorted(
+                train_envs.keys(),
+                key=lambda s: len(self.train_candles_by_symbol.get(s, [])),
+                reverse=True,
+            )
+            train_envs = {s: train_envs[s] for s in sorted_symbols[:max_train]}
+            logger.info(
+                "Using top %d assets for training (of %d available)",
+                max_train, total_available,
+            )
+
+        # 6. Train with PPO using multi-asset rollouts
+        ppo_updates = config.get("ppo_updates", 5000)
+        steps_per_rollout = config.get("steps_per_rollout", 200)
+        log_every = max(ppo_updates // 10, 1)
 
         logger.info(
-            "Training: %d updates x %d steps, lr=%.1e, model=%s",
-            ppo_updates, steps_per_rollout, config.get("lr", 3e-5),
-            config["model_name"],
+            "Training: %d updates x %d steps, %d assets, lr=%.1e, warmstart=%d, model=%s",
+            ppo_updates, steps_per_rollout, len(train_envs),
+            config.get("lr", 3e-5), warmstart_steps, config["model_name"],
         )
 
         for update_idx in range(1, ppo_updates + 1):
-            trainer.collect_rollout(train_env, num_steps=steps_per_rollout)
+            trainer.collect_rollout_multi_asset(train_envs, num_steps=steps_per_rollout)
             stats = trainer.update()
-            if update_idx % 25 == 0:
+            if update_idx % log_every == 0:
                 logger.info(
                     "  PPO update %d/%d -- policy_loss: %.4f, reward: %.4f",
                     update_idx, ppo_updates,
@@ -391,7 +442,7 @@ class AutoResearcher:
                     stats.get("mean_reward", 0.0),
                 )
 
-        # 5. Validate with replay engine on held-out test data
+        # 7. Validate with replay engine on held-out test data
         replay_metrics = self._run_replay(model, config)
 
         logger.info(
@@ -401,7 +452,7 @@ class AutoResearcher:
             replay_metrics.total_trades, replay_metrics.score,
         )
 
-        return replay_metrics
+        return replay_metrics, model
 
     def _run_replay(self, model: "FlagTraderModel", config: dict[str, Any]) -> ReplayMetrics:
         """Run replay engine with trained model on held-out test data.

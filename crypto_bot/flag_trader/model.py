@@ -55,12 +55,12 @@ class FlagTraderModel(nn.Module):
         self.model_name = model_name
 
         # Load pretrained LLM
-        # Use float16 on CPU/CUDA to save RAM (1.5B model: 3GB vs 6GB in float32)
-        # Use float32 only on MPS (which doesn't support bfloat16)
+        # Use bfloat16 on CUDA (native support, no GradScaler needed)
+        # Use float32 on MPS (which doesn't support bfloat16) and CPU
         if self.device == torch.device("mps"):
             load_dtype = torch.float32
         else:
-            load_dtype = torch.float16
+            load_dtype = torch.bfloat16
 
         self.llm = AutoModelForCausalLM.from_pretrained(
             model_name,

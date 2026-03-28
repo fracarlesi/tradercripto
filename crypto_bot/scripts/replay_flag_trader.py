@@ -7,7 +7,7 @@ Uses the SAME model, prompt builder, and inference as the live bot.
 Usage:
     python -m crypto_bot.scripts.replay_flag_trader \
         --days 7 --assets BTC ETH SOL \
-        --checkpoint models/flag_trader_deepseek/final_model.pt
+        --checkpoint models/flag_trader_qwen/final_model.pt
 """
 
 from __future__ import annotations
@@ -515,7 +515,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--days", type=int, default=7, help="Days of history to replay")
     parser.add_argument("--assets", nargs="+", default=["all"], help="Assets to replay (default: 'all' = all cached parquets in data-dir)")
     parser.add_argument("--model", default="HuggingFaceTB/SmolLM2-135M-Instruct", help="HuggingFace model name")
-    parser.add_argument("--checkpoint", default="models/flag_trader_deepseek/final_model.pt", help="Checkpoint path")
+    parser.add_argument("--checkpoint", default="models/flag_trader_qwen/final_model.pt", help="Checkpoint path")
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"])
     parser.add_argument("--capital", type=float, default=100.0, help="Initial capital ($)")
     parser.add_argument("--confidence", type=float, default=0.6, help="Min confidence threshold")

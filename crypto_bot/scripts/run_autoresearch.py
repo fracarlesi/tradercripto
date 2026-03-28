@@ -78,8 +78,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="FLAG-Trader Autoresearch (DeepSeek)")
     parser.add_argument("--data-dir", default="data/candles", help="Candle parquet directory")
     parser.add_argument("--assets", nargs="+", default=None, help="Symbols to use (default: all)")
-    parser.add_argument("--max-experiments", type=int, default=20, help="Max experiments to run")
-    parser.add_argument("--time-budget", type=float, default=300, help="Time budget in minutes")
+    parser.add_argument("--max-experiments", type=int, default=6, help="Max experiments to run")
+    parser.add_argument("--time-budget", type=float, default=600, help="Time budget in minutes (default: 10h)")
     parser.add_argument("--results", default="experiments.json", help="Results JSON file")
     parser.add_argument(
         "--device", default="auto", choices=["auto", "cpu", "cuda", "mps"],

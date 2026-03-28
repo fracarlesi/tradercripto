@@ -11,6 +11,7 @@ Reward: Delta of Sharpe ratio (SR_t - SR_{t-1})
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import gymnasium as gym
@@ -38,6 +39,7 @@ class HyperliquidTradingEnv(gym.Env):
         initial_cash: float = 1000.0,
         transaction_cost_bps: float = 5.0,
         window_size: int = 20,
+        reward_fn: Callable[..., float] | None = None,
     ) -> None:
         super().__init__()
         assert candles.ndim == 2 and candles.shape[1] == 5, (
@@ -52,6 +54,7 @@ class HyperliquidTradingEnv(gym.Env):
         self.tx_cost_pct = transaction_cost_bps / 10_000.0
         self.window_size = window_size
         self.reward_history_len = 10
+        self._reward_fn: Callable[..., float] = reward_fn or compute_sharpe_delta
 
         # Action: 0=Sell, 1=Hold, 2=Buy
         self.action_space = spaces.Discrete(3)
@@ -62,7 +65,7 @@ class HyperliquidTradingEnv(gym.Env):
                 "candles": spaces.Box(
                     low=-np.inf,
                     high=np.inf,
-                    shape=(window_size, 5),
+                    shape=(window_size, 8),
                     dtype=np.float32,
                 ),
                 "portfolio": spaces.Box(
@@ -223,8 +226,21 @@ class HyperliquidTradingEnv(gym.Env):
         self._pnl_history.append(mtm_pnl)
         self._total_value_prev = total_value
 
-        # Reward: Sharpe ratio delta
-        reward = compute_sharpe_delta(self._pnl_history)
+        # Reward via configurable reward function
+        trade_opened = executed_action == 2
+        trade_closed_profit: bool | None = None
+        if step_pnl != 0.0:
+            trade_closed_profit = step_pnl > 0
+
+        try:
+            reward = self._reward_fn(
+                self._pnl_history,
+                trade_opened=trade_opened,
+                trade_closed_profit=trade_closed_profit,
+            )
+        except TypeError:
+            # Fallback for reward functions that don't accept extra kwargs
+            reward = self._reward_fn(self._pnl_history)
         self._reward_history.append(reward)
 
         # Advance
@@ -256,6 +272,9 @@ class HyperliquidTradingEnv(gym.Env):
             raw[:, :4] = raw[:, :4] / base_close - 1.0  # Normalize OHLC
             raw[:, 4] = raw[:, 4] / (raw[:, 4].mean() + 1e-12)  # Normalize volume
 
+        # Compute proxy features and concatenate: (N, 5) -> (N, 8)
+        candles_enriched = self._compute_proxy_features(raw)
+
         # Portfolio state
         current_close = float(self.candles[min(self._step_idx, len(self.candles) - 1), 3])
         position_value = self._position * current_close
@@ -278,12 +297,55 @@ class HyperliquidTradingEnv(gym.Env):
         padded = [0.0] * (self.reward_history_len - len(rh)) + rh
         history = np.array(padded, dtype=np.float32)
 
-        return {"candles": raw, "portfolio": portfolio, "history": history}
+        return {"candles": candles_enriched, "portfolio": portfolio, "history": history}
 
     def _get_terminal_obs(self) -> dict[str, np.ndarray]:
         """Return a valid observation for terminal state."""
         return {
-            "candles": np.zeros((self.window_size, 5), dtype=np.float32),
+            "candles": np.zeros((self.window_size, 8), dtype=np.float32),
             "portfolio": np.zeros(4, dtype=np.float32),
             "history": np.zeros(self.reward_history_len, dtype=np.float32),
         }
+
+    def _compute_proxy_features(self, raw: np.ndarray) -> np.ndarray:
+        """Compute 3 proxy features from OHLCV candles and concatenate.
+
+        Args:
+            raw: Already-normalized candle array of shape (N, 5) with columns
+                 [open, high, low, close, volume].
+
+        Returns:
+            Array of shape (N, 8) with columns
+            [O, H, L, C, V, funding_proxy, oi_proxy, vol_delta_proxy].
+        """
+        open_ = raw[:, 0]
+        high = raw[:, 1]
+        low = raw[:, 2]
+        close = raw[:, 3]
+        volume = raw[:, 4]
+
+        # funding_proxy: (close - vwap) / close, where vwap ≈ (H+L+C)/3
+        # Already normalized OHLC (pct-change from base), so close can be ~0.
+        # Use close + 1 to avoid division by zero (since normalized close = price/base - 1).
+        vwap = (high + low + close) / 3.0
+        denom_funding = np.where(np.abs(close) > 1e-8, close, 1e-8)
+        funding_proxy = (close - vwap) / denom_funding
+        # Clip to (-1, 1) for stability
+        funding_proxy = np.clip(funding_proxy, -1.0, 1.0)
+
+        # oi_proxy: volume * (close + 1) as notional proxy, normalized like volume
+        # close is normalized (pct change), so close+1 ≈ price_ratio
+        notional = volume * (close + 1.0)
+        notional_mean = notional.mean() + 1e-12
+        oi_proxy = notional / notional_mean
+
+        # vol_delta_proxy: (close - open) / max(high - low, eps) * volume
+        candle_range = np.maximum(high - low, 1e-8)
+        vol_delta = (close - open_) / candle_range * volume
+        # Normalize like volume (divide by mean absolute value)
+        vol_delta_mean = np.abs(vol_delta).mean() + 1e-12
+        vol_delta_proxy = vol_delta / vol_delta_mean
+
+        # Stack: (N, 3)
+        proxies = np.stack([funding_proxy, oi_proxy, vol_delta_proxy], axis=1).astype(np.float32)
+        return np.concatenate([raw, proxies], axis=1)
