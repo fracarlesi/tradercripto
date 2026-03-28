@@ -74,6 +74,8 @@ class RealtimeMonitorService:
         # Squeeze state: symbol -> SqueezeResult
         from .squeeze_indicator import SqueezeResult
         self._squeeze_states: dict[str, SqueezeResult] = {}
+        # Track which symbols already fired (reset on candle cache refresh)
+        self._squeeze_fired: set[str] = set()
 
         # Lifecycle
         self._running: bool = False
@@ -155,6 +157,8 @@ class RealtimeMonitorService:
                     if not candles:
                         continue
                     self._candle_cache[symbol] = (now, candles)
+                    # New candles: reset fired state so symbol can fire again
+                    self._squeeze_fired.discard(symbol)
 
                 # Extract OHLCV arrays (keys: c, h, l from hyperliquid API)
                 close = np.array([float(c["c"]) for c in candles])
@@ -178,7 +182,8 @@ class RealtimeMonitorService:
                 )
                 self._squeeze_states[symbol] = result
 
-                if result.fired:
+                if result.fired and symbol not in self._squeeze_fired:
+                    self._squeeze_fired.add(symbol)
                     triggered_symbols.append(symbol)
                     triggered_details.append(
                         f"{symbol} squeeze_bars={result.squeeze_bars} bb_w={result.bb_width:.4f} kc_w={result.kc_width:.4f}"
