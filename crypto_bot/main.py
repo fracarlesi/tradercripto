@@ -804,12 +804,6 @@ class ConservativeBot:
         if not self._flag_agent or not self._exchange:
             return 0
 
-        # Physical gates
-        kill_switch = self._services.get("kill_switch")
-        if kill_switch and not kill_switch.is_trading_allowed():
-            logger.debug("Position eval skipped: kill switch active")
-            return 0
-
         positions_evaluated = 0
         positions_closed = 0
 
@@ -928,12 +922,6 @@ class ConservativeBot:
         """
         if not self._flag_agent or not self._exchange:
             logger.warning("FLAG-Trader agent or exchange not initialized")
-            return
-
-        # --- Physical gates ---
-        kill_switch = self._services.get("kill_switch")
-        if kill_switch and not kill_switch.is_trading_allowed():
-            logger.warning("Trading paused by kill switch: %s", kill_switch.get_status().value)
             return
 
         risk_manager = self._services.get("risk_manager")
