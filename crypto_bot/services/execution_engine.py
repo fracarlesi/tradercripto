@@ -227,6 +227,9 @@ class ExecutionPosition:
     trailing_active: bool = False     # True when trailing stop is actively following price
     entry_rsi_slope: float = 0.0     # RSI slope at entry (for momentum fade tracking)
     entry_ema_spread: float = 0.0    # EMA spread at entry (for momentum fade tracking)
+    entry_reason: str = ""           # Why position was opened (e.g. "squeeze_fire")
+    entry_confidence: float = 0.0    # LLM confidence at entry time
+    entry_trigger_details: str = ""  # Details about the trigger (e.g. squeeze params)
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary."""
@@ -257,6 +260,9 @@ class ExecutionPosition:
             "trailing_active": self.trailing_active,
             "entry_rsi_slope": self.entry_rsi_slope,
             "entry_ema_spread": self.entry_ema_spread,
+            "entry_reason": self.entry_reason,
+            "entry_confidence": self.entry_confidence,
+            "entry_trigger_details": self.entry_trigger_details,
         }
 
 
@@ -661,11 +667,15 @@ class ExecutionEngineService(BaseService):
                 sl_pct = signal.get("model_sl_pct", self._bot_config.risk.stop_loss_pct) / 100
                 tp_pct = signal.get("model_tp_pct", self._bot_config.risk.take_profit_pct) / 100
 
-                sl_price = entry_price * (1 - sl_pct) if is_long else entry_price * (1 + sl_pct)
-                tp_price = entry_price * (1 + tp_pct) if is_long else entry_price * (1 - tp_pct)
-
-                enriched_signal["tp_price"] = round(tp_price, 6)
-                enriched_signal["sl_price"] = round(sl_price, 6)
+                # Only compute TP/SL prices if percentages are non-zero
+                if sl_pct > 0 or tp_pct > 0:
+                    sl_price = entry_price * (1 - sl_pct) if is_long else entry_price * (1 + sl_pct)
+                    tp_price = entry_price * (1 + tp_pct) if is_long else entry_price * (1 - tp_pct)
+                    enriched_signal["tp_price"] = round(tp_price, 6)
+                    enriched_signal["sl_price"] = round(sl_price, 6)
+                else:
+                    enriched_signal["tp_price"] = None  # LLM-only exit mode
+                    enriched_signal["sl_price"] = None
 
                 # Publish order event for notifications
                 await self.publish(Topic.ORDERS, {
@@ -1412,6 +1422,9 @@ class ExecutionEngineService(BaseService):
             lowest_price=entry_price,
             entry_rsi_slope=_entry_rsi_slope,
             entry_ema_spread=_entry_ema_spread,
+            entry_reason=signal.get("entry_reason", ""),
+            entry_confidence=float(signal.get("entry_confidence", 0.0)),
+            entry_trigger_details=signal.get("entry_trigger_details", ""),
         )
         
         self.active_positions[symbol] = position
@@ -1434,6 +1447,9 @@ class ExecutionEngineService(BaseService):
             "entry_price": float(entry_price),
             "notional": float(size * entry_price),
             "strategy": signal.get("strategy"),
+            "entry_reason": signal.get("entry_reason", ""),
+            "entry_confidence": float(signal.get("entry_confidence", 0.0)),
+            "entry_trigger_details": signal.get("entry_trigger_details", ""),
         })
 
         # Set TP/SL orders
@@ -1453,6 +1469,12 @@ class ExecutionEngineService(BaseService):
         Args:
             position: Position to protect
         """
+        # LLM-only exit mode: skip TP/SL enforcement
+        cfg_sl = getattr(self._bot_config.risk, "stop_loss_pct", 0)
+        cfg_tp = getattr(self._bot_config.risk, "take_profit_pct", 0)
+        if cfg_sl == 0 and cfg_tp == 0:
+            return
+
         symbol = position.symbol
         is_long = position.side == "long"
         entry_price = position.entry_price
@@ -1808,6 +1830,9 @@ class ExecutionEngineService(BaseService):
         """
         Set take profit and stop loss orders using proper trigger orders.
 
+        When stop_loss_pct and take_profit_pct are both 0, TP/SL placement is
+        skipped entirely — exit management is delegated to the LLM eval loop.
+
         TP/SL are always calculated from config fixed percentages (stop_loss_pct,
         take_profit_pct). These values are data-driven from parameter sweep.
         ATR-adaptive branch was removed: it produced TP=4-8% and SL=0.5-2%,
@@ -1823,6 +1848,16 @@ class ExecutionEngineService(BaseService):
             order: Filled entry order
             position: ExecutionPosition to protect
         """
+        # --- LLM-only exit mode: skip TP/SL when config values are 0 ---
+        cfg_sl = getattr(self._bot_config.risk, "stop_loss_pct", 0)
+        cfg_tp = getattr(self._bot_config.risk, "take_profit_pct", 0)
+        if cfg_sl == 0 and cfg_tp == 0:
+            self._logger.info(
+                "TP/SL SKIPPED for %s: LLM-only exit mode (stop_loss_pct=0, take_profit_pct=0)",
+                signal["symbol"],
+            )
+            return
+
         symbol = signal["symbol"]
         is_long = signal["direction"] == "long"
         entry_price = order.avg_price or signal["entry_price"]
@@ -2509,6 +2544,9 @@ class ExecutionEngineService(BaseService):
                     continue
                 tp_pct = self._bot_config.risk.take_profit_pct / 100
                 sl_pct = self._bot_config.risk.stop_loss_pct / 100
+                # LLM-only exit mode: skip price-crossing checks when TP/SL = 0
+                if tp_pct == 0 and sl_pct == 0:
+                    continue
                 if position.side == "long":
                     tp_price = tp_price or round(position.entry_price * (1 + tp_pct), 6)
                     sl_price = sl_price or round(position.entry_price * (1 - sl_pct), 6)
@@ -2587,6 +2625,12 @@ class ExecutionEngineService(BaseService):
 
         cfg_be = getattr(self._bot_config.risk, "breakeven_threshold_pct", BREAKEVEN_THRESHOLD_PCT)
         threshold = Decimal(str(cfg_be))
+
+        # Breakeven disabled when TP/SL are 0 (LLM-only exit mode)
+        cfg_sl = getattr(self._bot_config.risk, "stop_loss_pct", 0)
+        cfg_tp = getattr(self._bot_config.risk, "take_profit_pct", 0)
+        if cfg_sl == 0 and cfg_tp == 0:
+            return
 
         for symbol, position in list(self.active_positions.items()):
             if position.status != PositionStatus.OPEN:
@@ -2677,6 +2721,10 @@ class ExecutionEngineService(BaseService):
         """
         stops_cfg = getattr(self._bot_config, "stops", None)
         max_hold = getattr(stops_cfg, "max_hold_hours", 6.0) if stops_cfg else 6.0
+
+        # max_hold_hours=0 means DISABLED (LLM-only exit management)
+        if max_hold <= 0:
+            return
 
         now = datetime.now(timezone.utc)
 

@@ -28,6 +28,7 @@ import logging
 import os
 import signal
 import sys
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -191,6 +192,18 @@ class ConservativeConfig:
     # FLAG-Trader
     flag_trader_config: Dict[str, Any]
 
+    # Squeeze trigger
+    squeeze_trigger_enabled: bool = True
+    squeeze_candle_interval: str = "15m"
+    squeeze_candle_limit: int = 50
+    squeeze_candle_ttl_seconds: float = 300.0
+    squeeze_lookback_bars: int = 3
+    squeeze_bb_period: int = 20
+    squeeze_bb_std_mult: float = 2.0
+    squeeze_kc_ema_period: int = 20
+    squeeze_kc_atr_period: int = 14
+    squeeze_kc_atr_mult: float = 1.5
+
     @classmethod
     def from_yaml(cls, path: str) -> "ConservativeConfig":
         """Load configuration from YAML file."""
@@ -209,6 +222,7 @@ class ConservativeConfig:
         execution = get_section("execution")
         me = stops.get("momentum_exit", {})
         flag_trader = get_section("flag_trader")
+        squeeze = get_section("squeeze_trigger")
 
         # Parse universe mode and assets
         universe_mode = universe.get("mode", "manual")
@@ -269,6 +283,16 @@ class ConservativeConfig:
             testnet=env.lower() == "testnet",
             dry_run=data.get("dry_run", False),
             flag_trader_config=flag_trader if flag_trader else {},
+            squeeze_trigger_enabled=squeeze.get("enabled", True),
+            squeeze_candle_interval=squeeze.get("candle_interval", "15m"),
+            squeeze_candle_limit=squeeze.get("candle_limit", 50),
+            squeeze_candle_ttl_seconds=squeeze.get("candle_ttl_seconds", 300.0),
+            squeeze_lookback_bars=squeeze.get("lookback_bars", 3),
+            squeeze_bb_period=squeeze.get("bb_period", 20),
+            squeeze_bb_std_mult=squeeze.get("bb_std_mult", 2.0),
+            squeeze_kc_ema_period=squeeze.get("kc_ema_period", 20),
+            squeeze_kc_atr_period=squeeze.get("kc_atr_period", 14),
+            squeeze_kc_atr_mult=squeeze.get("kc_atr_mult", 1.5),
         )
 
 
@@ -332,6 +356,10 @@ class ConservativeBot:
 
         # Consecutive scan error counter for ntfy alerts
         self._consecutive_scan_errors: int = 0
+
+        # LLM position evaluation timer (exit management)
+        self._last_position_eval: float = 0.0
+        self._position_eval_interval: float = 60.0  # Evaluate open positions every 60s
 
     # =========================================================================
     # Properties
@@ -675,16 +703,41 @@ class ConservativeBot:
         # Start realtime monitor with full universe
         self._monitor = RealtimeMonitorService(
             self._exchange, self.config, universe_assets=list(self.config.assets),
+            squeeze_config={
+                "enabled": self.config.squeeze_trigger_enabled,
+                "candle_interval": self.config.squeeze_candle_interval,
+                "candle_limit": self.config.squeeze_candle_limit,
+                "candle_ttl_seconds": self.config.squeeze_candle_ttl_seconds,
+                "lookback_bars": self.config.squeeze_lookback_bars,
+                "bb_period": self.config.squeeze_bb_period,
+                "bb_std_mult": self.config.squeeze_bb_std_mult,
+                "kc_ema_period": self.config.squeeze_kc_ema_period,
+                "kc_atr_period": self.config.squeeze_kc_atr_period,
+                "kc_atr_mult": self.config.squeeze_kc_atr_mult,
+            },
         )
         await self._monitor.start()
 
         while self._running and not self._shutdown_event.is_set():
             try:
+                # --- Check squeeze trigger for new entries ---
                 trigger, reason, triggered_symbols = self._monitor.should_trigger_llm()
                 if trigger:
                     logger.info("LLM triggered: %s", reason)
                     await self._evaluate_with_flag_trader(triggered_symbols)
                     self._consecutive_scan_errors = 0
+
+                # --- Evaluate open positions every 60s (LLM-only exit management) ---
+                now = time.time()
+                if now - self._last_position_eval >= self._position_eval_interval:
+                    self._last_position_eval = now
+                    risk_manager = self._services.get("risk_manager")
+                    if risk_manager and risk_manager._open_positions:
+                        all_position_symbols = list(risk_manager._open_positions.keys())
+                        portfolio = await self._get_portfolio_state()
+                        await self._evaluate_positions_with_llm(
+                            all_position_symbols, risk_manager, portfolio,
+                        )
 
             except asyncio.CancelledError:
                 logger.debug("Evaluation loop cancelled")
@@ -717,8 +770,154 @@ class ConservativeBot:
         if hasattr(self, '_monitor') and self._monitor:
             await self._monitor.stop()
 
+    async def _get_portfolio_state(self) -> dict:
+        """Fetch current portfolio state from exchange."""
+        portfolio = {"cash_balance": 0.0, "asset_position": 0.0, "total_account_value": 0.0}
+        try:
+            if self._exchange:
+                account = await self._exchange.get_account_state()
+                equity = float(account.get("equity", 0))
+                margin_used = float(account.get("marginUsed", 0))
+                unrealized_pnl = float(account.get("unrealizedPnl", 0))
+                portfolio = {
+                    "cash_balance": equity - margin_used,
+                    "asset_position": margin_used,
+                    "total_account_value": equity,
+                    "unrealized_pnl": unrealized_pnl,
+                    "leverage_used": round(margin_used / equity, 2) if equity > 0 else 0.0,
+                }
+        except Exception as e:
+            logger.warning("Could not fetch account state: %s", e)
+        return portfolio
+
+    async def _evaluate_positions_with_llm(
+        self,
+        symbols: list[str],
+        risk_manager: Any,
+        portfolio: dict,
+    ) -> int:
+        """Evaluate open positions with FLAG-Trader LLM for exit decisions.
+
+        This runs on a 60-second timer, independent of squeeze triggers.
+        Returns the number of positions closed.
+        """
+        if not self._flag_agent or not self._exchange:
+            return 0
+
+        # Physical gates
+        kill_switch = self._services.get("kill_switch")
+        if kill_switch and not kill_switch.is_trading_allowed():
+            logger.debug("Position eval skipped: kill switch active")
+            return 0
+
+        positions_evaluated = 0
+        positions_closed = 0
+
+        for symbol in symbols:
+            pos = risk_manager._open_positions.get(symbol)
+            if not pos:
+                continue
+            positions_evaluated += 1
+            try:
+                # Calculate PnL %
+                entry_px = float(pos.get("entry_price", 0))
+                mark_px = float(pos.get("mark_price", entry_px))
+                side = pos.get("side", "long")
+                if entry_px > 0:
+                    if side == "long":
+                        pnl_pct = ((mark_px / entry_px) - 1.0) * 100.0
+                    else:
+                        pnl_pct = ((entry_px / mark_px) - 1.0) * 100.0 if mark_px > 0 else 0.0
+                else:
+                    pnl_pct = 0.0
+
+                # Anti-churn: skip if position too young
+                opened_at = pos.get("opened_at")
+                if opened_at:
+                    if isinstance(opened_at, str):
+                        from datetime import datetime as _dt
+                        opened_at = _dt.fromisoformat(opened_at)
+                    age_minutes = (datetime.now(timezone.utc) - opened_at).total_seconds() / 60
+                    min_hold = self.config.flag_trader_config.get("min_hold_minutes", 30)
+                    if age_minutes < min_hold:
+                        logger.info(
+                            "FLAG-Trader EXIT SKIPPED | %s %s too young (%.1f min < %d min)",
+                            side.upper(), symbol, age_minutes, min_hold,
+                        )
+                        continue
+
+                # Build entry context for the LLM prompt
+                entry_context = {}
+                entry_reason = pos.get("entry_reason", "")
+                if entry_reason:
+                    entry_context["entry_reason"] = entry_reason
+                entry_conf = pos.get("entry_confidence", 0.0)
+                if entry_conf:
+                    entry_context["entry_confidence"] = entry_conf
+                entry_details = pos.get("entry_trigger_details", "")
+                if entry_details:
+                    entry_context["entry_trigger_details"] = entry_details
+
+                # Also check execution engine for entry context (richer data)
+                exec_engine = self._services.get("execution")
+                if exec_engine:
+                    exec_pos = exec_engine.active_positions.get(symbol)
+                    if exec_pos:
+                        if exec_pos.entry_reason:
+                            entry_context["entry_reason"] = exec_pos.entry_reason
+                        if exec_pos.entry_confidence:
+                            entry_context["entry_confidence"] = exec_pos.entry_confidence
+                        if exec_pos.entry_trigger_details:
+                            entry_context["entry_trigger_details"] = exec_pos.entry_trigger_details
+
+                # Enrich portfolio with entry context for prompt builder
+                eval_portfolio = {**portfolio, "entry_context": entry_context}
+
+                exit_decision = await self._flag_agent.evaluate_position(
+                    symbol=symbol,
+                    direction=side,
+                    entry_price=entry_px,
+                    pnl_pct=pnl_pct,
+                    candle_fetcher=self._exchange,
+                    portfolio=eval_portfolio,
+                )
+                if exit_decision.should_close:
+                    # Anti-churn: don't close if profit doesn't cover fees
+                    min_net_profit = self.config.flag_trader_config.get("min_net_profit_pct_to_close", 0.15)
+                    if 0 < pnl_pct < min_net_profit:
+                        logger.info(
+                            "FLAG-Trader EXIT SKIPPED | %s %s | pnl=%.3f%% < min_net_profit=%.2f%% (fees not covered)",
+                            side.upper(), symbol, pnl_pct, min_net_profit,
+                        )
+                        continue
+
+                    logger.info(
+                        "FLAG-Trader EXIT | CLOSE %s %s | confidence=%.4f | reason=%s | pnl=%.3f%%",
+                        side.upper(), symbol, exit_decision.confidence, exit_decision.reason, pnl_pct,
+                    )
+                    exec_engine = self._services.get("execution")
+                    if exec_engine:
+                        active_pos = getattr(exec_engine, 'active_positions', {}).get(symbol)
+                        if active_pos and hasattr(active_pos, 'exit_reason'):
+                            active_pos.exit_reason = exit_decision.reason
+                        await exec_engine.close_position(symbol)
+                        positions_closed += 1
+            except Exception as e:
+                logger.warning("Error evaluating position %s: %s", symbol, e)
+
+        if positions_evaluated > 0:
+            logger.info(
+                "POSITION EVAL | %d evaluated, %d closed (timer-based, every %.0fs)",
+                positions_evaluated, positions_closed, self._position_eval_interval,
+            )
+        return positions_closed
+
     async def _evaluate_with_flag_trader(self, triggered_symbols: list[str] | None = None) -> None:
-        """Evaluate assets with FLAG-Trader model.
+        """Evaluate assets with FLAG-Trader model — NEW ENTRIES ONLY.
+
+        Phase 1 (exit evaluation) now runs independently on a 60s timer via
+        _evaluate_positions_with_llm(). This method only handles Phase 2:
+        scanning for new trade opportunities from squeeze triggers.
 
         Args:
             triggered_symbols: Specific symbols to evaluate (from monitor triggers).
@@ -749,29 +948,14 @@ class ConservativeBot:
                 )
                 return
 
-        # --- Check available position slots (used later for new trades) ---
+        # --- Check available position slots ---
         if risk_manager:
             pos_count = len(risk_manager._open_positions) + len(risk_manager._pending_intents)
             available_slots = max(0, self.config.max_positions - pos_count)
         else:
             available_slots = self.config.max_positions
 
-        # --- Get portfolio state for prompt context ---
-        portfolio = {"cash_balance": 0.0, "asset_position": 0.0, "total_account_value": 0.0}
-        try:
-            account = await self._exchange.get_account_state()
-            equity = float(account.get("equity", 0))
-            margin_used = float(account.get("marginUsed", 0))
-            unrealized_pnl = float(account.get("unrealizedPnl", 0))
-            portfolio = {
-                "cash_balance": equity - margin_used,
-                "asset_position": margin_used,
-                "total_account_value": equity,
-                "unrealized_pnl": unrealized_pnl,
-                "leverage_used": round(margin_used / equity, 2) if equity > 0 else 0.0,
-            }
-        except Exception as e:
-            logger.warning("Could not fetch account state: %s", e)
+        portfolio = await self._get_portfolio_state()
 
         logger.info(
             "EVAL START | equity=$%.2f | margin=$%.2f | leverage=%.1fx | positions=%d/%d | trigger=%s",
@@ -783,102 +967,18 @@ class ConservativeBot:
             "targeted" if triggered_symbols else "full_scan",
         )
 
-        # --- Determine which assets to evaluate ---
+        # --- Evaluate new trade candidates (no open position) ---
         symbols_with_positions: set = set()
         if risk_manager:
             symbols_with_positions = set(risk_manager._open_positions.keys())
 
-        # --- Phase 1: Evaluate open positions for early exit ---
-        positions_evaluated = 0
-        positions_closed = 0
-        recently_closed: set[str] = set()  # Anti-churn: block same-cycle re-entry
-        if risk_manager and symbols_with_positions:
-            for symbol in list(symbols_with_positions):
-                # If triggered_symbols is set, only evaluate triggered ones
-                if triggered_symbols and symbol not in triggered_symbols:
-                    continue
-                pos = risk_manager._open_positions.get(symbol)
-                if not pos:
-                    continue
-                positions_evaluated += 1
-                try:
-                    # Calculate PnL %
-                    entry_px = float(pos.get("entry_price", 0))
-                    mark_px = float(pos.get("mark_price", entry_px))
-                    side = pos.get("side", "long")
-                    if entry_px > 0:
-                        if side == "long":
-                            pnl_pct = ((mark_px / entry_px) - 1.0) * 100.0
-                        else:
-                            pnl_pct = ((entry_px / mark_px) - 1.0) * 100.0 if mark_px > 0 else 0.0
-                    else:
-                        pnl_pct = 0.0
-
-                    # Anti-churn: skip model_reversal if position too young
-                    opened_at = pos.get("opened_at")
-                    if opened_at:
-                        if isinstance(opened_at, str):
-                            from datetime import datetime as _dt
-                            opened_at = _dt.fromisoformat(opened_at)
-                        age_minutes = (datetime.now(timezone.utc) - opened_at).total_seconds() / 60
-                        min_hold = self.config.flag_trader_config.get("min_hold_minutes", 30)
-                        if age_minutes < min_hold:
-                            logger.info(
-                                "FLAG-Trader EXIT SKIPPED | %s %s too young (%.1f min < %d min)",
-                                side.upper(), symbol, age_minutes, min_hold,
-                            )
-                            continue
-
-                    exit_decision = await self._flag_agent.evaluate_position(
-                        symbol=symbol,
-                        direction=side,
-                        entry_price=entry_px,
-                        pnl_pct=pnl_pct,
-                        candle_fetcher=self._exchange,
-                        portfolio=portfolio,
-                    )
-                    if exit_decision.should_close:
-                        # Anti-churn: don't close if profit doesn't cover fees
-                        min_net_profit = self.config.flag_trader_config.get("min_net_profit_pct_to_close", 0.15)
-                        if 0 < pnl_pct < min_net_profit:
-                            logger.info(
-                                "FLAG-Trader EXIT SKIPPED | %s %s | pnl=%.3f%% < min_net_profit=%.2f%% (fees not covered)",
-                                side.upper(), symbol, pnl_pct, min_net_profit,
-                            )
-                            continue
-
-                        logger.info(
-                            "FLAG-Trader EXIT | CLOSE %s %s | confidence=%.4f | reason=%s | pnl=%.3f%%",
-                            side.upper(), symbol, exit_decision.confidence, exit_decision.reason, pnl_pct,
-                        )
-                        exec_engine = self._services.get("execution")
-                        if exec_engine:
-                            # Set exit_reason before closing for proper cooldown
-                            active_pos = getattr(exec_engine, 'active_positions', {}).get(symbol)
-                            if active_pos and hasattr(active_pos, 'exit_reason'):
-                                active_pos.exit_reason = exit_decision.reason
-                            await exec_engine.close_position(symbol)
-                            recently_closed.add(symbol)
-                            positions_closed += 1
-                except Exception as e:
-                    logger.warning("Error evaluating position %s: %s", symbol, e)
-
-            logger.info("EVAL PHASE1 | %d positions evaluated, %d closed", positions_evaluated, positions_closed)
-
-        # --- Phase 2: Evaluate new trade candidates (no open position) ---
-        # Exclude recently closed symbols to prevent same-cycle re-entry (anti-churn)
-        blocked = symbols_with_positions | recently_closed
+        blocked = symbols_with_positions
         if triggered_symbols:
             scan_assets = [s for s in triggered_symbols if s not in blocked]
-            logger.info("Targeted scan: %d triggered assets → %d after position+churn filter",
+            logger.info("Targeted scan: %d triggered assets → %d after position filter",
                         len(triggered_symbols), len(scan_assets))
         else:
             scan_assets = [s for s in self.config.assets if s not in blocked]
-
-        # --- Recheck slots after exit evaluations ---
-        if risk_manager:
-            pos_count = len(risk_manager._open_positions) + len(risk_manager._pending_intents)
-            available_slots = max(0, self.config.max_positions - pos_count)
 
         if not scan_assets or available_slots == 0:
             if available_slots == 0:
@@ -970,6 +1070,17 @@ class ConservativeBot:
         else:
             stop_price = entry_price * (Decimal("1") + sl_pct / Decimal("100"))
 
+        # Build entry trigger details from monitor state
+        trigger_details = ""
+        if hasattr(self, '_monitor') and self._monitor:
+            sq_state = getattr(self._monitor, '_squeeze_states', {}).get(decision.symbol)
+            if sq_state:
+                trigger_details = (
+                    f"squeeze_bars={getattr(sq_state, 'squeeze_bars', '?')} "
+                    f"bb_w={getattr(sq_state, 'bb_width', 0):.4f} "
+                    f"kc_w={getattr(sq_state, 'kc_width', 0):.4f}"
+                )
+
         setup = Setup(
             id=f"flag_{uuid.uuid4().hex[:8]}",
             symbol=decision.symbol,
@@ -988,6 +1099,9 @@ class ConservativeBot:
             confidence=Decimal(str(round(min(abs(decision.confidence), 1.0), 4))),
             model_tp_pct=round(decision.tp_pct, 2),
             model_sl_pct=round(decision.sl_pct, 2),
+            entry_reason="squeeze_fire",
+            entry_confidence=round(min(abs(decision.confidence), 1.0), 4),
+            entry_trigger_details=trigger_details,
         )
 
         logger.info(

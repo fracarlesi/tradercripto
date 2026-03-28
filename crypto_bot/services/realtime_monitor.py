@@ -2,24 +2,16 @@
 Realtime Monitor Service
 ========================
 
-Monitors market prices and open positions in real-time,
-triggering LLM evaluation only when meaningful events occur:
-- Large price move (>2%) on ANY universe asset in 5 minutes
-- Position PnL exceeds threshold (±3%)
-- New fill detected
+Monitors market in real-time using BB-KC squeeze detection.
+When a squeeze fires on a universe asset, it triggers LLM evaluation
+for that specific symbol.
 
 Purely event-driven: NO scheduled fallback scan.
-Uses a single `get_all_mids()` call per poll (1 API call, every 10s)
-to monitor ALL assets in the universe.
-
-When a trigger fires, it includes which specific symbols caused it,
-so the LLM evaluates ONLY those assets instead of scanning everything.
 """
 
 import asyncio
 import logging
 import time
-from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -30,38 +22,58 @@ logger = logging.getLogger(__name__)
 class TriggerEvent:
     """An event that should trigger LLM evaluation."""
 
-    reason: str       # "price_move", "position_pnl", "new_fill"
-    details: str      # "BTC +2.3% in 5min", "ETH position -5% PnL"
+    reason: str       # "squeeze_fire"
+    details: str      # "BTC squeeze_bars=3 bb_w=0.0012 kc_w=0.0015"
     symbols: list[str] = field(default_factory=list)  # which assets to evaluate
     priority: int = 0  # Higher = more urgent
 
 
 class RealtimeMonitorService:
-    """Monitors market and positions, triggers LLM when needed.
+    """Monitors market via squeeze indicator, triggers LLM when needed.
 
-    Runs a lightweight poll loop (every 10s) checking for
-    significant events. Uses batch price fetch (1 API call for all assets).
+    Runs a lightweight poll loop checking for BB-KC squeeze fire events.
 
     The main bot loop calls should_trigger_llm() which returns
     both the trigger reason AND which symbols to evaluate.
     """
 
-    def __init__(self, exchange, config, universe_assets: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        exchange,
+        config,
+        universe_assets: list[str] | None = None,
+        squeeze_config: dict | None = None,
+    ) -> None:
         self.exchange = exchange
         self.config = config
         self._universe: list[str] = universe_assets or []
 
-        # Trigger thresholds
+        # Poll settings
         self.poll_interval: float = 10.0          # seconds between polls
-        self.price_move_threshold: float = 2.0    # % move in 5 min
-        self.pnl_threshold: float = 3.0           # % PnL on position
 
-        # Internal state
-        self._price_snapshots: dict[str, list[tuple[float, float]]] = defaultdict(list)
-        self._last_fill_id: str = ""
+        # Trigger management
         self._last_trigger: float = 0.0
         self._min_trigger_cooldown: float = 60.0  # min 60s between triggers
         self._pending_trigger: Optional[TriggerEvent] = None
+
+        # Squeeze trigger state
+        sq = squeeze_config or {}
+        self._squeeze_enabled: bool = sq.get("enabled", False)
+        self._squeeze_candle_interval: str = sq.get("candle_interval", "15m")
+        self._squeeze_candle_limit: int = sq.get("candle_limit", 50)
+        self._squeeze_candle_ttl: float = sq.get("candle_ttl_seconds", 300.0)
+        self._squeeze_lookback: int = sq.get("lookback_bars", 3)
+        self._squeeze_bb_period: int = sq.get("bb_period", 20)
+        self._squeeze_bb_std_mult: float = sq.get("bb_std_mult", 2.0)
+        self._squeeze_kc_ema_period: int = sq.get("kc_ema_period", 20)
+        self._squeeze_kc_atr_period: int = sq.get("kc_atr_period", 14)
+        self._squeeze_kc_atr_mult: float = sq.get("kc_atr_mult", 1.5)
+
+        # Candle cache: symbol -> (fetch_timestamp, candles_list)
+        self._candle_cache: dict[str, tuple[float, list[dict]]] = {}
+        # Squeeze state: symbol -> SqueezeResult
+        from .squeeze_indicator import SqueezeResult
+        self._squeeze_states: dict[str, SqueezeResult] = {}
 
         # Lifecycle
         self._running: bool = False
@@ -79,8 +91,9 @@ class RealtimeMonitorService:
         self._running = True
         self._task = asyncio.create_task(self._poll_loop(), name="realtime_monitor")
         logger.info(
-            "RealtimeMonitorService started (poll=%ds, cooldown=%ds, universe=%d assets)",
+            "RealtimeMonitorService started (poll=%ds, cooldown=%ds, universe=%d assets, squeeze=%s)",
             int(self.poll_interval), int(self._min_trigger_cooldown), len(self._universe),
+            "ON" if self._squeeze_enabled else "OFF",
         )
 
     async def stop(self) -> None:
@@ -100,12 +113,11 @@ class RealtimeMonitorService:
     # =========================================================================
 
     async def _poll_loop(self) -> None:
-        """Poll every 10 seconds for trigger conditions."""
+        """Poll for squeeze trigger conditions."""
         while self._running:
             try:
-                await self._check_price_moves()
-                await self._check_position_pnl()
-                await self._check_new_fills()
+                if self._squeeze_enabled:
+                    await self._check_squeeze_fire()
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -113,112 +125,85 @@ class RealtimeMonitorService:
             await asyncio.sleep(self.poll_interval)
 
     # =========================================================================
-    # Trigger checks
+    # Squeeze check
     # =========================================================================
 
-    async def _check_price_moves(self) -> None:
-        """Check ALL universe assets for >2% moves in 5 minutes.
-
-        Uses a single batch API call (get_all_mids) instead of
-        per-asset calls. Only assets that moved trigger the LLM.
-        """
+    async def _check_squeeze_fire(self) -> None:
+        """Check universe assets for BB-KC squeeze -> fire transitions."""
         if not self._universe:
             return
 
-        try:
-            all_mids = await self.exchange.get_all_mids()
-        except Exception as e:
-            logger.debug("Failed to fetch all_mids: %s", e)
-            return
+        import numpy as np
+        from .squeeze_indicator import detect_squeeze_state
 
         now = time.time()
         triggered_symbols: list[str] = []
         triggered_details: list[str] = []
 
-        universe_set = set(self._universe)
-        for symbol, price in all_mids.items():
-            if symbol not in universe_set or price <= 0:
-                continue
+        for symbol in self._universe:
+            try:
+                # Check candle cache TTL
+                cached = self._candle_cache.get(symbol)
+                if cached and (now - cached[0]) < self._squeeze_candle_ttl:
+                    candles = cached[1]
+                else:
+                    candles = await self.exchange.get_candles(
+                        symbol,
+                        interval=self._squeeze_candle_interval,
+                        limit=self._squeeze_candle_limit,
+                    )
+                    if not candles:
+                        continue
+                    self._candle_cache[symbol] = (now, candles)
 
-            self._price_snapshots[symbol].append((now, price))
-            # Keep only last 5 minutes
-            self._price_snapshots[symbol] = [
-                (t, p) for t, p in self._price_snapshots[symbol]
-                if now - t < 300
-            ]
+                # Extract OHLCV arrays (keys: c, h, l from hyperliquid API)
+                close = np.array([float(c["c"]) for c in candles])
+                high = np.array([float(c["h"]) for c in candles])
+                low = np.array([float(c["l"]) for c in candles])
 
-            if len(self._price_snapshots[symbol]) >= 2:
-                oldest_price = self._price_snapshots[symbol][0][1]
-                pct_move = abs(price - oldest_price) / oldest_price * 100
-                if pct_move >= 1.0:
-                    direction = "+" if price > oldest_price else "-"
-                    logger.debug("Price move | %s | %s%.1f%% in 5min", symbol, direction, pct_move)
+                if len(close) < 2:
+                    continue
 
-                if pct_move >= self.price_move_threshold:
-                    direction = "+" if price > oldest_price else "-"
+                result = detect_squeeze_state(
+                    symbol=symbol,
+                    close=close,
+                    high=high,
+                    low=low,
+                    bb_period=self._squeeze_bb_period,
+                    bb_std_mult=self._squeeze_bb_std_mult,
+                    kc_ema_period=self._squeeze_kc_ema_period,
+                    kc_atr_period=self._squeeze_kc_atr_period,
+                    kc_atr_mult=self._squeeze_kc_atr_mult,
+                    lookback=self._squeeze_lookback,
+                )
+                self._squeeze_states[symbol] = result
+
+                if result.fired:
                     triggered_symbols.append(symbol)
-                    triggered_details.append(f"{symbol} {direction}{pct_move:.1f}%")
+                    triggered_details.append(
+                        f"{symbol} squeeze_bars={result.squeeze_bars} bb_w={result.bb_width:.4f} kc_w={result.kc_width:.4f}"
+                    )
+                    logger.info(
+                        "SQUEEZE FIRE | %s | squeeze_bars=%d | bb_width=%.4f | kc_width=%.4f",
+                        symbol, result.squeeze_bars, result.bb_width, result.kc_width,
+                    )
+                elif result.in_squeeze_now:
+                    logger.debug(
+                        "SQUEEZE ACTIVE | %s | bars=%d | bb_w=%.4f | kc_w=%.4f",
+                        symbol, result.squeeze_bars, result.bb_width, result.kc_width,
+                    )
+
+            except Exception as e:
+                logger.debug("Squeeze check failed for %s: %s", symbol, e)
+                continue
 
         if triggered_symbols:
             self._set_trigger(TriggerEvent(
-                reason="price_move",
+                reason="squeeze_fire",
                 details=", ".join(triggered_details),
                 symbols=triggered_symbols,
-                priority=3,
+                priority=4,
             ))
-
-    async def _check_position_pnl(self) -> None:
-        """Check unrealized PnL on open positions."""
-        try:
-            positions = await self.exchange.get_positions()
-        except Exception:
-            return
-
-        triggered_symbols: list[str] = []
-
-        for pos in positions:
-            size = float(pos.get("size", 0))
-            if size == 0:
-                continue
-
-            entry_price = float(pos.get("entryPrice", 0))
-            mark_price = float(pos.get("markPrice", 0))
-            if entry_price <= 0 or mark_price <= 0:
-                continue
-
-            side = pos.get("side", "long")
-            if side == "long":
-                pnl_pct = (mark_price - entry_price) / entry_price * 100
-            else:
-                pnl_pct = (entry_price - mark_price) / entry_price * 100
-
-            symbol = pos.get("symbol", "")
-            if abs(pnl_pct) >= self.pnl_threshold:
-                triggered_symbols.append(symbol)
-                self._set_trigger(TriggerEvent(
-                    reason="position_pnl",
-                    details=f"{symbol} at {pnl_pct:+.1f}% PnL",
-                    symbols=triggered_symbols,
-                    priority=2,
-                ))
-
-    async def _check_new_fills(self) -> None:
-        """Detect new fills since last check."""
-        try:
-            fills = await self.exchange.get_fills(limit=5)
-            if fills and fills[0].get("fillId") != self._last_fill_id:
-                new_fill_id = fills[0].get("fillId", "")
-                fill_symbol = fills[0].get("symbol", "")
-                if self._last_fill_id:  # Don't trigger on first poll
-                    self._set_trigger(TriggerEvent(
-                        reason="new_fill",
-                        details=f"New fill: {fill_symbol}",
-                        symbols=[fill_symbol] if fill_symbol else [],
-                        priority=2,
-                    ))
-                self._last_fill_id = new_fill_id
-        except Exception:
-            pass
 
     # =========================================================================
     # Trigger management

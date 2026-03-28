@@ -113,12 +113,26 @@ class PromptBuilder:
             symbol = position_info.get("symbol", "?")
             entry_price = position_info.get("entry_price", 0.0)
             pnl_pct = position_info.get("pnl_pct", 0.0)
-            prompt += (
+            pos_text = (
                 f"\n\nCurrent Position:\n"
                 f"You are currently {direction} {symbol} from ${entry_price:.2f}, "
                 f"unrealized PnL: {pnl_pct:+.1f}%\n"
-                f"Consider whether to maintain or reverse your position."
             )
+            # Add entry context if available (from portfolio.entry_context)
+            entry_ctx = portfolio.get("entry_context", {}) if portfolio else {}
+            if entry_ctx:
+                entry_reason = entry_ctx.get("entry_reason", "")
+                entry_conf = entry_ctx.get("entry_confidence", 0.0)
+                entry_details = entry_ctx.get("entry_trigger_details", "")
+                if entry_reason:
+                    pos_text += f"Entry reason: {entry_reason}"
+                    if entry_conf:
+                        pos_text += f" (confidence: {entry_conf:.2f})"
+                    if entry_details:
+                        pos_text += f" [{entry_details}]"
+                    pos_text += "\n"
+            pos_text += "Consider whether to maintain or reverse your position."
+            prompt += pos_text
         prompt += (
             '\n\nOutput Action: Format your answer as JSON: '
             '{"Action": "Buy"}, {"Action": "Sell"}, or {"Action": "Hold"}'

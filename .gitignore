@@ -238,6 +238,10 @@ crypto_bot/models/
 data/candles/
 data/trade_logs/
 models/flag_trader/
+models/flag_trader_qwen/
+
+# Firebase
+firebase-debug.log
 
 # Autoresearch results
 experiments.json

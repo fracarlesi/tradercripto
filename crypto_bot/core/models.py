@@ -188,6 +188,11 @@ class Setup(BaseModel):
     llm_confidence: Optional[Decimal] = Field(None, ge=0, le=1)
     llm_reason: Optional[str] = Field(None)
 
+    # Entry context (for LLM exit evaluation)
+    entry_reason: str = Field("", description="Why position was opened (e.g. squeeze_fire)")
+    entry_confidence: float = Field(0.0, description="LLM confidence at entry time")
+    entry_trigger_details: str = Field("", description="Trigger details (e.g. squeeze params)")
+
     class Config:
         json_encoders = {
             Decimal: lambda v: float(v),

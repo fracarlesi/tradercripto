@@ -410,6 +410,9 @@ class RiskManagerService(BaseService):
                     "entry_price": payload.get("entry_price", 0),
                     "notional": payload.get("notional", 0),
                     "opened_at": datetime.now(timezone.utc),
+                    "entry_reason": payload.get("entry_reason", ""),
+                    "entry_confidence": payload.get("entry_confidence", 0.0),
+                    "entry_trigger_details": payload.get("entry_trigger_details", ""),
                 }
                 self.clear_pending_intent(symbol)
                 self._logger.info("Position tracked from fill: %s", symbol)
