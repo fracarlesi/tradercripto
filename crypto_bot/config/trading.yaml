@@ -195,7 +195,7 @@ flag_trader:
   max_assets_to_scan: 10
   candle_window: 20
   candle_interval: "15m"
-  confidence_threshold: 0.6
+  confidence_threshold: 0.8
   min_hold_minutes: 30
   min_net_profit_pct_to_close: 0.15
 
