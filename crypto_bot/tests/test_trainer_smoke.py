@@ -71,7 +71,7 @@ def test_compute_gae_all_done():
 
 def test_obs_to_prompt_inputs():
     obs = {
-        "candles": np.ones((20, 5), dtype=np.float32),
+        "candles": np.ones((20, 8), dtype=np.float32),
         "portfolio": np.array([0.5, 0.3, 0.1, 0.9], dtype=np.float32),
         "history": np.zeros(10, dtype=np.float32),
     }

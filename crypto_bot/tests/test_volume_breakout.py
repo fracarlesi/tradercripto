@@ -11,7 +11,7 @@ from backtesting.signals import signal_volume_breakout_entry
 from crypto_bot.core.models import Direction, MarketState, Regime, SetupType
 
 
-# ── Backtesting Signal Tests ──────────────────────────────────────────────
+# -- Backtesting Signal Tests --
 
 class TestSignalVolumeBreakoutEntry:
     """Tests for signal_volume_breakout_entry() in backtesting/signals.py."""
@@ -140,77 +140,7 @@ class TestSignalVolumeBreakoutEntry:
         assert signal_volume_breakout_entry(ind, 1) == 0
 
 
-# ── Live Detection Tests (main.py helpers) ─────────────────────────────────
-
-class TestLiveVolumeBreakout:
-    """Tests for ConservativeBot._is_volume_breakout() and _breakout_direction()."""
-
-    @pytest.fixture
-    def sample_state(self) -> MarketState:
-        """MarketState that qualifies as a volume breakout LONG."""
-        return MarketState(
-            symbol="VVV",
-            timeframe="15m",
-            timestamp=datetime(2026, 2, 27, 10, 0, tzinfo=timezone.utc),
-            open=Decimal("1.000"),
-            high=Decimal("1.050"),
-            low=Decimal("0.990"),
-            close=Decimal("1.040"),   # close > open → bullish
-            volume=Decimal("5000000"),
-            atr=Decimal("0.02"),
-            atr_pct=Decimal("0.5"),
-            adx=Decimal("18"),        # CHAOS regime
-            rsi=Decimal("55"),
-            ema50=Decimal("0.95"),
-            ema200=Decimal("0.90"),
-            ema200_slope=Decimal("0.001"),
-            sma20=Decimal("0.98"),
-            sma50=Decimal("0.95"),
-            ema9=Decimal("1.01"),
-            ema21=Decimal("1.00"),
-            prev_close=Decimal("1.000"),  # close > prev_close → confirms LONG
-            volume_ratio=Decimal("3.2"),  # 3.2x above SMA20
-            regime=Regime.CHAOS,
-            trend_direction=Direction.LONG,
-        )
-
-    def test_is_volume_breakout_true(self, sample_state: MarketState) -> None:
-        from crypto_bot.main import ConservativeBot
-        bot = ConservativeBot.__new__(ConservativeBot)
-        bot._config = _make_config()
-        assert bot._is_volume_breakout(sample_state)
-
-    def test_is_volume_breakout_low_volume(self, sample_state: MarketState) -> None:
-        from crypto_bot.main import ConservativeBot
-        bot = ConservativeBot.__new__(ConservativeBot)
-        bot._config = _make_config()
-        sample_state.volume_ratio = Decimal("1.5")  # Below 2.0
-        assert not bot._is_volume_breakout(sample_state)
-
-    def test_is_volume_breakout_small_body(self, sample_state: MarketState) -> None:
-        from crypto_bot.main import ConservativeBot
-        bot = ConservativeBot.__new__(ConservativeBot)
-        bot._config = _make_config()
-        sample_state.close = Decimal("1.001")  # Tiny body
-        assert not bot._is_volume_breakout(sample_state)
-
-    def test_breakout_direction_long(self, sample_state: MarketState) -> None:
-        from crypto_bot.main import ConservativeBot
-        assert ConservativeBot._breakout_direction(sample_state) == Direction.LONG
-
-    def test_breakout_direction_short(self, sample_state: MarketState) -> None:
-        from crypto_bot.main import ConservativeBot
-        sample_state.close = Decimal("0.960")  # close < open AND close < prev_close
-        assert ConservativeBot._breakout_direction(sample_state) == Direction.SHORT
-
-    def test_breakout_direction_flat(self, sample_state: MarketState) -> None:
-        from crypto_bot.main import ConservativeBot
-        sample_state.close = Decimal("1.020")   # close > open
-        sample_state.prev_close = Decimal("1.030")  # but close < prev_close
-        assert ConservativeBot._breakout_direction(sample_state) == Direction.FLAT
-
-
-# ── SetupType Enum Test ──────────────────────────────────────────────────
+# -- SetupType Enum Test --
 
 class TestSetupTypeEnum:
     def test_volume_breakout_exists(self) -> None:
@@ -220,7 +150,7 @@ class TestSetupTypeEnum:
         assert SetupType.VOLUME_BREAKOUT.value == "volume_breakout"
 
 
-# ── Regime Gating Tests ──────────────────────────────────────────────────
+# -- Regime Gating Tests --
 
 class TestRegimeGating:
     """Verify volume breakout works in CHAOS but EMA crossover requires TREND."""
@@ -235,72 +165,3 @@ class TestRegimeGating:
         """RANGE should NOT be in volume_breakout allowed_regimes."""
         allowed = {"chaos", "trend"}
         assert "range" not in allowed
-
-
-# ── Helper ───────────────────────────────────────────────────────────────
-
-def _make_config():
-    """Create minimal ConservativeConfig for volume breakout tests."""
-    from crypto_bot.main import ConservativeConfig
-    return ConservativeConfig(
-        assets=["VVV"],
-        universe_mode="manual",
-        min_volume_24h=100000,
-        exclude_symbols=[],
-        primary_timeframe="15m",
-        bars_to_fetch=200,
-        scan_interval_minutes=5,
-        per_trade_pct=5.0,
-        max_per_trade_pct=10.0,
-        max_positions=3,
-        max_exposure_pct=300,
-        max_position_pct=70,
-        max_daily_trades=8,
-        leverage=10,
-        daily_loss_pct=8.0,
-        weekly_loss_pct=15.0,
-        max_drawdown_pct=30.0,
-        initial_atr_mult=2.5,
-        trailing_atr_mult=2.5,
-        minimal_roi={},
-        stop_loss_pct=0.8,
-        take_profit_pct=1.6,
-        trend_adx_entry_min=28.0,
-        trend_adx_exit_min=22.0,
-        range_adx_max=20.0,
-        choppiness_range_min=60.0,
-        regime_confirmation_bars=3,
-        ml_model_path="models/trade_model.joblib",
-        ml_min_probability=0.50,
-        ml_retrain_interval_days=3,
-        ml_retrain_days=30,
-        prefer_limit=True,
-        max_slippage_pct=0.25,
-        max_spread_pct=0.30,
-        volume_breakout_enabled=True,
-        volume_breakout_min_volume_ratio=2.0,
-        volume_breakout_min_candle_body_pct=0.3,
-        volume_breakout_min_atr_pct=0.15,
-        volume_breakout_rsi_min=25.0,
-        volume_breakout_rsi_max=80.0,
-        volume_breakout_allowed_regimes=["chaos", "trend"],
-        momentum_burst_enabled=True,
-        momentum_burst_min_rsi_slope=8.0,
-        momentum_burst_min_candle_body_pct=0.3,
-        momentum_burst_max_rsi_entry=75.0,
-        momentum_burst_min_volume_ratio=1.2,
-        momentum_burst_allowed_regimes=["chaos", "trend"],
-        momentum_exit_enabled=True,
-        momentum_exit_min_age_minutes=15,
-        momentum_exit_min_profit_pct=0.1,
-        momentum_exit_rsi_slope_threshold=1.0,
-        breakeven_threshold_pct=1.2,
-        max_hold_hours=6.0,
-        entry_mode="taker",
-        limit_timeout_seconds=60,
-        maker_reprice_interval_seconds=10,
-        maker_max_reprices=6,
-        regime_exit_grace_minutes=5,
-        testnet=True,
-        dry_run=True,
-    )

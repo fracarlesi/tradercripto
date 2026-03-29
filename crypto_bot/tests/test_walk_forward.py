@@ -81,8 +81,8 @@ def test_compute_metrics_basic() -> None:
     assert "win_rate" in metrics
     assert "total_trades" in metrics
 
-    # 5 wins out of 8 trades
-    assert metrics["win_rate"] == pytest.approx(5 / 8)
+    # 4 wins out of 8 trades (10, 15, 8, 12 are positive)
+    assert metrics["win_rate"] == pytest.approx(4 / 8)
     assert metrics["total_trades"] == 8
 
     # Profit factor: (10+15+8+12) / (5+3+2+4) = 45/14
@@ -188,7 +188,7 @@ def test_reward_functions_registry() -> None:
     assert "sharpe_delta" in REWARD_FUNCTIONS
     assert "sortino_delta" in REWARD_FUNCTIONS
     assert "calmar_delta" in REWARD_FUNCTIONS
-    assert len(REWARD_FUNCTIONS) == 3
+    assert len(REWARD_FUNCTIONS) == 4
 
 
 def test_sortino_delta() -> None:

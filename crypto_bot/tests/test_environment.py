@@ -41,7 +41,7 @@ def test_env_creation(env: HyperliquidTradingEnv) -> None:
 
 def test_reset(env: HyperliquidTradingEnv) -> None:
     obs, info = env.reset()
-    assert obs["candles"].shape == (20, 5)
+    assert obs["candles"].shape == (20, 8)
     assert obs["portfolio"].shape == (4,)
     assert obs["history"].shape == (10,)
     assert info["total_value"] == 1000.0
