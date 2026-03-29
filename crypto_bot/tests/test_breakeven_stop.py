@@ -40,6 +40,10 @@ def _make_engine() -> ExecutionEngineService:
     # Mock config for breakeven_threshold_pct (read by _check_breakeven_stops)
     engine._bot_config = MagicMock()
     engine._bot_config.risk.breakeven_threshold_pct = BREAKEVEN_THRESHOLD_PCT
+    engine._bot_config.risk.stop_loss_pct = 1.5
+    engine._bot_config.risk.take_profit_pct = 3.0
+    # Disable R-based exits so legacy breakeven is tested
+    engine._bot_config.stops.r_based_exits_enabled = False
     return engine
 
 

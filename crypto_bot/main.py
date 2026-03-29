@@ -193,6 +193,22 @@ class ConservativeConfig:
     squeeze_kc_atr_period: int = 14
     squeeze_kc_atr_mult: float = 1.5
 
+    # R-based exit system
+    r_based_exits_enabled: bool = True
+    bp_activation_r: float = 2.0
+    bp_offset_pct: float = 0.15
+    strength_exit_r: float = 3.0
+    trailing_r_enabled: bool = True
+    trailing_start_r: float = 2.0
+    trailing_step_r: float = 1.0
+    trailing_lock_r: float = 0.5
+
+    # Violation exit (LLM hint)
+    violation_exit_enabled: bool = True
+    violation_ema_period: int = 4
+    violation_ema_source: str = "high"
+    violation_min_profit_pct: float = 0.3
+
     @classmethod
     def from_yaml(cls, path: str) -> "ConservativeConfig":
         """Load configuration from YAML file."""
@@ -247,6 +263,20 @@ class ConservativeConfig:
             take_profit_pct=stops.get("take_profit_pct", 1.6),
             breakeven_threshold_pct=stops.get("breakeven_threshold_pct", 1.2),
             max_hold_hours=stops.get("max_hold_hours", 6.0),
+            # R-based exit system
+            r_based_exits_enabled=stops.get("r_based_exits", {}).get("enabled", True),
+            bp_activation_r=stops.get("r_based_exits", {}).get("bp_activation_r", 2.0),
+            bp_offset_pct=stops.get("r_based_exits", {}).get("bp_offset_pct", 0.15),
+            strength_exit_r=stops.get("r_based_exits", {}).get("strength_exit_r", 3.0),
+            trailing_r_enabled=stops.get("r_based_exits", {}).get("trailing_enabled", True),
+            trailing_start_r=stops.get("r_based_exits", {}).get("trailing_start_r", 2.0),
+            trailing_step_r=stops.get("r_based_exits", {}).get("trailing_step_r", 1.0),
+            trailing_lock_r=stops.get("r_based_exits", {}).get("trailing_lock_r", 0.5),
+            # Violation exit
+            violation_exit_enabled=stops.get("violation_exit", {}).get("enabled", True),
+            violation_ema_period=stops.get("violation_exit", {}).get("ema_period", 4),
+            violation_ema_source=stops.get("violation_exit", {}).get("ema_source", "high"),
+            violation_min_profit_pct=stops.get("violation_exit", {}).get("min_profit_pct", 0.3),
             trend_adx_entry_min=regime.get("trend_adx_entry_min", 28.0),
             trend_adx_exit_min=regime.get("trend_adx_exit_min", 22.0),
             range_adx_max=regime.get("range_adx_max", 20.0),
@@ -581,6 +611,15 @@ class ConservativeBot:
                 self.trailing_atr_mult = cfg.trailing_atr_mult
                 self.minimal_roi = cfg.minimal_roi
                 self.max_hold_hours = cfg.max_hold_hours
+                # R-based exit system
+                self.r_based_exits_enabled = cfg.r_based_exits_enabled
+                self.bp_activation_r = cfg.bp_activation_r
+                self.bp_offset_pct = cfg.bp_offset_pct
+                self.strength_exit_r = cfg.strength_exit_r
+                self.trailing_r_enabled = cfg.trailing_r_enabled
+                self.trailing_start_r = cfg.trailing_start_r
+                self.trailing_step_r = cfg.trailing_step_r
+                self.trailing_lock_r = cfg.trailing_lock_r
 
         class _ServicesConfig:
             def __init__(self, exec_cfg: _ExecConfig):
@@ -831,8 +870,32 @@ class ConservativeBot:
                         if exec_pos.entry_trigger_details:
                             entry_context["entry_trigger_details"] = exec_pos.entry_trigger_details
 
-                # Enrich portfolio with entry context for prompt builder
-                eval_portfolio = {**portfolio, "entry_context": entry_context}
+                # --- Violation exit detection (hint for LLM) ---
+                violation_info = {}
+                if self.config.violation_exit_enabled and pnl_pct > self.config.violation_min_profit_pct:
+                    try:
+                        violation_info = await self._check_violation_exit(
+                            symbol, side, entry_px, pnl_pct,
+                        )
+                    except Exception as ve:
+                        logger.debug("Violation check failed for %s: %s", symbol, ve)
+
+                # Enrich portfolio with entry context and violation info for prompt builder
+                eval_portfolio = {
+                    **portfolio,
+                    "entry_context": entry_context,
+                    "violation_info": violation_info,
+                }
+
+                # Add R-multiple info from execution engine
+                exec_engine_r = self._services.get("execution")
+                if exec_engine_r:
+                    exec_pos_r = getattr(exec_engine_r, 'active_positions', {}).get(symbol)
+                    if exec_pos_r:
+                        eval_portfolio["r_multiple"] = exec_pos_r.current_r_multiple
+                        eval_portfolio["peak_r_multiple"] = exec_pos_r.peak_r_multiple
+                        eval_portfolio["one_r_pct"] = exec_pos_r.one_r_pct
+                        eval_portfolio["breakeven_activated"] = exec_pos_r.breakeven_activated
 
                 exit_decision = await self._flag_agent.evaluate_position(
                     symbol=symbol,
@@ -872,6 +935,75 @@ class ConservativeBot:
                 positions_evaluated, positions_closed, self._position_eval_interval,
             )
         return positions_closed
+
+    async def _check_violation_exit(
+        self,
+        symbol: str,
+        side: str,
+        entry_price: float,
+        pnl_pct: float,
+    ) -> dict:
+        """Check if price violates a technical level while in profit.
+
+        Returns violation info dict to be included in the LLM prompt.
+        This is NOT a mechanical exit — it's a hint for the LLM to consider closing.
+
+        Violation for LONG: last candle close < EMA(period) of highs
+        Violation for SHORT: last candle close > EMA(period) of lows
+        """
+        if not self._exchange:
+            return {}
+
+        ema_period = self.config.violation_ema_period
+        candles_raw = await self._exchange.get_candles(
+            symbol,
+            interval=self.config.primary_timeframe,
+            limit=ema_period + 5,
+        )
+
+        if not candles_raw or len(candles_raw) < ema_period + 1:
+            return {}
+
+        # Calculate EMA of highs (for longs) or lows (for shorts)
+        if side == "long":
+            prices = [float(c.get("h", c.get("high", 0))) for c in candles_raw]
+        else:
+            prices = [float(c.get("l", c.get("low", 0))) for c in candles_raw]
+
+        # Simple EMA calculation
+        multiplier = 2.0 / (ema_period + 1)
+        ema = prices[0]
+        for p in prices[1:]:
+            ema = (p - ema) * multiplier + ema
+
+        last_close = float(candles_raw[-1].get("c", candles_raw[-1].get("close", 0)))
+
+        violated = False
+        if side == "long" and last_close < ema:
+            violated = True
+        elif side == "short" and last_close > ema:
+            violated = True
+
+        if violated:
+            logger.info(
+                "VIOLATION detected: %s %s | close=%.4f vs EMA%d_%s=%.4f | pnl=%.2f%%",
+                side.upper(), symbol, last_close, ema_period,
+                "high" if side == "long" else "low", ema, pnl_pct,
+            )
+            return {
+                "violated": True,
+                "ema_period": ema_period,
+                "ema_source": "high" if side == "long" else "low",
+                "ema_value": round(ema, 6),
+                "last_close": round(last_close, 6),
+                "description": (
+                    f"Price closed {'below' if side == 'long' else 'above'} "
+                    f"EMA{ema_period} of {'highs' if side == 'long' else 'lows'} "
+                    f"({last_close:.4f} vs {ema:.4f}) — consider exiting"
+                ),
+            }
+
+        return {}
 
     async def _evaluate_with_flag_trader(self, triggered_symbols: list[str] | None = None) -> None:
         """Evaluate assets with FLAG-Trader model — NEW ENTRIES ONLY.

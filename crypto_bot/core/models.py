@@ -265,6 +265,10 @@ class TradeIntent(BaseModel):
     # Market context (for ATR-adaptive stops in execution engine)
     atr_pct: Optional[Decimal] = Field(None, ge=0, description="ATR as % of price at entry")
 
+    # Model-predicted TP/SL (FLAG-Trader heads) — passed through for R-based exits
+    model_tp_pct: Optional[float] = Field(None, description="Model-predicted TP %")
+    model_sl_pct: Optional[float] = Field(None, description="Model-predicted SL % (defines 1R)")
+
     # Regime at entry (for regime-invalidation exits)
     regime: Optional[str] = Field(default=None, description="Regime when setup was created")
 

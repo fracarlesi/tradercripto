@@ -704,6 +704,8 @@ class RiskManagerService(BaseService):
             risk_amount=risk.risk_amount,
             risk_pct=actual_risk_pct,
             atr_pct=setup.atr_pct,
+            model_tp_pct=setup.model_tp_pct,
+            model_sl_pct=setup.model_sl_pct,
             regime=setup.regime.value if setup.regime else None,
             prefer_limit=True,
             max_slippage_pct=Decimal(str(self._config.max_slippage_pct)),

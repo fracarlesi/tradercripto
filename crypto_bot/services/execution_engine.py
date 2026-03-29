@@ -227,6 +227,13 @@ class ExecutionPosition:
     trailing_active: bool = False     # True when trailing stop is actively following price
     entry_rsi_slope: float = 0.0     # RSI slope at entry (for momentum fade tracking)
     entry_ema_spread: float = 0.0    # EMA spread at entry (for momentum fade tracking)
+
+    # R-based exit system
+    one_r_pct: float = 0.0          # 1R as percentage (model_sl_pct or config fallback)
+    one_r_price: float = 0.0        # 1R as absolute price distance from entry
+    peak_r_multiple: float = 0.0    # Highest R-multiple reached during position life
+    current_r_multiple: float = 0.0 # Current R-multiple (updated each monitor cycle)
+    last_trail_r: float = 0.0       # Last R-level at which trailing SL was updated
     entry_reason: str = ""           # Why position was opened (e.g. "squeeze_fire")
     entry_confidence: float = 0.0    # LLM confidence at entry time
     entry_trigger_details: str = ""  # Details about the trigger (e.g. squeeze params)
@@ -263,6 +270,11 @@ class ExecutionPosition:
             "entry_reason": self.entry_reason,
             "entry_confidence": self.entry_confidence,
             "entry_trigger_details": self.entry_trigger_details,
+            "one_r_pct": self.one_r_pct,
+            "one_r_price": self.one_r_price,
+            "peak_r_multiple": self.peak_r_multiple,
+            "current_r_multiple": self.current_r_multiple,
+            "last_trail_r": self.last_trail_r,
         }
 
 
@@ -1410,6 +1422,12 @@ class ExecutionEngineService(BaseService):
         _entry_rsi_slope = getattr(_ms, 'rsi_slope', 0.0) if _ms else 0.0
         _entry_ema_spread = getattr(_ms, 'ema_spread', 0.0) if _ms else 0.0
 
+        # Calculate 1R (risk unit) from model-predicted SL or config fallback
+        model_sl = signal.get("model_sl_pct", 0)
+        cfg_sl = getattr(self._bot_config.risk, "stop_loss_pct", 0)
+        one_r_pct = float(model_sl if model_sl and model_sl > 0 else cfg_sl)
+        one_r_price = entry_price * (one_r_pct / 100) if one_r_pct > 0 else 0.0
+
         # Create position
         position = ExecutionPosition(
             symbol=symbol,
@@ -1429,6 +1447,8 @@ class ExecutionEngineService(BaseService):
             entry_reason=signal.get("entry_reason", ""),
             entry_confidence=float(signal.get("entry_confidence", 0.0)),
             entry_trigger_details=signal.get("entry_trigger_details", ""),
+            one_r_pct=one_r_pct,
+            one_r_price=one_r_price,
         )
         
         self.active_positions[symbol] = position
@@ -2342,10 +2362,16 @@ class ExecutionEngineService(BaseService):
                 # Check for closed positions (SL/TP hit)
                 await self._check_closed_positions()
 
-                # Move SL to breakeven when profit threshold is reached
-                await self._check_breakeven_stops()
+                # Update R-multiples for all positions
+                self._update_r_multiples()
 
-                # Trail SL behind price (ATR-based, after breakeven)
+                # R-based exits: breakeven protection, strength TP, trailing
+                await self._check_r_based_breakeven()
+                await self._check_strength_exit()
+                await self._check_r_based_trailing()
+
+                # Legacy breakeven/trailing (only active when R-based disabled)
+                await self._check_breakeven_stops()
                 await self._check_trailing_stops()
 
                 # Close dead trades that exceeded max hold time
@@ -2622,9 +2648,272 @@ class ExecutionEngineService(BaseService):
                     self._closing_positions.discard(symbol)
                     position.status = PositionStatus.OPEN
 
+    # =========================================================================
+    # R-Based Exit System (Mechanical — No LLM)
+    # =========================================================================
+
+    def _update_r_multiples(self) -> None:
+        """Update current and peak R-multiples for all open positions.
+
+        Called every monitor cycle (5s). R-multiple = profit / 1R distance.
+        """
+        for symbol, position in self.active_positions.items():
+            if position.status != PositionStatus.OPEN:
+                continue
+            if position.one_r_price <= 0 or position.entry_price <= 0:
+                continue
+
+            # Calculate current profit in price units
+            if position.side == "long":
+                profit_price = position.current_price - position.entry_price
+            else:
+                profit_price = position.entry_price - position.current_price
+
+            # R-multiple = profit / 1R
+            r_mult = profit_price / position.one_r_price
+            position.current_r_multiple = round(r_mult, 2)
+
+            # Track peak R
+            if r_mult > position.peak_r_multiple:
+                position.peak_r_multiple = round(r_mult, 2)
+
+    async def _check_r_based_breakeven(self) -> None:
+        """Move SL to entry price (breakeven) when profit reaches bp_activation_r.
+
+        This is a MECHANICAL rule — no LLM decision needed.
+        When position reaches +2R (configurable), the stop loss moves to entry + offset.
+        This makes the trade risk-free.
+
+        Requires:
+        - R-based exits enabled in config
+        - Position has one_r_pct > 0 (model predicted a SL)
+        - Position not already at breakeven
+        - Position has an existing SL order to replace
+        """
+        stops_cfg = getattr(self._bot_config, "stops", None)
+        if not stops_cfg or not getattr(stops_cfg, "r_based_exits_enabled", False):
+            return
+
+        bp_activation_r = getattr(stops_cfg, "bp_activation_r", 2.0)
+        bp_offset_pct = getattr(stops_cfg, "bp_offset_pct", 0.15)
+
+        for symbol, position in list(self.active_positions.items()):
+            if position.status != PositionStatus.OPEN:
+                continue
+            if position.breakeven_activated:
+                continue
+            if symbol in self._settling_symbols:
+                continue
+            if position.one_r_pct <= 0:
+                continue  # No 1R defined, skip R-based logic
+            if position.entry_price <= 0:
+                continue
+
+            if position.current_r_multiple < bp_activation_r:
+                continue
+
+            # --- Breakeven triggered at bp_activation_r ---
+            is_long = position.side == "long"
+            if is_long:
+                new_sl_price = position.entry_price * (1 + bp_offset_pct / 100)
+            else:
+                new_sl_price = position.entry_price * (1 - bp_offset_pct / 100)
+
+            self._logger.info(
+                "R-BREAKEVEN triggered: %s %s | R=%.1f >= %.1f | SL -> entry %.4f (offset %.2f%%)",
+                "LONG" if is_long else "SHORT", symbol,
+                position.current_r_multiple, bp_activation_r,
+                new_sl_price, bp_offset_pct,
+            )
+
+            # Cancel old SL first — must succeed before placing new one
+            if position.sl_order_id:
+                try:
+                    await self.client.cancel_order(symbol, int(position.sl_order_id))
+                    self._logger.debug("Cancelled old SL %s for %s", position.sl_order_id, symbol)
+                except Exception as e:
+                    self._logger.warning(
+                        "Failed to cancel old SL %s for %s: %s — skipping R-breakeven",
+                        position.sl_order_id, symbol, e,
+                    )
+                    continue
+            else:
+                self._logger.warning(
+                    "No existing SL order_id for %s — skipping R-breakeven to avoid duplicate orders",
+                    symbol,
+                )
+                continue
+
+            # Place new SL at breakeven
+            try:
+                sl_result = await self._place_trigger_with_retry(
+                    symbol=symbol,
+                    is_buy=not is_long,
+                    size=position.size,
+                    trigger_price=new_sl_price,
+                    tpsl="sl",
+                )
+                position.sl_order_id = sl_result.get("orderId")
+                position.sl_price = new_sl_price
+                position.breakeven_activated = True
+                position.last_trail_r = bp_activation_r
+                self._logger.info(
+                    "R-BREAKEVEN SL placed: %s @ %.4f (order %s) | 1R=%.2f%%",
+                    symbol, new_sl_price, position.sl_order_id, position.one_r_pct,
+                )
+            except Exception as e:
+                self._logger.error("Failed to place R-breakeven SL for %s: %s", symbol, e)
+
+    async def _check_strength_exit(self) -> None:
+        """Auto-close position when profit reaches strength_exit_r.
+
+        This is a MECHANICAL take-profit — no LLM decision needed.
+        When position reaches +3R (configurable), close immediately.
+        """
+        stops_cfg = getattr(self._bot_config, "stops", None)
+        if not stops_cfg or not getattr(stops_cfg, "r_based_exits_enabled", False):
+            return
+
+        strength_r = getattr(stops_cfg, "strength_exit_r", 3.0)
+
+        for symbol, position in list(self.active_positions.items()):
+            if position.status != PositionStatus.OPEN:
+                continue
+            if symbol in self._settling_symbols:
+                continue
+            if position.one_r_pct <= 0:
+                continue
+            if symbol in self._closing_positions:
+                continue
+
+            if position.current_r_multiple >= strength_r:
+                self._logger.info(
+                    "R-STRENGTH EXIT: %s %s | R=%.1f >= %.1f | auto-closing (mechanical TP)",
+                    position.side.upper(), symbol,
+                    position.current_r_multiple, strength_r,
+                )
+                position.exit_reason = "strength_exit"
+                try:
+                    await self.close_position(symbol)
+                except Exception as e:
+                    self._logger.error("Failed strength exit for %s: %s", symbol, e)
+
+    async def _check_r_based_trailing(self) -> None:
+        """R-based trailing stop: after breakeven, lock profit as R grows.
+
+        After BP is activated, for every trailing_step_r gained, the SL moves
+        up by trailing_lock_r. This is more intuitive than ATR-based trailing.
+
+        Example with defaults (step=1R, lock=0.5R, start=2R):
+        - At 2R: BP activated, SL at entry
+        - At 3R: SL moves to entry + 0.5R
+        - At 4R: SL moves to entry + 1.0R
+        - At 5R: SL moves to entry + 1.5R
+        """
+        stops_cfg = getattr(self._bot_config, "stops", None)
+        if not stops_cfg or not getattr(stops_cfg, "r_based_exits_enabled", False):
+            return
+        if not getattr(stops_cfg, "trailing_r_enabled", False):
+            return
+
+        trailing_start_r = getattr(stops_cfg, "trailing_start_r", 2.0)
+        trailing_step_r = getattr(stops_cfg, "trailing_step_r", 1.0)
+        trailing_lock_r = getattr(stops_cfg, "trailing_lock_r", 0.5)
+
+        for symbol, position in list(self.active_positions.items()):
+            if position.status != PositionStatus.OPEN:
+                continue
+            if not position.breakeven_activated:
+                continue  # Trailing only after breakeven
+            if symbol in self._settling_symbols:
+                continue
+            if position.one_r_price <= 0:
+                continue
+
+            # How many full steps above trailing_start_r has peak_r reached?
+            if position.peak_r_multiple < trailing_start_r + trailing_step_r:
+                continue  # Haven't gained a full step yet
+
+            steps = int((position.peak_r_multiple - trailing_start_r) / trailing_step_r)
+            if steps <= 0:
+                continue
+
+            # Target R-level for SL = number of steps * lock per step
+            target_sl_r = steps * trailing_lock_r
+
+            # Only update if this is higher than last trail update
+            if target_sl_r <= position.last_trail_r - trailing_start_r:
+                continue  # SL already at this level or higher
+
+            is_long = position.side == "long"
+
+            # Calculate new SL price: entry + target_sl_r * 1R
+            if is_long:
+                new_sl = position.entry_price + target_sl_r * position.one_r_price
+            else:
+                new_sl = position.entry_price - target_sl_r * position.one_r_price
+
+            # Safety: only tighten SL, never loosen it
+            if position.sl_price:
+                if is_long and new_sl <= position.sl_price:
+                    continue
+                if not is_long and new_sl >= position.sl_price:
+                    continue
+
+            self._logger.info(
+                "R-TRAILING: %s %s | peak_R=%.1f | steps=%d | SL -> entry %+.1fR (%.4f)",
+                "LONG" if is_long else "SHORT", symbol,
+                position.peak_r_multiple, steps, target_sl_r, new_sl,
+            )
+
+            # Cancel old SL first
+            if not position.sl_order_id:
+                self._logger.warning(
+                    "No existing SL order_id for %s — skipping R-trailing update",
+                    symbol,
+                )
+                continue
+
+            try:
+                await self.client.cancel_order(symbol, int(position.sl_order_id))
+            except Exception as e:
+                self._logger.warning(
+                    "Failed to cancel old SL %s for %s: %s — skipping R-trailing",
+                    position.sl_order_id, symbol, e,
+                )
+                continue
+
+            try:
+                sl_result = await self._place_trigger_with_retry(
+                    symbol=symbol,
+                    is_buy=not is_long,
+                    size=position.size,
+                    trigger_price=new_sl,
+                    tpsl="sl",
+                )
+                position.sl_order_id = sl_result.get("orderId")
+                position.sl_price = new_sl
+                position.last_trail_r = trailing_start_r + target_sl_r
+                if not position.trailing_active:
+                    position.trailing_active = True
+                self._logger.info(
+                    "R-TRAILING SL placed: %s @ %.4f (order %s)",
+                    symbol, new_sl, position.sl_order_id,
+                )
+            except Exception as e:
+                self._logger.error(
+                    "Failed to place R-trailing SL for %s after cancel: %s — position has NO SL!",
+                    symbol, e,
+                )
+
+    # =========================================================================
+    # Legacy Breakeven / Trailing (active only when R-based is disabled)
+    # =========================================================================
+
     async def _check_breakeven_stops(self) -> None:
         """Move SL to entry price (breakeven) when unrealized P&L reaches threshold.
 
+        LEGACY method — only active when R-based exits are disabled.
         For each OPEN position that has not yet been moved to breakeven:
         1. Calculate current P&L % using Decimal arithmetic.
         2. If P&L % >= BREAKEVEN_THRESHOLD_PCT:
@@ -2632,6 +2921,11 @@ class ExecutionEngineService(BaseService):
            b. Only if the cancel succeeds, place a new SL trigger at the entry price.
            c. Mark the position as breakeven_activated.
         """
+        # Skip if R-based exits are handling breakeven
+        stops_cfg = getattr(self._bot_config, "stops", None)
+        if stops_cfg and getattr(stops_cfg, "r_based_exits_enabled", False):
+            return
+
         from decimal import Decimal
 
         cfg_be = getattr(self._bot_config.risk, "breakeven_threshold_pct", BREAKEVEN_THRESHOLD_PCT)
@@ -2774,6 +3068,8 @@ class ExecutionEngineService(BaseService):
     async def _check_trailing_stops(self) -> None:
         """ATR-based trailing stop.
 
+        LEGACY method — only active when R-based exits are disabled.
+
         Activates only after breakeven has been triggered. Once active, the SL
         follows price at a distance of trailing_atr_mult x ATR from the peak
         (LONG) or trough (SHORT). The SL is only ever tightened, never loosened.
@@ -2784,6 +3080,11 @@ class ExecutionEngineService(BaseService):
         - entry_atr_pct must be > 0 (ATR was available at entry)
         - current_price must be > 0
         """
+        # Skip if R-based exits are handling trailing
+        stops_cfg = getattr(self._bot_config, "stops", None)
+        if stops_cfg and getattr(stops_cfg, "r_based_exits_enabled", False):
+            return
+
         trailing_mult = getattr(
             getattr(self._bot_config, "stops", None),
             "trailing_atr_mult", 0  # Safe fallback: disabled when key missing

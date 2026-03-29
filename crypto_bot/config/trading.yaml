@@ -100,16 +100,44 @@ risk:
 # -----------------------------------------------------------------------------
 # Stops — Model-predicted TP/SL + LLM 60s eval loop
 # -----------------------------------------------------------------------------
-# Dual exit mechanism:
-# 1. Model-predicted TP/SL placed as orders on the exchange at entry
-# 2. LLM re-evaluates open positions every 60 seconds (can close early)
-# Config values below are fallbacks if model predictions are missing.
+# Triple exit mechanism:
+# 1. Model-predicted SL placed at entry (defines 1R = risk unit)
+# 2. Mechanical R-based exits: breakeven protection, strength TP, trailing
+# 3. LLM re-evaluates open positions every 60s (can close on violation)
+#
+# R-multiple system: 1R = distance from entry to initial stop loss
+# Example: entry $100, SL $98 → 1R = 2% → 2R profit = $104
 stops:
-  stop_loss_pct: 0
-  take_profit_pct: 0
-  breakeven_threshold_pct: 99.0
-  max_hold_hours: 0
-  trailing_atr_mult: 0
+  stop_loss_pct: 0              # Config fallback SL (0 = use model-predicted only)
+  take_profit_pct: 0            # Config fallback TP (0 = use R-based system below)
+  max_hold_hours: 0             # 0 = disabled (LLM manages hold duration)
+  trailing_atr_mult: 0          # Legacy ATR trailing (0 = disabled, use R-based below)
+
+  # --- R-based exit system (mechanical, no LLM needed) ---
+  r_based_exits:
+    enabled: true
+
+    # Breakeven protection: move SL to entry when profit reaches bp_activation_r
+    bp_activation_r: 2.0        # Activate breakeven at +2R profit
+    bp_offset_pct: 0.15         # Offset above entry to cover fees (0.15%)
+
+    # Strength exit: auto-close at high R-multiple (take profit)
+    strength_exit_r: 3.0        # Close position at +3R profit
+
+    # R-based trailing stop: after BP, trail SL upward as profit grows
+    trailing_enabled: true
+    trailing_start_r: 2.0       # Start trailing after this R-multiple
+    trailing_step_r: 1.0        # For every +1R gained above trailing_start_r...
+    trailing_lock_r: 0.5        # ...lock 0.5R of that gain (SL moves up 0.5R)
+
+  # --- Violation exit (hint to LLM, not mechanical) ---
+  # When price violates a technical level while in profit, this info is
+  # added to the LLM prompt as an exit suggestion (not forced).
+  violation_exit:
+    enabled: true
+    ema_period: 4               # EMA period for violation check
+    ema_source: "high"          # "high" for longs, "low" for shorts
+    min_profit_pct: 0.3         # Only suggest violation exit if in profit
 
 # -----------------------------------------------------------------------------
 # Regime Detection

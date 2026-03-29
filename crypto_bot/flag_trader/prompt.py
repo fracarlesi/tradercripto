@@ -131,6 +131,31 @@ class PromptBuilder:
                     if entry_details:
                         pos_text += f" [{entry_details}]"
                     pos_text += "\n"
+
+            # Add R-multiple info if available
+            if portfolio:
+                r_mult = portfolio.get("r_multiple")
+                peak_r = portfolio.get("peak_r_multiple")
+                one_r = portfolio.get("one_r_pct")
+                bp_active = portfolio.get("breakeven_activated")
+                if r_mult is not None and one_r:
+                    pos_text += (
+                        f"Risk unit (1R): {one_r:.1f}% | "
+                        f"Current: {r_mult:+.1f}R | Peak: {peak_r:.1f}R"
+                    )
+                    if bp_active:
+                        pos_text += " | Breakeven protection ACTIVE"
+                    pos_text += "\n"
+
+            # Add violation exit hint if detected
+            if portfolio:
+                violation = portfolio.get("violation_info", {})
+                if violation.get("violated"):
+                    pos_text += (
+                        f"WARNING — Technical violation: {violation.get('description', '')}\n"
+                        f"This suggests weakening momentum. Consider closing to protect profits.\n"
+                    )
+
             pos_text += "Consider whether to maintain or reverse your position."
             prompt += pos_text
         prompt += (
