@@ -37,6 +37,11 @@ from ..core.models import (
 
 logger = logging.getLogger(__name__)
 
+# Hyperliquid exchange minimum order value.
+# Orders below this notional are rejected by the exchange with:
+#   "Order must have minimum value of $10"
+HYPERLIQUID_MIN_ORDER_NOTIONAL = Decimal("10")
+
 
 # =============================================================================
 # Confidence Scaling
@@ -632,6 +637,20 @@ class RiskManagerService(BaseService):
             notional_value = min(notional_value, max_notional)
             position_size = notional_value / setup.entry_price
             exposure_pct = (notional_value / equity) * 100
+
+        # Final guard: reject if notional is below Hyperliquid minimum ($10).
+        # This can happen when equity is small and max_position_pct caps the size.
+        if notional_value < HYPERLIQUID_MIN_ORDER_NOTIONAL:
+            self._logger.warning(
+                "Notional $%.2f below exchange minimum ($%s) — skipping %s",
+                float(notional_value),
+                HYPERLIQUID_MIN_ORDER_NOTIONAL,
+                setup.symbol,
+            )
+            return _reject(
+                f"Notional ${float(notional_value):.2f} below exchange minimum "
+                f"(${HYPERLIQUID_MIN_ORDER_NOTIONAL})"
+            )
 
         return RiskParams(
             risk_amount=risk_amount,
