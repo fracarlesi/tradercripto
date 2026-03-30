@@ -22,6 +22,8 @@ class Topic(str, Enum):
     NOTIFICATION = "notification"
     REGIME = "regime"
     SCORECARD = "scorecard"
+    SCAN_RESULTS = "scan_results"
+    LLM_SIGNAL = "llm_signal"
 
 
 class Direction(str, Enum):
@@ -57,6 +59,8 @@ class SetupType(str, Enum):
     RSI_MR_SHORT = "rsi_mr_short"
     RSI_MR_EXIT_LONG = "rsi_mr_exit_long"
     RSI_MR_EXIT_SHORT = "rsi_mr_exit_short"
+    LLM_EQUITY_LONG = "llm_equity_long"
+    LLM_EQUITY_SHORT = "llm_equity_short"
 
 
 class KillSwitchStatus(str, Enum):
