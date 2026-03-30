@@ -18,8 +18,15 @@ from pathlib import Path
 
 import torch
 
-# Import from crypto_bot — shared model
-from crypto_bot.flag_trader.model import FlagTraderModel
+# Direct file import to avoid triggering crypto_bot.__init__ (pulls Hyperliquid deps)
+import importlib.util as _ilu
+_spec = _ilu.spec_from_file_location(
+    "flag_trader_model",
+    Path(__file__).resolve().parent.parent.parent / "crypto_bot" / "flag_trader" / "model.py",
+)
+_mod = _ilu.module_from_spec(_spec)  # type: ignore[arg-type]
+_spec.loader.exec_module(_mod)  # type: ignore[union-attr]
+FlagTraderModel = _mod.FlagTraderModel
 
 logger = logging.getLogger(__name__)
 
