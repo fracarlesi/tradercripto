@@ -61,7 +61,7 @@ case $MODE in
         ssh $VPS_USER@$VPS_IP "cd $DEPLOY_DIR && docker compose --profile paper stop crypto_bot_paper && docker compose --profile paper rm -f crypto_bot_paper && docker compose --profile paper build crypto_bot_paper --no-cache && docker compose --profile paper up -d crypto_bot_paper"
         ;;
     ib)
-        ssh $VPS_USER@$VPS_IP "cd $DEPLOY_DIR && docker compose --profile ib stop ib_bot && docker compose --profile ib rm -f ib_bot && docker compose --profile ib build ib_bot --no-cache && docker compose --profile ib up -d ib_bot"
+        ssh $VPS_USER@$VPS_IP "cd $DEPLOY_DIR && docker compose --profile ib stop ib_bot ib_gateway && docker compose --profile ib rm -f ib_bot && docker compose --profile ib build ib_bot --no-cache && docker compose --profile ib up -d ib_gateway ib_bot"
         ;;
     all)
         ssh $VPS_USER@$VPS_IP "cd $DEPLOY_DIR && docker compose --profile ib --profile paper down && docker compose --profile ib --profile paper build --no-cache && docker compose --profile ib --profile paper up -d"
