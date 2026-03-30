@@ -26,7 +26,8 @@ from typing import Optional
 from dotenv import load_dotenv
 
 from .config.loader import load_config, TradingConfig
-from .core.enums import Direction, SessionPhase, Topic
+from .core.enums import Direction, SessionPhase, SetupType, Topic
+from .core.models import FuturesMarketState, ORBRange
 from .services.message_bus import MessageBus
 from .services.ib_client import IBClient
 from .services.market_data import MarketDataService
@@ -46,6 +47,14 @@ from .strategies.etf_rotation import (
     RotationAction,
 )
 from .strategies.options_spreads import CreditSpreadStrategy
+
+# Scanner + LLM (optional — only loaded if scanner_universal.enabled)
+from .scanner.scanner_service import ScannerService
+from .flag_trader.model_router import LLMModelRouter
+from .flag_trader.agent import IBFlagTraderAgent, IBFlagTraderConfig
+from .flag_trader.equity_model import EquityFlagTraderModel
+from .flag_trader.equity_prompt import EquityPromptBuilder
+from .strategies.llm_equity import LLMEquityStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -191,6 +200,61 @@ class IBBot:
                 config.options_spreads.target_delta,
             )
 
+        # Scanner + LLM equity strategy (optional)
+        self._scanner: Optional[ScannerService] = None
+        self._llm_equity: Optional[LLMEquityStrategy] = None
+        self._scanner_checked_today = False
+        self._scanner_candidates: list[dict] = []  # loaded from last EOD scan
+        self._scanner_candle_cache: dict[str, list[dict[str, float]]] = {}
+        self._llm_evaluated_today = False
+
+        if config.scanner_universal.enabled:
+            scanner_cfg = config.scanner_universal
+            # Build LLM model router with equity model factory
+            model_router = LLMModelRouter(
+                confidence_threshold=scanner_cfg.confidence_threshold,
+            )
+            model_router.load_models({
+                "equity": {
+                    "model_name": "Qwen/Qwen2.5-0.5B-Instruct",
+                    "device": "cpu",
+                },
+            })
+
+            self._scanner = ScannerService(
+                bus=self._bus,
+                model_router=model_router,
+                config={
+                    "max_candidates": scanner_cfg.max_candidates,
+                    "confidence_threshold": scanner_cfg.confidence_threshold,
+                    "max_total": scanner_cfg.max_open_positions,
+                },
+            )
+
+            # Build the IBFlagTraderAgent + LLMEquityStrategy
+            agent_config = IBFlagTraderConfig(
+                confidence_threshold=scanner_cfg.confidence_threshold,
+            )
+            equity_model = EquityFlagTraderModel(
+                model_name="Qwen/Qwen2.5-0.5B-Instruct", device="cpu",
+            )
+            prompt_builder = EquityPromptBuilder()
+            flag_agent = IBFlagTraderAgent(
+                config=agent_config,
+                model=equity_model,
+                prompt_builder=prompt_builder,
+            )
+            self._llm_equity = LLMEquityStrategy(agent=flag_agent)
+
+            logger.info(
+                "Scanner + LLM Equity enabled: max_candidates=%d threshold=%.2f "
+                "max_positions=%d scan_time=%s",
+                scanner_cfg.max_candidates,
+                scanner_cfg.confidence_threshold,
+                scanner_cfg.max_open_positions,
+                scanner_cfg.scan_time,
+            )
+
     # =========================================================================
     # Startup Diagnostics
     # =========================================================================
@@ -225,6 +289,7 @@ class IBBot:
             f"  RSI2 Connors:    {'ENABLED (daily)' if self._rsi2_strategy else 'disabled'}",
             f"  ETF Rotation:    {'ENABLED (monthly VAA-G4)' if self._etf_rotation else 'disabled'}",
             f"  Credit Spreads:  {'ENABLED (bi-weekly SPY puts)' if self._credit_spread else 'disabled'}",
+            f"  LLM Scanner:    {'ENABLED (EOD scan + LLM equity)' if self._scanner else 'disabled'}",
             "",
             "  --- IB Connection ---",
             f"  Host:            {conn.host}:{conn.port}",
@@ -290,6 +355,10 @@ class IBBot:
             await self._market_data.start()
             await self._execution.start()
 
+            # Start scanner service if enabled
+            if self._scanner:
+                await self._scanner.start()
+
             # Subscribe to opening range for strategy evaluation
             await self._bus.subscribe(Topic.OPENING_RANGE, self._on_opening_range)
             await self._bus.subscribe(Topic.MARKET_DATA, self._on_market_data)
@@ -325,6 +394,8 @@ class IBBot:
             except asyncio.CancelledError:
                 pass
 
+        if self._scanner:
+            await self._scanner.stop()
         await self._execution.stop()
         await self._market_data.stop()
         await self._kill_switch.stop()
@@ -345,6 +416,8 @@ class IBBot:
                 await self._update_phase()
                 await self._check_etf_rotation()
                 await self._check_credit_spreads()
+                await self._check_scanner_eod()
+                await self._check_llm_equity_trading()
                 await asyncio.sleep(5.0)
             except asyncio.CancelledError:
                 break
@@ -435,6 +508,29 @@ class IBBot:
                 self._regime_detector.reset()
             self._etf_rotation_checked_today = False
             self._credit_spread_checked_today = False
+            self._scanner_checked_today = False
+            self._llm_evaluated_today = False
+            # Load scanner candidates from last EOD scan
+            if self._scanner and self._scanner.last_decisions:
+                self._scanner_candidates = [
+                    {
+                        "symbol": d.symbol if hasattr(d, "symbol") else str(d),
+                        "asset_class": getattr(d, "asset_class", "equity"),
+                        "action": getattr(d, "action", 2),
+                        "action_name": getattr(d, "action_name", "BUY"),
+                        "confidence": getattr(d, "confidence", 0.0),
+                        "tp_pct": getattr(d, "tp_pct", 3.0),
+                        "sl_pct": getattr(d, "sl_pct", 2.0),
+                    }
+                    for d in self._scanner.last_decisions
+                ]
+                logger.info(
+                    "Loaded %d scanner candidates from last EOD scan: %s",
+                    len(self._scanner_candidates),
+                    [c["symbol"] for c in self._scanner_candidates],
+                )
+            else:
+                self._scanner_candidates = []
             logger.info("Daily reset complete - ready for new session")
 
         elif new == SessionPhase.OPENING_RANGE:
@@ -713,6 +809,201 @@ class IBBot:
         logger.info("Credit Spread status:\n%s", report)
 
     # =========================================================================
+    # Scanner EOD Scan
+    # =========================================================================
+
+    async def _check_scanner_eod(self) -> None:
+        """Run the EOD scanner after market close.
+
+        Triggers once per day at the configured scan_time (default 16:15 ET).
+        Collects candidates for LLM evaluation the next morning.
+        """
+        if not self._scanner:
+            return
+
+        if self._scanner_checked_today:
+            return
+
+        now_et = datetime.now(timezone.utc).astimezone(self._session_tz)
+        scan_time_str = self._config.scanner_universal.scan_time
+        h, m = map(int, scan_time_str.split(":"))
+        scan_time = time(h, m)
+
+        if now_et.time() < scan_time:
+            return
+
+        self._scanner_checked_today = True
+
+        logger.info("Scanner EOD: starting batch scan at %s ET", now_et.strftime("%H:%M"))
+
+        try:
+            # Get current portfolio state for LLM context
+            positions = self._ib_client.get_positions()
+            open_positions = [
+                {"symbol": p.contract.symbol, "position": p.position}
+                for p in positions if p.position != 0
+            ]
+
+            decisions = await self._scanner.run_eod_scan(
+                open_positions=open_positions,
+            )
+
+            logger.info(
+                "Scanner EOD: %d filtered decisions: %s",
+                len(decisions),
+                [getattr(d, "symbol", str(d)) for d in decisions],
+            )
+
+            if decisions:
+                await self._notifications.send(
+                    f"EOD Scanner: {len(decisions)} candidates\n"
+                    + "\n".join(
+                        f"  {getattr(d, 'symbol', '?')} "
+                        f"{getattr(d, 'action_name', '?')} "
+                        f"conf={getattr(d, 'confidence', 0):.2f}"
+                        for d in decisions[:10]
+                    ),
+                    title="Scanner EOD Results",
+                    tags="mag",
+                )
+
+        except Exception as e:
+            logger.error("Scanner EOD failed: %s", e, exc_info=True)
+            await self._notifications.send(
+                f"Scanner EOD ERROR: {e}",
+                title="Scanner ERROR",
+                tags="warning",
+            )
+
+    # =========================================================================
+    # LLM Equity Trading (Active Trading)
+    # =========================================================================
+
+    async def _check_llm_equity_trading(self) -> None:
+        """Evaluate scanner candidates with LLM during active trading.
+
+        Runs once per day during ACTIVE_TRADING phase. Uses the
+        LLMEquityStrategy to produce TradeSetup objects, then sizes
+        and publishes them as orders.
+        """
+        if not self._llm_equity:
+            return
+
+        if self._llm_evaluated_today:
+            return
+
+        if self._phase != SessionPhase.ACTIVE_TRADING:
+            return
+
+        if not self._scanner_candidates:
+            self._llm_evaluated_today = True
+            return
+
+        self._llm_evaluated_today = True
+
+        logger.info(
+            "LLM Equity: evaluating %d scanner candidates",
+            len(self._scanner_candidates),
+        )
+
+        try:
+            # Fetch fresh candle data for candidates via scanner data fetcher
+            symbols = [c["symbol"] for c in self._scanner_candidates]
+            if self._scanner and self._scanner.data_fetcher:
+                candle_cache_raw = await self._scanner.data_fetcher.fetch_universe(
+                    symbols
+                )
+                # Convert DataFrames to list-of-dicts format
+                candle_cache: dict[str, list[dict[str, float]]] = {}
+                for sym, df in candle_cache_raw.items():
+                    if df is not None and not df.empty:
+                        candle_cache[sym] = [
+                            {
+                                "open": float(row["Open"]),
+                                "high": float(row["High"]),
+                                "low": float(row["Low"]),
+                                "close": float(row["Close"]),
+                                "volume": float(row["Volume"]),
+                            }
+                            for _, row in df.iterrows()
+                        ]
+            else:
+                candle_cache = self._scanner_candle_cache
+
+            if not candle_cache:
+                logger.warning("LLM Equity: no candle data available, skipping")
+                return
+
+            # Get portfolio state
+            positions = self._ib_client.get_positions()
+            total_value = sum(
+                abs(float(p.position) * float(p.avgCost))
+                for p in positions
+            )
+            portfolio = {
+                "cash_balance": 0.0,
+                "asset_position": float(total_value),
+                "total_account_value": float(total_value),
+            }
+
+            # Evaluate candidates with LLM
+            setups = await self._llm_equity.evaluate_candidates(
+                scan_results=self._scanner_candidates,
+                candle_cache=candle_cache,
+                portfolio=portfolio,
+            )
+
+            if not setups:
+                logger.info("LLM Equity: no actionable setups from %d candidates", len(self._scanner_candidates))
+                return
+
+            scanner_cfg = self._config.scanner_universal
+            placed = 0
+
+            for setup in setups:
+                if placed >= scanner_cfg.max_open_positions:
+                    break
+
+                logger.info(
+                    "LLM EQUITY SIGNAL [%s]: %s %s entry=%.2f stop=%.2f "
+                    "target=%.2f conf=%.4f",
+                    setup.symbol, setup.setup_type.value, setup.direction.value,
+                    float(setup.entry_price), float(setup.stop_price),
+                    float(setup.target_price), float(setup.confidence),
+                )
+
+                # Publish as LLM_SIGNAL for execution
+                await self._bus.publish(
+                    Topic.LLM_SIGNAL,
+                    setup.model_dump(mode="json"),
+                    source="llm_equity",
+                )
+
+                await self._notifications.send(
+                    f"LLM EQUITY: {setup.direction.value} {setup.symbol}\n"
+                    f"Entry: {float(setup.entry_price):.2f}\n"
+                    f"Stop: {float(setup.stop_price):.2f}\n"
+                    f"Target: {float(setup.target_price):.2f}\n"
+                    f"Confidence: {float(setup.confidence):.4f}",
+                    title=f"LLM Equity {setup.direction.value}",
+                    tags="chart_with_upwards_trend" if setup.direction == Direction.LONG else "chart_with_downwards_trend",
+                )
+                placed += 1
+
+            logger.info(
+                "LLM Equity: published %d / %d setups",
+                placed, len(setups),
+            )
+
+        except Exception as e:
+            logger.error("LLM Equity evaluation failed: %s", e, exc_info=True)
+            await self._notifications.send(
+                f"LLM Equity ERROR: {e}",
+                title="LLM Equity ERROR",
+                tags="warning",
+            )
+
+    # =========================================================================
     # Event Handlers
     # =========================================================================
 
@@ -753,8 +1044,6 @@ class IBBot:
         payload = msg.payload if hasattr(msg, "payload") else msg  # type: ignore[union-attr]
         if not isinstance(payload, dict):
             return
-
-        from .core.models import FuturesMarketState
 
         try:
             state = FuturesMarketState(**payload)
@@ -809,8 +1098,8 @@ class IBBot:
 
     async def _evaluate_rsi_mr(
         self,
-        state: "FuturesMarketState",
-        or_range: "Optional[ORBRange]",
+        state: FuturesMarketState,
+        or_range: Optional[ORBRange],
     ) -> None:
         """Evaluate RSI Mean Reversion strategy as secondary intraday strategy.
 
@@ -823,11 +1112,8 @@ class IBBot:
         if not self._rsi_mr_strategy:
             return
 
-        from .core.enums import SetupType
-
         # Build a dummy OR range if none available (RSI MR ignores it)
         if or_range is None:
-            from .core.models import ORBRange
             or_range = ORBRange(
                 symbol=state.symbol,
                 or_high=state.last_price,
@@ -912,7 +1198,9 @@ class IBBot:
         places a market order (executes at next open).
         """
         from .strategies.rsi2_connors import DailyBar
-        from .core.enums import SetupType
+
+        if self._rsi2_strategy is None:
+            return
 
         symbol = self._rsi2_strategy._symbol
         today = datetime.now(self._session_tz).date()
@@ -939,8 +1227,9 @@ class IBBot:
             # Convert IB bars to DailyBar objects
             bars: list[DailyBar] = []
             for b in ib_bars:
+                bar_date = b.date.date() if isinstance(b.date, datetime) else b.date
                 bars.append(DailyBar(
-                    date=b.date if hasattr(b.date, "year") else b.date.date(),
+                    date=bar_date,
                     open=Decimal(str(b.open)),
                     high=Decimal(str(b.high)),
                     low=Decimal(str(b.low)),
