@@ -339,12 +339,17 @@ class IBClient:
         contract = await self.qualify_stock(symbol, exchange, currency)
         action = "BUY" if direction == Direction.LONG else "SELL"
 
+        # Round prices to 2 decimals (IB min tick for stocks = $0.01)
+        limit_px = round(float(entry_price), 2)
+        tp_px = round(float(target_price), 2)
+        sl_px = round(float(stop_price), 2)
+
         bracket = self._ib.bracketOrder(
             action=action,
             quantity=shares,
-            limitPrice=float(entry_price),
-            takeProfitPrice=float(target_price),
-            stopLossPrice=float(stop_price),
+            limitPrice=limit_px,
+            takeProfitPrice=tp_px,
+            stopLossPrice=sl_px,
         )
 
         trades = []
@@ -354,8 +359,7 @@ class IBClient:
 
         logger.info(
             "Stock bracket order placed: %s %s x%d shares @ %.2f, SL=%.2f, TP=%.2f",
-            action, symbol, shares,
-            float(entry_price), float(stop_price), float(target_price),
+            action, symbol, shares, limit_px, sl_px, tp_px,
         )
         return trades
 
@@ -440,8 +444,14 @@ class IBClient:
             stopLossPrice=float(stop_price),
         )
 
+        # Place parent first, wait for IB to acknowledge, then children
         trades = []
-        for order in bracket:
+        parent_order = bracket[0]
+        trade = self._ib.placeOrder(contract, parent_order)
+        trades.append(trade)
+        await asyncio.sleep(0.5)  # Let IB acknowledge parent
+
+        for order in bracket[1:]:
             trade = self._ib.placeOrder(contract, order)
             trades.append(trade)
 

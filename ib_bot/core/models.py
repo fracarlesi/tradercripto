@@ -75,7 +75,7 @@ class ORBSetup(BaseModel):
     risk_ticks: int = Field(..., ge=0, description="Risk in ticks (entry to stop)")
     reward_ticks: int = Field(..., ge=0, description="Reward in ticks (entry to target)")
     or_range: ORBRange = Field(..., description="Opening range used for setup")
-    confidence: Decimal = Field(..., ge=0, le=1, description="Setup confidence 0-1")
+    confidence: Decimal = Field(..., description="Setup confidence (state_value from LLM, unbounded)")
 
     class Config:
         json_encoders = {
@@ -142,7 +142,7 @@ class TradeSetup(BaseModel):
     stop_price: Decimal = Field(..., gt=0, description="Stop loss price")
     target_price: Decimal = Field(..., gt=0, description="Take profit price")
     confidence: Decimal = Field(
-        default=Decimal("0.5"), ge=0, le=1, description="Signal confidence 0-1"
+        default=Decimal("0.5"), description="Signal confidence (state_value from LLM, unbounded)"
     )
     source: str = Field(
         default="llm_equity", description="Signal source (llm_equity, scanner, manual)"
@@ -169,7 +169,7 @@ class StockTradeIntent(BaseModel):
     target_price: Decimal = Field(..., gt=0, description="Take profit price")
     risk_usd: Decimal = Field(..., ge=0, description="Total risk in USD")
     confidence: Decimal = Field(
-        default=Decimal("0.5"), ge=0, le=1, description="Signal confidence 0-1"
+        default=Decimal("0.5"), description="Signal confidence (state_value from LLM, unbounded)"
     )
     source: str = Field(
         default="scanner", description="Signal source (scanner, llm_equity, manual)"

@@ -72,7 +72,16 @@ ETF_UNIVERSE: list[str] = [
     "ARKK", "SOXX", "SMH", "XBI", "KRE", "XHB",
 ]
 
-FUTURES_UNIVERSE: list[str] = ["ES", "NQ", "MES", "MNQ"]
+FUTURES_UNIVERSE: list[str] = [
+    # Equity index futures
+    "ES", "NQ", "MES", "MNQ", "YM",
+    # Metals
+    "GC", "SI",
+    # Energy
+    "CL", "NG",
+    # Bonds
+    "ZB", "ZN",
+]
 
 # GICS sector mapping for top 50+ stocks by market cap
 STOCK_SECTORS: dict[str, str] = {
@@ -179,6 +188,25 @@ STOCK_SECTORS: dict[str, str] = {
     "ECL": "Materials",
     "FCX": "Materials",
     "NUE": "Materials",
+}
+
+# Sector mapping for futures (used by correlation filter)
+FUTURES_SECTORS: dict[str, str] = {
+    # Equity Indices
+    "ES": "Equity Indices",
+    "NQ": "Equity Indices",
+    "MES": "Equity Indices",
+    "MNQ": "Equity Indices",
+    "YM": "Equity Indices",
+    # Metals
+    "GC": "Metals",
+    "SI": "Metals",
+    # Energy
+    "CL": "Energy Commodities",
+    "NG": "Energy Commodities",
+    # Bonds
+    "ZB": "Bonds",
+    "ZN": "Bonds",
 }
 
 

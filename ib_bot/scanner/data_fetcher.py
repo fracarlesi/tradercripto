@@ -1,7 +1,7 @@
 """Data fetcher for the IB scanner.
 
-Downloads daily bars via yfinance (bulk, no IB rate limits),
-caches results in Parquet files for fast reload.
+Downloads daily bars via yfinance (stocks + ETFs) or IB historical data
+(futures), caches results in Parquet files for fast reload.
 """
 
 from __future__ import annotations
@@ -10,9 +10,15 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 import yfinance as yf
+
+from ib_bot.scanner.universe import FUTURES_UNIVERSE
+
+if TYPE_CHECKING:
+    from ib_bot.services.ib_client import IBClient
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +29,15 @@ _CACHE_DIR = Path(__file__).resolve().parent.parent / "data" / "scanner_cache"
 class ScannerDataFetcher:
     """Fetches and caches daily OHLCV bars for the scanner universe."""
 
-    def __init__(self, cache_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        cache_dir: Path | None = None,
+        ib_client: IBClient | None = None,
+    ) -> None:
         self.cache_dir = cache_dir or _CACHE_DIR
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self._ib_client = ib_client
+        self._futures_set: frozenset[str] = frozenset(FUTURES_UNIVERSE)
 
     # ------------------------------------------------------------------
     # Cache helpers
@@ -70,6 +82,14 @@ class ScannerDataFetcher:
         df.to_parquet(path, index=True)
 
     # ------------------------------------------------------------------
+    # Futures detection
+    # ------------------------------------------------------------------
+
+    def _is_futures(self, symbol: str) -> bool:
+        """Return True if symbol is a futures contract."""
+        return symbol in self._futures_set
+
+    # ------------------------------------------------------------------
     # Single-symbol download
     # ------------------------------------------------------------------
 
@@ -78,10 +98,11 @@ class ScannerDataFetcher:
     ) -> pd.DataFrame:
         """Download daily OHLCV bars for a single symbol.
 
-        Uses the cache if fresh, otherwise downloads via yfinance.
+        Uses the cache if fresh, otherwise downloads via yfinance (stocks/ETFs)
+        or IB historical data (futures).
 
         Args:
-            symbol: Ticker symbol (e.g. "AAPL").
+            symbol: Ticker symbol (e.g. "AAPL", "ES").
             days: Number of calendar days of history to fetch.
 
         Returns:
@@ -93,9 +114,13 @@ class ScannerDataFetcher:
             if cached is not None and len(cached) > 0:
                 return cached
 
-        # yfinance is synchronous — run in executor to not block the loop
-        loop = asyncio.get_running_loop()
-        df = await loop.run_in_executor(None, self._download_symbol, symbol, days)
+        # Route to the correct data source
+        if self._is_futures(symbol):
+            df = await self._download_futures(symbol, days)
+        else:
+            # yfinance is synchronous -- run in executor to not block the loop
+            loop = asyncio.get_running_loop()
+            df = await loop.run_in_executor(None, self._download_symbol, symbol, days)
 
         if df is not None and len(df) > 0:
             self._write_cache(symbol, df)
@@ -125,6 +150,64 @@ class ScannerDataFetcher:
             return df[available]
         except Exception as e:
             logger.error("Failed to download %s: %s", symbol, e)
+            return None
+
+    async def _download_futures(self, symbol: str, days: int) -> pd.DataFrame | None:
+        """Download daily bars for a futures symbol via IB historical data.
+
+        Args:
+            symbol: Futures symbol (e.g. "ES", "GC").
+            days: Number of calendar days of history.
+
+        Returns:
+            DataFrame with columns [Open, High, Low, Close, Volume],
+            or None on failure.
+        """
+        if self._ib_client is None:
+            logger.error(
+                "Cannot fetch futures data for %s: no ib_client provided", symbol
+            )
+            return None
+
+        try:
+            duration = f"{days} D"
+            bars: list[Any] = await self._ib_client.request_historical_bars(
+                symbol=symbol,
+                duration=duration,
+                bar_size="1 day",
+                what_to_show="TRADES",
+                keep_up_to_date=False,
+            )
+
+            if not bars:
+                logger.warning("Empty IB historical data for %s", symbol)
+                return None
+
+            # Convert BarData objects to DataFrame
+            records = []
+            for bar in bars:
+                records.append({
+                    "Open": float(bar.open),
+                    "High": float(bar.high),
+                    "Low": float(bar.low),
+                    "Close": float(bar.close),
+                    "Volume": int(bar.volume) if bar.volume else 0,
+                })
+
+            df = pd.DataFrame(records)
+
+            # Use bar dates as index
+            dates = [bar.date for bar in bars]
+            # IB returns date as datetime or date objects
+            df.index = pd.DatetimeIndex(dates, name="Date")
+
+            logger.info(
+                "Fetched %d daily bars from IB for %s", len(df), symbol
+            )
+            return df
+
+        except Exception as e:
+            logger.error("Failed to download futures %s from IB: %s", symbol, e)
             return None
 
     # ------------------------------------------------------------------

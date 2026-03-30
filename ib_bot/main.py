@@ -55,6 +55,7 @@ from .strategies.etf_rotation import (
 from .strategies.options_spreads import CreditSpreadStrategy
 
 # Scanner + LLM (optional — only loaded if scanner_universal.enabled)
+from .scanner.data_fetcher import ScannerDataFetcher
 from .scanner.scanner_service import ScannerService
 from .flag_trader.model_router import LLMModelRouter
 from .flag_trader.agent import IBFlagTraderAgent, IBFlagTraderConfig
@@ -228,15 +229,27 @@ class IBBot:
                     "model_name": "Qwen/Qwen2.5-0.5B-Instruct",
                     "device": "cpu",
                 },
+                "etf": {
+                    "model_name": "Qwen/Qwen2.5-0.5B-Instruct",
+                    "device": "cpu",
+                },
+                "futures": {
+                    "model_name": "Qwen/Qwen2.5-0.5B-Instruct",
+                    "device": "cpu",
+                },
             })
+
+            data_fetcher = ScannerDataFetcher(ib_client=self._ib_client)
 
             self._scanner = ScannerService(
                 bus=self._bus,
                 model_router=model_router,
+                data_fetcher=data_fetcher,
                 config={
                     "max_candidates": scanner_cfg.max_candidates,
                     "confidence_threshold": scanner_cfg.confidence_threshold,
                     "max_total": scanner_cfg.max_open_positions,
+                    "universe": ["stocks", "etf", "futures"],
                 },
             )
 
@@ -1079,7 +1092,43 @@ class IBBot:
                 float(setup.target_price), float(setup.confidence),
             )
 
-            # Publish as LLM_SIGNAL for execution
+            # Size the trade
+            shares = self._risk_manager.size_stock_trade(
+                entry_price=setup.entry_price,
+                stop_price=setup.stop_price,
+                max_risk_usd=Decimal(str(scanner_cfg.max_risk_per_trade_usd)),
+                max_shares=scanner_cfg.max_shares_per_trade,
+            )
+            if shares == 0:
+                logger.info(
+                    "LLM EQUITY SKIP [%s]: sizing returned 0 shares",
+                    setup.symbol,
+                )
+                continue
+
+            # Place bracket order on IB
+            try:
+                trades = await self._ib_client.place_stock_bracket_order(
+                    symbol=setup.symbol,
+                    direction=setup.direction,
+                    shares=shares,
+                    entry_price=setup.entry_price,
+                    stop_price=setup.stop_price,
+                    target_price=setup.target_price,
+                )
+                logger.info(
+                    "LLM EQUITY ORDER [%s]: %s %d shares @ %.2f | SL=%.2f TP=%.2f | %d IB trades",
+                    setup.symbol, setup.direction.value, shares,
+                    float(setup.entry_price), float(setup.stop_price),
+                    float(setup.target_price), len(trades),
+                )
+            except Exception as e:
+                logger.error(
+                    "LLM EQUITY ORDER FAILED [%s]: %s", setup.symbol, e
+                )
+                continue
+
+            # Publish as LLM_SIGNAL for tracking
             await self._bus.publish(
                 Topic.LLM_SIGNAL,
                 setup.model_dump(mode="json"),
@@ -1088,6 +1137,7 @@ class IBBot:
 
             await self._notifications.send(
                 f"LLM EQUITY: {setup.direction.value} {setup.symbol}\n"
+                f"Shares: {shares}\n"
                 f"Entry: {float(setup.entry_price):.2f}\n"
                 f"Stop: {float(setup.stop_price):.2f}\n"
                 f"Target: {float(setup.target_price):.2f}\n"

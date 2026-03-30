@@ -17,7 +17,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
-from ib_bot.scanner.universe import STOCK_SECTORS
+from ib_bot.scanner.universe import FUTURES_SECTORS, STOCK_SECTORS
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ def get_sector(symbol: str) -> str:
     Returns:
         GICS sector name (e.g., "Information Technology") or "Unknown".
     """
-    return STOCK_SECTORS.get(symbol, "Unknown")
+    return STOCK_SECTORS.get(symbol) or FUTURES_SECTORS.get(symbol, "Unknown")
 
 
 def filter_correlated(
