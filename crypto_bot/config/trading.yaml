@@ -61,6 +61,8 @@ universe:
     - "AI16Z"
     - "JELLY"
     - "LAUNCHCOIN"
+    # Price too low for TP/SL
+    - "PUMP"
     # No candle data available
     - "OM"
     # Gold-backed token — doesn't respond to crypto momentum signals
@@ -195,7 +197,7 @@ flag_trader:
   max_assets_to_scan: 10
   candle_window: 20
   candle_interval: "15m"
-  confidence_threshold: 0.8
+  confidence_threshold: 1.5
   min_hold_minutes: 30
   min_net_profit_pct_to_close: 0.15
 
