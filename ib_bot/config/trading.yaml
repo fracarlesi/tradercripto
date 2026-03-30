@@ -173,6 +173,7 @@ scanner_universal:
   max_open_positions: 5           # Max concurrent equity positions
   max_shares_per_trade: 500       # Max shares per trade
   scan_time: "16:15"              # ET — run after market close
+  scan_interval_seconds: 300      # Live scan every 5 min during market hours (9:30-16:00)
   client_id: 3                    # Separate client ID
 
 # SPY Credit Put Spread Strategy

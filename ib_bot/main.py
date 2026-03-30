@@ -2,11 +2,17 @@
 IB Bot Main Orchestrator
 =========================
 
-Session-phase state machine for Opening Range Breakout trading.
+Hybrid architecture: mechanical strategies (ORB, RSI, ETF rotation, credit
+spreads) run alongside a continuous LLM scan loop during market hours.
 
-Lifecycle:
+Session phases (mechanical strategies):
   PRE_MARKET -> OPENING_RANGE (9:30-9:45) -> ACTIVE_TRADING (9:45-11:30)
   -> AFTERNOON (manage existing) -> EOD_FLATTEN (15:45) -> CLOSED
+
+LLM scan loop (parallel):
+  During market hours (9:30-16:00 ET), continuously scans S&P 500 universe,
+  ranks candidates, evaluates with LLM, and executes trades. Also re-evaluates
+  open positions for exit management every cycle.
 
 Entry point: python -m ib_bot.main
 """
@@ -105,7 +111,12 @@ def setup_logging(level: str = "INFO", log_file: str = "logs/ib_bot.log") -> Non
 
 
 class IBBot:
-    """Main orchestrator for IB Opening Range Breakout bot."""
+    """Main orchestrator for IB trading bot.
+
+    Runs mechanical strategies (ORB, RSI MR, RSI2 Connors, ETF rotation,
+    credit spreads) via the session-phase state machine, AND a continuous
+    LLM scan loop in parallel during market hours (9:30-16:00 ET).
+    """
 
     # Heartbeat interval in seconds
     _HEARTBEAT_INTERVAL = 60.0
@@ -115,6 +126,7 @@ class IBBot:
         self._phase = SessionPhase.CLOSED
         self._running = False
         self._heartbeat_task: Optional[asyncio.Task[None]] = None
+        self._llm_scan_task: Optional[asyncio.Task[None]] = None
 
         # Primary timezone for session-phase detection (from first enabled contract)
         from .core.contracts import CONTRACTS
@@ -204,9 +216,6 @@ class IBBot:
         self._scanner: Optional[ScannerService] = None
         self._llm_equity: Optional[LLMEquityStrategy] = None
         self._scanner_checked_today = False
-        self._scanner_candidates: list[dict] = []  # loaded from last EOD scan
-        self._scanner_candle_cache: dict[str, list[dict[str, float]]] = {}
-        self._llm_evaluated_today = False
 
         if config.scanner_universal.enabled:
             scanner_cfg = config.scanner_universal
@@ -289,7 +298,7 @@ class IBBot:
             f"  RSI2 Connors:    {'ENABLED (daily)' if self._rsi2_strategy else 'disabled'}",
             f"  ETF Rotation:    {'ENABLED (monthly VAA-G4)' if self._etf_rotation else 'disabled'}",
             f"  Credit Spreads:  {'ENABLED (bi-weekly SPY puts)' if self._credit_spread else 'disabled'}",
-            f"  LLM Scanner:    {'ENABLED (EOD scan + LLM equity)' if self._scanner else 'disabled'}",
+            f"  LLM Scanner:    {'ENABLED (continuous scan + LLM equity)' if self._scanner else 'disabled'}",
             "",
             "  --- IB Connection ---",
             f"  Host:            {conn.host}:{conn.port}",
@@ -372,7 +381,14 @@ class IBBot:
                 self._heartbeat_loop(), name="heartbeat"
             )
 
-            # Main loop
+            # Start LLM scan loop as background task (parallel to main loop)
+            if self._scanner and self._llm_equity:
+                self._llm_scan_task = asyncio.create_task(
+                    self._llm_scan_loop(), name="llm_scan_loop"
+                )
+                logger.info("LLM scan loop started as background task")
+
+            # Main loop (mechanical strategies + phase management)
             await self._main_loop()
 
         except Exception as e:
@@ -394,6 +410,14 @@ class IBBot:
             except asyncio.CancelledError:
                 pass
 
+        # Cancel LLM scan loop
+        if self._llm_scan_task and not self._llm_scan_task.done():
+            self._llm_scan_task.cancel()
+            try:
+                await self._llm_scan_task
+            except asyncio.CancelledError:
+                pass
+
         if self._scanner:
             await self._scanner.stop()
         await self._execution.stop()
@@ -410,14 +434,18 @@ class IBBot:
     # =========================================================================
 
     async def _main_loop(self) -> None:
-        """Main session-phase state machine loop."""
+        """Main session-phase state machine loop.
+
+        Handles mechanical strategies (ORB, RSI, ETF rotation, credit spreads)
+        and daily housekeeping. The LLM scan loop runs in parallel as a
+        separate asyncio task (_llm_scan_loop).
+        """
         while self._running:
             try:
                 await self._update_phase()
                 await self._check_etf_rotation()
                 await self._check_credit_spreads()
                 await self._check_scanner_eod()
-                await self._check_llm_equity_trading()
                 await asyncio.sleep(5.0)
             except asyncio.CancelledError:
                 break
@@ -509,28 +537,6 @@ class IBBot:
             self._etf_rotation_checked_today = False
             self._credit_spread_checked_today = False
             self._scanner_checked_today = False
-            self._llm_evaluated_today = False
-            # Load scanner candidates from last EOD scan
-            if self._scanner and self._scanner.last_decisions:
-                self._scanner_candidates = [
-                    {
-                        "symbol": d.symbol if hasattr(d, "symbol") else str(d),
-                        "asset_class": getattr(d, "asset_class", "equity"),
-                        "action": getattr(d, "action", 2),
-                        "action_name": getattr(d, "action_name", "BUY"),
-                        "confidence": getattr(d, "confidence", 0.0),
-                        "tp_pct": getattr(d, "tp_pct", 3.0),
-                        "sl_pct": getattr(d, "sl_pct", 2.0),
-                    }
-                    for d in self._scanner.last_decisions
-                ]
-                logger.info(
-                    "Loaded %d scanner candidates from last EOD scan: %s",
-                    len(self._scanner_candidates),
-                    [c["symbol"] for c in self._scanner_candidates],
-                )
-            else:
-                self._scanner_candidates = []
             logger.info("Daily reset complete - ready for new session")
 
         elif new == SessionPhase.OPENING_RANGE:
@@ -602,12 +608,17 @@ class IBBot:
     # =========================================================================
 
     async def _heartbeat_loop(self) -> None:
-        """Log heartbeat every 60 seconds during ACTIVE_TRADING."""
+        """Log heartbeat every 60 seconds during market hours."""
+        _market_phases = {
+            SessionPhase.OPENING_RANGE,
+            SessionPhase.ACTIVE_TRADING,
+            SessionPhase.AFTERNOON,
+        }
         while self._running:
             try:
                 await asyncio.sleep(self._HEARTBEAT_INTERVAL)
 
-                if self._phase != SessionPhase.ACTIVE_TRADING:
+                if self._phase not in _market_phases:
                     continue
 
                 now_et = datetime.now(timezone.utc).astimezone(self._session_tz)
@@ -876,45 +887,137 @@ class IBBot:
             )
 
     # =========================================================================
-    # LLM Equity Trading (Active Trading)
+    # LLM Continuous Scan Loop (parallel to main loop)
     # =========================================================================
 
-    async def _check_llm_equity_trading(self) -> None:
-        """Evaluate scanner candidates with LLM during active trading.
+    def _is_market_open(self) -> bool:
+        """Check if US equity market is currently open (9:30-16:00 ET)."""
+        now_et = datetime.now(timezone.utc).astimezone(self._session_tz)
+        return time(9, 30) <= now_et.time() < time(16, 0)
 
-        Runs once per day during ACTIVE_TRADING phase. Uses the
-        LLMEquityStrategy to produce TradeSetup objects, then sizes
-        and publishes them as orders.
+    async def _llm_scan_loop(self) -> None:
+        """Continuous LLM scan loop running in parallel during market hours.
+
+        Similar to crypto_bot's _strategy_loop:
+        - During market hours (9:30-16:00 ET), runs a full scan cycle:
+          1. Scan universe (S&P 500 + ETFs)
+          2. Rank by composite score
+          3. Evaluate top candidates with LLM model router
+          4. Apply correlation filter
+          5. Execute actionable signals
+        - Also re-evaluates open LLM positions every cycle for exit management
+        - Sleeps scan_interval_seconds between cycles
+        - Outside market hours, sleeps and waits for market open
         """
-        if not self._llm_equity:
-            return
-
-        if self._llm_evaluated_today:
-            return
-
-        if self._phase != SessionPhase.ACTIVE_TRADING:
-            return
-
-        if not self._scanner_candidates:
-            self._llm_evaluated_today = True
-            return
-
-        self._llm_evaluated_today = True
-
+        scan_interval = self._config.scanner_universal.scan_interval_seconds
         logger.info(
-            "LLM Equity: evaluating %d scanner candidates",
-            len(self._scanner_candidates),
+            "LLM scan loop started: interval=%ds, market hours 09:30-16:00 ET",
+            scan_interval,
         )
 
-        try:
-            # Fetch fresh candle data for candidates via scanner data fetcher
-            symbols = [c["symbol"] for c in self._scanner_candidates]
-            if self._scanner and self._scanner.data_fetcher:
-                candle_cache_raw = await self._scanner.data_fetcher.fetch_universe(
-                    symbols
+        # Small startup delay to let services initialize
+        await asyncio.sleep(10)
+
+        consecutive_errors = 0
+
+        while self._running:
+            try:
+                if not self._is_market_open():
+                    # Outside market hours — sleep and check again
+                    await asyncio.sleep(30.0)
+                    continue
+
+                # --- Run a full live scan cycle ---
+                await self._run_llm_scan_cycle()
+                consecutive_errors = 0
+
+                # --- Re-evaluate open LLM positions for exit ---
+                await self._llm_evaluate_open_positions()
+
+            except asyncio.CancelledError:
+                logger.info("LLM scan loop cancelled")
+                break
+            except Exception as e:
+                consecutive_errors += 1
+                logger.error(
+                    "LLM scan loop error (%d consecutive): %s",
+                    consecutive_errors, e, exc_info=True,
                 )
-                # Convert DataFrames to list-of-dicts format
-                candle_cache: dict[str, list[dict[str, float]]] = {}
+                if consecutive_errors >= 5:
+                    await self._notifications.send(
+                        f"LLM scan loop: {consecutive_errors} consecutive errors\n"
+                        f"Last: {type(e).__name__}: {e}",
+                        title="LLM Scan Loop ERROR",
+                        tags="warning",
+                    )
+
+            # Sleep between cycles
+            try:
+                await asyncio.sleep(scan_interval)
+            except asyncio.CancelledError:
+                break
+
+        logger.info("LLM scan loop stopped")
+
+    async def _run_llm_scan_cycle(self) -> None:
+        """Execute one full LLM scan + evaluate cycle.
+
+        Uses the scanner service to scan the universe, rank candidates,
+        route through LLM, filter, and then execute actionable signals
+        via the LLMEquityStrategy.
+        """
+        if not self._scanner or not self._llm_equity:
+            return
+
+        now_et = datetime.now(timezone.utc).astimezone(self._session_tz)
+        logger.info("LLM scan cycle starting at %s ET", now_et.strftime("%H:%M:%S"))
+
+        # Get current portfolio state
+        positions = self._ib_client.get_positions()
+        open_positions = [
+            {"symbol": p.contract.symbol, "position": p.position}
+            for p in positions if p.position != 0
+        ]
+        total_value = sum(
+            abs(float(p.position) * float(p.avgCost))
+            for p in positions
+        )
+        portfolio = {
+            "cash_balance": 0.0,
+            "asset_position": float(total_value),
+            "total_account_value": float(total_value),
+        }
+
+        # Run the live scan pipeline (scan -> rank -> LLM -> filter)
+        filtered_decisions = await self._scanner.run_live_scan(
+            open_positions=open_positions,
+            portfolio=portfolio,
+        )
+
+        if not filtered_decisions:
+            logger.info("LLM scan cycle: no actionable candidates")
+            return
+
+        # Convert filtered decisions to scan_results format for LLMEquityStrategy
+        scan_results = [
+            {
+                "symbol": getattr(d, "symbol", d.get("symbol", "?")) if isinstance(d, dict) else getattr(d, "symbol", "?"),
+                "asset_class": getattr(d, "asset_class", "equity") if not isinstance(d, dict) else d.get("asset_class", "equity"),
+                "action": getattr(d, "action", 2) if not isinstance(d, dict) else d.get("action", 2),
+                "action_name": getattr(d, "action_name", "BUY") if not isinstance(d, dict) else d.get("action_name", "BUY"),
+                "confidence": getattr(d, "confidence", 0.0) if not isinstance(d, dict) else d.get("confidence", 0.0),
+                "tp_pct": getattr(d, "tp_pct", 3.0) if not isinstance(d, dict) else d.get("tp_pct", 3.0),
+                "sl_pct": getattr(d, "sl_pct", 2.0) if not isinstance(d, dict) else d.get("sl_pct", 2.0),
+            }
+            for d in filtered_decisions
+        ]
+
+        # Build candle cache from scanner's data fetcher
+        symbols = [r["symbol"] for r in scan_results]
+        candle_cache: dict[str, list[dict[str, float]]] = {}
+        if self._scanner.data_fetcher:
+            try:
+                candle_cache_raw = await self._scanner.data_fetcher.fetch_universe(symbols)
                 for sym, df in candle_cache_raw.items():
                     if df is not None and not df.empty:
                         candle_cache[sym] = [
@@ -927,81 +1030,175 @@ class IBBot:
                             }
                             for _, row in df.iterrows()
                         ]
-            else:
-                candle_cache = self._scanner_candle_cache
+            except Exception as e:
+                logger.warning("Failed to fetch candle data for LLM: %s", e)
 
-            if not candle_cache:
-                logger.warning("LLM Equity: no candle data available, skipping")
-                return
+        if not candle_cache:
+            logger.warning("LLM scan cycle: no candle data available, skipping execution")
+            return
 
-            # Get portfolio state
-            positions = self._ib_client.get_positions()
-            total_value = sum(
-                abs(float(p.position) * float(p.avgCost))
+        # Evaluate with LLM equity strategy
+        setups = await self._llm_equity.evaluate_candidates(
+            scan_results=scan_results,
+            candle_cache=candle_cache,
+            portfolio=portfolio,
+        )
+
+        if not setups:
+            logger.info(
+                "LLM scan cycle: no actionable setups from %d filtered candidates",
+                len(scan_results),
+            )
+            return
+
+        # Execute setups
+        scanner_cfg = self._config.scanner_universal
+        placed = 0
+
+        for setup in setups:
+            if placed >= scanner_cfg.max_open_positions:
+                break
+
+            # Skip if we already have a position in this symbol
+            already_open = any(
+                p.contract.symbol == setup.symbol and p.position != 0
                 for p in positions
             )
-            portfolio = {
-                "cash_balance": 0.0,
-                "asset_position": float(total_value),
-                "total_account_value": float(total_value),
-            }
+            if already_open:
+                logger.info(
+                    "LLM EQUITY SKIP [%s]: already have open position",
+                    setup.symbol,
+                )
+                continue
 
-            # Evaluate candidates with LLM
+            logger.info(
+                "LLM EQUITY SIGNAL [%s]: %s %s entry=%.2f stop=%.2f "
+                "target=%.2f conf=%.4f",
+                setup.symbol, setup.setup_type.value, setup.direction.value,
+                float(setup.entry_price), float(setup.stop_price),
+                float(setup.target_price), float(setup.confidence),
+            )
+
+            # Publish as LLM_SIGNAL for execution
+            await self._bus.publish(
+                Topic.LLM_SIGNAL,
+                setup.model_dump(mode="json"),
+                source="llm_equity",
+            )
+
+            await self._notifications.send(
+                f"LLM EQUITY: {setup.direction.value} {setup.symbol}\n"
+                f"Entry: {float(setup.entry_price):.2f}\n"
+                f"Stop: {float(setup.stop_price):.2f}\n"
+                f"Target: {float(setup.target_price):.2f}\n"
+                f"Confidence: {float(setup.confidence):.4f}",
+                title=f"LLM Equity {setup.direction.value}",
+                tags="chart_with_upwards_trend" if setup.direction == Direction.LONG else "chart_with_downwards_trend",
+            )
+            placed += 1
+
+        logger.info("LLM scan cycle: published %d / %d setups", placed, len(setups))
+
+    async def _llm_evaluate_open_positions(self) -> None:
+        """Re-evaluate open LLM equity positions for exit management.
+
+        Checks each open equity position (non-futures) and asks the LLM
+        whether to hold or close. This runs every scan cycle.
+        """
+        if not self._llm_equity or not self._scanner:
+            return
+
+        positions = self._ib_client.get_positions()
+        equity_positions = [
+            p for p in positions
+            if p.position != 0
+            and hasattr(p.contract, "secType")
+            and p.contract.secType == "STK"
+        ]
+
+        if not equity_positions:
+            return
+
+        symbols = [p.contract.symbol for p in equity_positions]
+        logger.debug("LLM exit check: evaluating %d equity positions: %s", len(symbols), symbols)
+
+        # Fetch fresh candle data for open positions
+        candle_cache: dict[str, list[dict[str, float]]] = {}
+        if self._scanner.data_fetcher:
+            try:
+                candle_cache_raw = await self._scanner.data_fetcher.fetch_universe(symbols)
+                for sym, df in candle_cache_raw.items():
+                    if df is not None and not df.empty:
+                        candle_cache[sym] = [
+                            {
+                                "open": float(row["Open"]),
+                                "high": float(row["High"]),
+                                "low": float(row["Low"]),
+                                "close": float(row["Close"]),
+                                "volume": float(row["Volume"]),
+                            }
+                            for _, row in df.iterrows()
+                        ]
+            except Exception as e:
+                logger.warning("Failed to fetch candle data for exit evaluation: %s", e)
+                return
+
+        if not candle_cache:
+            return
+
+        # Build exit evaluation candidates — pass current position info
+        exit_candidates = [
+            {
+                "symbol": p.contract.symbol,
+                "asset_class": "equity",
+                "action": 0,  # HOLD — LLM decides whether to sell
+                "action_name": "HOLD",
+                "confidence": 0.0,
+                "position_size": float(p.position),
+                "avg_cost": float(p.avgCost),
+            }
+            for p in equity_positions
+        ]
+
+        total_value = sum(
+            abs(float(p.position) * float(p.avgCost)) for p in positions
+        )
+        portfolio = {
+            "cash_balance": 0.0,
+            "asset_position": float(total_value),
+            "total_account_value": float(total_value),
+        }
+
+        try:
             setups = await self._llm_equity.evaluate_candidates(
-                scan_results=self._scanner_candidates,
+                scan_results=exit_candidates,
                 candle_cache=candle_cache,
                 portfolio=portfolio,
             )
 
-            if not setups:
-                logger.info("LLM Equity: no actionable setups from %d candidates", len(self._scanner_candidates))
-                return
-
-            scanner_cfg = self._config.scanner_universal
-            placed = 0
-
             for setup in setups:
-                if placed >= scanner_cfg.max_open_positions:
-                    break
+                # If LLM returns a SELL/EXIT signal for an open position, flatten it
+                if setup.setup_type in (
+                    SetupType.LLM_EQUITY_EXIT,
+                    SetupType.LLM_EQUITY_SHORT,
+                ):
+                    logger.info(
+                        "LLM EXIT SIGNAL [%s]: %s — flattening position",
+                        setup.symbol, setup.setup_type.value,
+                    )
+                    await self._ib_client.flatten_position(setup.symbol)
+                    self._execution._active_trades.pop(setup.symbol, None)
 
-                logger.info(
-                    "LLM EQUITY SIGNAL [%s]: %s %s entry=%.2f stop=%.2f "
-                    "target=%.2f conf=%.4f",
-                    setup.symbol, setup.setup_type.value, setup.direction.value,
-                    float(setup.entry_price), float(setup.stop_price),
-                    float(setup.target_price), float(setup.confidence),
-                )
-
-                # Publish as LLM_SIGNAL for execution
-                await self._bus.publish(
-                    Topic.LLM_SIGNAL,
-                    setup.model_dump(mode="json"),
-                    source="llm_equity",
-                )
-
-                await self._notifications.send(
-                    f"LLM EQUITY: {setup.direction.value} {setup.symbol}\n"
-                    f"Entry: {float(setup.entry_price):.2f}\n"
-                    f"Stop: {float(setup.stop_price):.2f}\n"
-                    f"Target: {float(setup.target_price):.2f}\n"
-                    f"Confidence: {float(setup.confidence):.4f}",
-                    title=f"LLM Equity {setup.direction.value}",
-                    tags="chart_with_upwards_trend" if setup.direction == Direction.LONG else "chart_with_downwards_trend",
-                )
-                placed += 1
-
-            logger.info(
-                "LLM Equity: published %d / %d setups",
-                placed, len(setups),
-            )
+                    await self._notifications.send(
+                        f"LLM EXIT: {setup.symbol}\n"
+                        f"Reason: LLM recommends close\n"
+                        f"Confidence: {float(setup.confidence):.4f}",
+                        title="LLM Equity EXIT",
+                        tags="white_check_mark",
+                    )
 
         except Exception as e:
-            logger.error("LLM Equity evaluation failed: %s", e, exc_info=True)
-            await self._notifications.send(
-                f"LLM Equity ERROR: {e}",
-                title="LLM Equity ERROR",
-                tags="warning",
-            )
+            logger.error("LLM exit evaluation failed: %s", e, exc_info=True)
 
     # =========================================================================
     # Event Handlers

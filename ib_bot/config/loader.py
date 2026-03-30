@@ -800,6 +800,12 @@ class ScannerConfig(BaseConfig):
         default="16:15",
         description="Time (ET) to run the EOD scan (after market close)",
     )
+    scan_interval_seconds: int = Field(
+        default=300,
+        ge=60,
+        le=3600,
+        description="Seconds between live LLM scan cycles during market hours",
+    )
     client_id: int = Field(
         default=3,
         ge=0,

@@ -61,6 +61,7 @@ class SetupType(str, Enum):
     RSI_MR_EXIT_SHORT = "rsi_mr_exit_short"
     LLM_EQUITY_LONG = "llm_equity_long"
     LLM_EQUITY_SHORT = "llm_equity_short"
+    LLM_EQUITY_EXIT = "llm_equity_exit"
 
 
 class KillSwitchStatus(str, Enum):

@@ -259,6 +259,112 @@ class ScannerService(BaseService):
         except Exception as e:
             self._logger.error("Failed to save report: %s", e)
 
+    async def run_live_scan(
+        self,
+        open_positions: list[Any] | None = None,
+        portfolio: dict[str, float] | None = None,
+    ) -> list[Any]:
+        """Execute a live scan cycle during market hours.
+
+        Same pipeline as run_eod_scan but designed for repeated calls:
+        - Fetches fresh intraday data for the universe
+        - Computes signals, ranks, routes through LLM, filters
+        - Returns filtered trade decisions
+
+        Args:
+            open_positions: Currently open positions for correlation filter.
+            portfolio: Current portfolio state for LLM prompt context.
+
+        Returns:
+            List of filtered trade decisions (RouteDecision objects).
+        """
+        self._logger.info("=== LIVE SCAN CYCLE ===")
+        start_time = datetime.now(timezone.utc)
+
+        # 1. Build universe
+        symbols: list[str] = []
+        for asset_class in self.universe_classes:
+            symbols.extend(get_universe(asset_class))
+        self._logger.info("Live scan universe: %d symbols", len(symbols))
+
+        # 2. Fetch fresh data
+        data_cache = await self.data_fetcher.fetch_universe(symbols)
+        self._logger.info("Fetched data for %d / %d symbols", len(data_cache), len(symbols))
+
+        # 3. Compute signals
+        scan_results: list[ScanResult] = []
+        for symbol, df in data_cache.items():
+            result = scan_symbol(symbol, df)
+            scan_results.append(result)
+
+        # 4. Rank candidates
+        ranked = rank_candidates(scan_results, max_candidates=self.max_candidates)
+        self._last_scan_results = ranked
+        self._logger.info(
+            "Ranked %d candidates (top score: %.1f)",
+            len(ranked),
+            ranked[0].score if ranked else 0.0,
+        )
+
+        # 5. Build candle cache for LLM
+        candle_cache: dict[str, list[dict[str, float]]] = {}
+        for result in ranked:
+            df = data_cache.get(result.symbol)
+            if df is not None and not df.empty:
+                candle_cache[result.symbol] = [
+                    {
+                        "open": float(row["Open"]),
+                        "high": float(row["High"]),
+                        "low": float(row["Low"]),
+                        "close": float(row["Close"]),
+                        "volume": float(row["Volume"]),
+                    }
+                    for _, row in df.iterrows()
+                ]
+
+        # 6. Route through LLM model router
+        decisions: list[Any] = []
+        if self.model_router is not None:
+            candidates_for_llm = [
+                {
+                    "symbol": r.symbol,
+                    "sector": STOCK_SECTORS.get(r.symbol),
+                    "score": r.score,
+                    "trend": r.trend,
+                }
+                for r in ranked
+            ]
+            decisions = await self.model_router.route_and_decide(
+                candidates=candidates_for_llm,
+                candle_cache=candle_cache,
+                portfolio=portfolio,
+            )
+            self._logger.info("LLM router returned %d actionable decisions", len(decisions))
+        else:
+            self._logger.warning("No model_router configured, skipping LLM evaluation")
+
+        # 7. Apply correlation filter
+        filtered = filter_correlated(
+            candidates=decisions,
+            open_positions=open_positions,
+            max_per_sector=self.max_per_sector,
+            max_total=self.max_total,
+        )
+        self._last_decisions = filtered
+
+        # 8. Publish to message bus
+        if self.bus and filtered:
+            for decision in filtered:
+                await self.publish(Topic.LLM_SIGNAL, decision)
+            self._logger.info("Published %d LLM signals", len(filtered))
+
+        elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
+        self._logger.info(
+            "=== LIVE SCAN COMPLETE === | %d scanned | %d ranked | %d LLM | %d filtered | %.1fs",
+            len(scan_results), len(ranked), len(decisions), len(filtered), elapsed,
+        )
+        return filtered
+
     @property
     def last_scan_results(self) -> list[ScanResult]:
         """Return the last scan results (ranked candidates)."""
