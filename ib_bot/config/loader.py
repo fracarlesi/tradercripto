@@ -755,6 +755,59 @@ class ETFRotationConfig(BaseConfig):
     )
 
 
+class ScannerConfig(BaseConfig):
+    """Universal scanner configuration for stocks/ETFs.
+
+    Batch EOD scanner that ranks candidates by composite score
+    and passes top N to the LLM equity model for trade decisions.
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable the universal scanner",
+    )
+    max_candidates: int = Field(
+        default=20,
+        ge=5,
+        le=100,
+        description="Maximum candidates to pass to LLM after ranking",
+    )
+    confidence_threshold: float = Field(
+        default=0.6,
+        ge=0.0,
+        le=1.0,
+        description="Minimum LLM confidence to generate a trade intent",
+    )
+    max_risk_per_trade_usd: Decimal = Field(
+        default=Decimal("200"),
+        ge=Decimal("10"),
+        le=Decimal("10000"),
+        description="Maximum risk in USD per stock/ETF trade",
+    )
+    max_open_positions: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="Maximum concurrent open stock/ETF positions",
+    )
+    max_shares_per_trade: int = Field(
+        default=500,
+        ge=1,
+        le=10000,
+        description="Maximum shares per single trade",
+    )
+    scan_time: str = Field(
+        default="16:15",
+        description="Time (ET) to run the EOD scan (after market close)",
+    )
+    client_id: int = Field(
+        default=3,
+        ge=0,
+        le=999,
+        description="Separate IB client ID for scanner (avoids conflict with other bots)",
+    )
+
+
 class LoggingConfig(BaseConfig):
     """Logging configuration."""
 
@@ -798,6 +851,7 @@ class TradingConfig(BaseConfig):
     options_spreads: OptionsSpreadsConfig = Field(default_factory=OptionsSpreadsConfig)
     scorecard: ScorecardConfig = Field(default_factory=ScorecardConfig)
     etf_rotation: ETFRotationConfig = Field(default_factory=ETFRotationConfig)
+    scanner_universal: ScannerConfig = Field(default_factory=ScannerConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
     @property

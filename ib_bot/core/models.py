@@ -6,9 +6,10 @@ Data contracts between services:
 - ORBSetup: Trade setup candidate from ORB strategy
 - TradeIntent: Sized and approved trade ready for execution
 - Position: Open position tracking
+- TradeSetup: Generic trade setup from any strategy (LLM, scanner, etc.)
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from pydantic import BaseModel, Field
 
@@ -115,6 +116,68 @@ class Position(BaseModel):
     target_price: Decimal = Field(..., ge=0, description="Current target price")
     unrealized_pnl: Decimal = Field(..., description="Unrealized P&L in USD")
     entry_time: datetime = Field(..., description="Position entry timestamp")
+
+    class Config:
+        json_encoders = {
+            Decimal: lambda v: float(v),
+            datetime: lambda v: v.isoformat(),
+        }
+
+
+class TradeSetup(BaseModel):
+    """Generic trade setup from any strategy (LLM, scanner, manual).
+
+    Published on Topic.LLM_SIGNAL when the LLM equity strategy
+    produces an actionable trade. Can also be used by other
+    non-ORB strategies that target stocks/ETFs.
+    """
+
+    symbol: str = Field(..., description="Ticker symbol (e.g., AAPL, SPY, ES)")
+    asset_class: str = Field(
+        default="equity", description="Asset class: equity, etf, futures"
+    )
+    direction: Direction = Field(..., description="Trade direction")
+    setup_type: SetupType = Field(..., description="Setup type identifier")
+    entry_price: Decimal = Field(..., gt=0, description="Entry price")
+    stop_price: Decimal = Field(..., gt=0, description="Stop loss price")
+    target_price: Decimal = Field(..., gt=0, description="Take profit price")
+    confidence: Decimal = Field(
+        default=Decimal("0.5"), ge=0, le=1, description="Signal confidence 0-1"
+    )
+    source: str = Field(
+        default="llm_equity", description="Signal source (llm_equity, scanner, manual)"
+    )
+
+    class Config:
+        json_encoders = {
+            Decimal: lambda v: float(v),
+        }
+
+
+class StockTradeIntent(BaseModel):
+    """Trade intent for stocks/ETFs, sized in shares.
+
+    Published on Topic.ORDER when the scanner+LLM pipeline
+    produces an actionable trade for an equity instrument.
+    """
+
+    symbol: str = Field(..., description="Ticker symbol (e.g., AAPL, SPY)")
+    direction: Direction = Field(..., description="Trade direction")
+    shares: int = Field(..., gt=0, description="Number of shares to trade")
+    entry_price: Decimal = Field(..., gt=0, description="Limit entry price")
+    stop_price: Decimal = Field(..., gt=0, description="Stop loss price")
+    target_price: Decimal = Field(..., gt=0, description="Take profit price")
+    risk_usd: Decimal = Field(..., ge=0, description="Total risk in USD")
+    confidence: Decimal = Field(
+        default=Decimal("0.5"), ge=0, le=1, description="Signal confidence 0-1"
+    )
+    source: str = Field(
+        default="scanner", description="Signal source (scanner, llm_equity, manual)"
+    )
+    timestamp: datetime = Field(
+        default_factory=lambda: datetime.now(tz=timezone.utc),
+        description="Intent creation timestamp",
+    )
 
     class Config:
         json_encoders = {

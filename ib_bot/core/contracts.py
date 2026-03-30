@@ -42,6 +42,24 @@ class FuturesSpec(BaseModel):
         }
 
 
+class StockSpec(BaseModel):
+    """Specification for a stock or ETF contract on IB.
+
+    Used by the universal scanner and LLM equity strategy
+    for qualifying and trading Stock contracts via SMART routing.
+    """
+
+    symbol: str = Field(..., description="Ticker symbol (e.g., AAPL, SPY)")
+    exchange: str = Field(default="SMART", description="IB exchange (SMART for best routing)")
+    currency: str = Field(default="USD", description="Contract currency")
+    tick_size: Decimal = Field(default=Decimal("0.01"), gt=0, description="Minimum price increment")
+
+    class Config:
+        json_encoders = {
+            Decimal: lambda v: float(v),
+        }
+
+
 # US session times (Eastern Time)
 _US_SESSION_START = time(9, 30)
 _US_SESSION_END = time(16, 0)

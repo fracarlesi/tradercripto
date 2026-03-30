@@ -109,6 +109,58 @@ class RiskManager:
             timestamp=datetime.now(timezone.utc),
         )
 
+    def size_stock_trade(
+        self,
+        entry_price: Decimal,
+        stop_price: Decimal,
+        max_risk_usd: Optional[Decimal] = None,
+        max_shares: int = 500,
+    ) -> int:
+        """Calculate position size in shares for a stock/ETF trade.
+
+        Formula: shares = floor(max_risk_usd / abs(entry_price - stop_price))
+        Minimum 1 share, capped at max_shares.
+
+        Args:
+            entry_price: Expected entry price
+            stop_price: Stop loss price
+            max_risk_usd: Risk budget for this trade (defaults to config max_risk_per_trade_usd)
+            max_shares: Maximum shares cap (default 500)
+
+        Returns:
+            Number of shares (>= 1), or 0 if trade is invalid
+        """
+        risk_per_share = abs(entry_price - stop_price)
+        if risk_per_share <= 0:
+            logger.error(
+                "Invalid stock risk: entry=%.2f stop=%.2f (zero risk per share)",
+                float(entry_price), float(stop_price),
+            )
+            return 0
+
+        budget = max_risk_usd if max_risk_usd is not None else self._config.max_risk_per_trade_usd
+
+        shares = int(
+            (budget / risk_per_share).to_integral_value(rounding=ROUND_DOWN)
+        )
+
+        # Apply cap
+        shares = min(shares, max_shares)
+
+        if shares < 1:
+            logger.info(
+                "Stock trade rejected: risk/share=$%.2f > budget=$%.2f",
+                float(risk_per_share), float(budget),
+            )
+            return 0
+
+        actual_risk = Decimal(str(shares)) * risk_per_share
+        logger.info(
+            "Sized stock trade: %d shares, risk=$%.2f ($%.2f/share * %d)",
+            shares, float(actual_risk), float(risk_per_share), shares,
+        )
+        return shares
+
     def record_fill(self, pnl_usd: Decimal, is_stop: bool) -> None:
         """Record a completed trade outcome.
 

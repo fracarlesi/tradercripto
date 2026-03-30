@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Callable, Dict, List, Optional
 
-from ib_insync import IB, Contract, Fill, Future, MarketOrder, Trade
+from ib_insync import IB, Contract, Fill, Future, MarketOrder, Stock, Trade
 
 from ..config.loader import IBConnectionConfig
 from ..core.contracts import CONTRACTS, FuturesSpec
@@ -275,6 +275,89 @@ class IBClient:
         if not spec:
             raise ValueError(f"Unknown contract: {symbol}")
         return spec
+
+    async def qualify_stock(
+        self,
+        symbol: str,
+        exchange: str = "SMART",
+        currency: str = "USD",
+    ) -> Stock:
+        """Qualify a stock/ETF contract with IB.
+
+        Uses the same pattern as etf_rotation.py for Stock contracts.
+
+        Args:
+            symbol: Ticker symbol (e.g., AAPL, SPY)
+            exchange: IB exchange (default SMART for best routing)
+            currency: Contract currency
+
+        Returns:
+            Qualified IB Stock contract
+        """
+        cache_key = f"STK_{symbol}_{exchange}_{currency}"
+        if cache_key in self._qualified_contracts:
+            return self._qualified_contracts[cache_key]  # type: ignore[return-value]
+
+        contract = Stock(symbol, exchange, currency)
+        qualified = await self._ib.qualifyContractsAsync(contract)
+        if not qualified:
+            raise ValueError(f"Could not qualify stock: {symbol} on {exchange}")
+
+        self._qualified_contracts[cache_key] = qualified[0]
+        logger.info("Qualified stock: %s on %s/%s", symbol, exchange, currency)
+        return qualified[0]  # type: ignore[return-value]
+
+    async def place_stock_bracket_order(
+        self,
+        symbol: str,
+        direction: Direction,
+        shares: int,
+        entry_price: Decimal,
+        stop_price: Decimal,
+        target_price: Decimal,
+        exchange: str = "SMART",
+        currency: str = "USD",
+    ) -> List[Trade]:
+        """Place a bracket order for a stock/ETF (entry + TP + SL as OCA group).
+
+        Same logic as futures bracket orders but uses a Stock contract
+        and share quantity instead of contract count.
+
+        Args:
+            symbol: Ticker symbol (e.g., AAPL, SPY)
+            direction: LONG or SHORT
+            shares: Number of shares
+            entry_price: Limit entry price
+            stop_price: Stop loss price
+            target_price: Take profit price
+            exchange: IB exchange (default SMART)
+            currency: Contract currency
+
+        Returns:
+            List of Trade objects [entry, take_profit, stop_loss]
+        """
+        contract = await self.qualify_stock(symbol, exchange, currency)
+        action = "BUY" if direction == Direction.LONG else "SELL"
+
+        bracket = self._ib.bracketOrder(
+            action=action,
+            quantity=shares,
+            limitPrice=float(entry_price),
+            takeProfitPrice=float(target_price),
+            stopLossPrice=float(stop_price),
+        )
+
+        trades = []
+        for order in bracket:
+            trade = self._ib.placeOrder(contract, order)
+            trades.append(trade)
+
+        logger.info(
+            "Stock bracket order placed: %s %s x%d shares @ %.2f, SL=%.2f, TP=%.2f",
+            action, symbol, shares,
+            float(entry_price), float(stop_price), float(target_price),
+        )
+        return trades
 
     # =========================================================================
     # Market Data

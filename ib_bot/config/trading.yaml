@@ -162,6 +162,19 @@ etf_rotation:
   check_time: "15:50"
   client_id: 2              # Separate client ID to avoid conflict with futures bot
 
+# Universal Scanner (Stocks/ETFs) — DISABLED until Phase 3 complete
+# Batch EOD scanner: ranks S&P 500 candidates by composite score,
+# passes top N to LLM equity model for trade decisions next morning.
+scanner_universal:
+  enabled: false
+  max_candidates: 20              # Top N candidates after ranking
+  confidence_threshold: 0.6       # Min LLM confidence for trade intent
+  max_risk_per_trade_usd: "200"   # Max risk per stock trade
+  max_open_positions: 5           # Max concurrent equity positions
+  max_shares_per_trade: 500       # Max shares per trade
+  scan_time: "16:15"              # ET — run after market close
+  client_id: 3                    # Separate client ID
+
 # SPY Credit Put Spread Strategy
 # Sells bull put credit spreads every 2 weeks on Tuesdays
 # Short leg: ~20 delta put, Long leg: $5 below short
