@@ -11,6 +11,8 @@ RUN pip install --no-cache-dir -r requirements-ib.txt
 
 # Copy application
 COPY ib_bot/ ./ib_bot/
+COPY crypto_bot/ ./crypto_bot/
+COPY shared/ ./shared/
 # NOTE: .env NOT copied - provided via docker-compose env_file
 
 # Set Python path
