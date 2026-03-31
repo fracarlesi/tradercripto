@@ -1092,39 +1092,58 @@ class IBBot:
                 float(setup.target_price), float(setup.confidence),
             )
 
-            # Size the trade
-            shares = self._risk_manager.size_stock_trade(
-                entry_price=setup.entry_price,
-                stop_price=setup.stop_price,
-                max_risk_usd=Decimal(str(scanner_cfg.max_risk_per_trade_usd)),
-                max_shares=scanner_cfg.max_shares_per_trade,
-            )
-            if shares == 0:
-                logger.info(
-                    "LLM EQUITY SKIP [%s]: sizing returned 0 shares",
-                    setup.symbol,
-                )
-                continue
-
-            # Place bracket order on IB
+            # Size and place order — futures use contracts, stocks/ETFs use shares
+            is_futures = setup.asset_class == "futures"
             try:
-                trades = await self._ib_client.place_stock_bracket_order(
-                    symbol=setup.symbol,
-                    direction=setup.direction,
-                    shares=shares,
-                    entry_price=setup.entry_price,
-                    stop_price=setup.stop_price,
-                    target_price=setup.target_price,
-                )
-                logger.info(
-                    "LLM EQUITY ORDER [%s]: %s %d shares @ %.2f | SL=%.2f TP=%.2f | %d IB trades",
-                    setup.symbol, setup.direction.value, shares,
-                    float(setup.entry_price), float(setup.stop_price),
-                    float(setup.target_price), len(trades),
-                )
+                if is_futures:
+                    # Futures: 1 contract (minimum size for validation)
+                    qty = 1
+                    trades = await self._ib_client.place_bracket_order(
+                        symbol=setup.symbol,
+                        direction=setup.direction,
+                        contracts=qty,
+                        entry_price=setup.entry_price,
+                        stop_price=setup.stop_price,
+                        target_price=setup.target_price,
+                    )
+                    logger.info(
+                        "LLM FUTURES ORDER [%s]: %s %d contracts @ %.2f | SL=%.2f TP=%.2f | %d IB trades",
+                        setup.symbol, setup.direction.value, qty,
+                        float(setup.entry_price), float(setup.stop_price),
+                        float(setup.target_price), len(trades),
+                    )
+                else:
+                    # Stocks/ETFs: size in shares based on risk
+                    shares = self._risk_manager.size_stock_trade(
+                        entry_price=setup.entry_price,
+                        stop_price=setup.stop_price,
+                        max_risk_usd=Decimal(str(scanner_cfg.max_risk_per_trade_usd)),
+                        max_shares=scanner_cfg.max_shares_per_trade,
+                    )
+                    if shares == 0:
+                        logger.info(
+                            "LLM EQUITY SKIP [%s]: sizing returned 0 shares",
+                            setup.symbol,
+                        )
+                        continue
+
+                    trades = await self._ib_client.place_stock_bracket_order(
+                        symbol=setup.symbol,
+                        direction=setup.direction,
+                        shares=shares,
+                        entry_price=setup.entry_price,
+                        stop_price=setup.stop_price,
+                        target_price=setup.target_price,
+                    )
+                    logger.info(
+                        "LLM EQUITY ORDER [%s]: %s %d shares @ %.2f | SL=%.2f TP=%.2f | %d IB trades",
+                        setup.symbol, setup.direction.value, shares,
+                        float(setup.entry_price), float(setup.stop_price),
+                        float(setup.target_price), len(trades),
+                    )
             except Exception as e:
                 logger.error(
-                    "LLM EQUITY ORDER FAILED [%s]: %s", setup.symbol, e
+                    "LLM ORDER FAILED [%s]: %s", setup.symbol, e
                 )
                 continue
 

@@ -30,6 +30,12 @@ class FuturesSpec(BaseModel):
     # Timezone for this contract's exchange
     tz_name: str = Field(..., description="IANA timezone (e.g., America/New_York)")
 
+    # Expiry months (1-12). Quarterly = [3,6,9,12]. Empty = quarterly default.
+    expiry_months: list[int] = Field(
+        default_factory=lambda: [3, 6, 9, 12],
+        description="Valid contract expiry months",
+    )
+
     @property
     def tz(self) -> ZoneInfo:
         """Return the ZoneInfo object for this contract's exchange."""
@@ -146,6 +152,7 @@ CONTRACTS: dict[str, FuturesSpec] = {
         tick_size=Decimal("0.10"),
         tick_value=Decimal("10.00"),
         multiplier=100,
+        expiry_months=[2, 4, 6, 8, 10, 12],  # Even months
         session_start=_US_SESSION_START,
         session_end=_US_SESSION_END,
         or_start=_US_OR_START,
@@ -159,6 +166,7 @@ CONTRACTS: dict[str, FuturesSpec] = {
         tick_size=Decimal("0.005"),
         tick_value=Decimal("25.00"),
         multiplier=5000,
+        expiry_months=[1, 3, 5, 7, 9, 12],  # Jan,Mar,May,Jul,Sep,Dec
         session_start=_US_SESSION_START,
         session_end=_US_SESSION_END,
         or_start=_US_OR_START,
@@ -172,6 +180,7 @@ CONTRACTS: dict[str, FuturesSpec] = {
         tick_size=Decimal("0.01"),
         tick_value=Decimal("10.00"),
         multiplier=1000,
+        expiry_months=list(range(1, 13)),  # All months
         session_start=_US_SESSION_START,
         session_end=_US_SESSION_END,
         or_start=_US_OR_START,
@@ -185,6 +194,7 @@ CONTRACTS: dict[str, FuturesSpec] = {
         tick_size=Decimal("0.001"),
         tick_value=Decimal("10.00"),
         multiplier=10000,
+        expiry_months=list(range(1, 13)),  # All months
         session_start=_US_SESSION_START,
         session_end=_US_SESSION_END,
         or_start=_US_OR_START,

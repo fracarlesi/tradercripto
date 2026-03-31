@@ -28,26 +28,26 @@ FillCallback = Callable[[Trade, Fill], None]
 ErrorCallback = Callable[[int, int, str], None]
 
 
-def _front_month_expiry() -> str:
+def _front_month_expiry(expiry_months: list[int] | None = None) -> str:
     """Calculate front-month futures expiry (YYYYMM format).
 
-    Futures roll quarterly: Mar(H), Jun(M), Sep(U), Dec(Z).
-    Switch to next quarter when within 2 weeks of expiry.
+    Uses the contract's valid expiry months. Defaults to quarterly
+    (Mar, Jun, Sep, Dec) if not specified. Rolls to next month when
+    within 2 weeks of the current expiry month.
     """
     now = datetime.now(timezone.utc)
     year = now.year
     month = now.month
 
-    # Quarterly months
-    quarters = [3, 6, 9, 12]
-    for q in quarters:
-        if month < q:
-            return f"{year}{q:02d}"
-        if month == q and now.day <= 14:
-            return f"{year}{q:02d}"
+    months = expiry_months or [3, 6, 9, 12]
+    for m in months:
+        if month < m:
+            return f"{year}{m:02d}"
+        if month == m and now.day <= 14:
+            return f"{year}{m:02d}"
 
-    # Roll to next year Q1
-    return f"{year + 1}03"
+    # Roll to first valid month of next year
+    return f"{year + 1}{months[0]:02d}"
 
 
 class IBClient:
@@ -253,7 +253,7 @@ class IBClient:
         if not spec:
             raise ValueError(f"Unknown contract: {symbol}. Available: {list(CONTRACTS.keys())}")
 
-        expiry = _front_month_expiry()
+        expiry = _front_month_expiry(spec.expiry_months)
         contract = Future(
             symbol=spec.symbol,
             lastTradeDateOrContractMonth=expiry,
