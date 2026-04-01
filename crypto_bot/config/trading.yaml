@@ -198,8 +198,9 @@ flag_trader:
   candle_window: 20
   candle_interval: "15m"
   confidence_threshold: 1.5
-  min_hold_minutes: 30
+  min_hold_minutes: 120
   min_net_profit_pct_to_close: 0.15
+  max_trades_per_day: 5
 
 # -----------------------------------------------------------------------------
 # Squeeze Trigger — Bollinger-Keltner Compression → Expansion

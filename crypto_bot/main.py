@@ -373,6 +373,10 @@ class ConservativeBot:
         self._last_position_eval: float = 0.0
         self._position_eval_interval: float = 60.0  # Evaluate open positions every 60s
 
+        # Anti-churn: daily trade counter (resets at midnight UTC)
+        self._daily_trade_count: int = 0
+        self._daily_trade_date: Optional[str] = None  # ISO date string e.g. "2026-03-30"
+
     # =========================================================================
     # Properties
     # =========================================================================
@@ -906,9 +910,26 @@ class ConservativeBot:
                     portfolio=eval_portfolio,
                 )
                 if exit_decision.should_close:
-                    # Anti-churn: don't close if profit doesn't cover fees
+                    # Anti-churn fee gate for model_reversal exits
+                    # model_reversal = LLM flipped opinion, often noise causing double fees
+                    # Allow close only if: (a) profitable >= fee threshold, or (b) losing > 1% (clear wrong direction)
+                    # Otherwise skip — likely noise, fees would make it worse
                     min_net_profit = self.config.flag_trader_config.get("min_net_profit_pct_to_close", 0.15)
-                    if 0 < pnl_pct < min_net_profit:
+                    if exit_decision.reason == "model_reversal":
+                        model_reversal_loss_threshold = -1.0  # Allow close if losing > 1%
+                        if pnl_pct >= min_net_profit:
+                            pass  # Profitable enough to cover fees — close (take profit)
+                        elif pnl_pct <= model_reversal_loss_threshold:
+                            pass  # Losing badly — clear wrong direction, close
+                        else:
+                            logger.info(
+                                "FLAG-Trader EXIT SKIPPED | %s %s | model_reversal fee gate | pnl=%.3f%% "
+                                "(need >=%.2f%% or <=%.1f%% to close)",
+                                side.upper(), symbol, pnl_pct, min_net_profit, model_reversal_loss_threshold,
+                            )
+                            continue
+                    elif 0 < pnl_pct < min_net_profit:
+                        # Non-reversal exits: original fee gate (small profit doesn't cover fees)
                         logger.info(
                             "FLAG-Trader EXIT SKIPPED | %s %s | pnl=%.3f%% < min_net_profit=%.2f%% (fees not covered)",
                             side.upper(), symbol, pnl_pct, min_net_profit,
@@ -1081,12 +1102,34 @@ class ConservativeBot:
             len(decisions),
         )
 
+        # --- Anti-churn: daily trade limit ---
+        max_trades_per_day = self.config.flag_trader_config.get("max_trades_per_day", 5)
+        today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if self._daily_trade_date != today_utc:
+            self._daily_trade_date = today_utc
+            self._daily_trade_count = 0
+            logger.info("DAILY TRADE COUNTER | reset for %s", today_utc)
+
+        if self._daily_trade_count >= max_trades_per_day:
+            logger.info(
+                "DAILY TRADE LIMIT | %d/%d trades used today — skipping new entries",
+                self._daily_trade_count, max_trades_per_day,
+            )
+            return
+
         # --- Execute decisions (no position limit, exposure checked by RiskManager) ---
         executed = 0
         for decision in decisions:
+            if self._daily_trade_count >= max_trades_per_day:
+                logger.info(
+                    "DAILY TRADE LIMIT | %d/%d reached mid-batch — stopping",
+                    self._daily_trade_count, max_trades_per_day,
+                )
+                break
             success = await self._execute_flag_decision(decision)
             if success:
                 executed += 1
+                self._daily_trade_count += 1
                 self._flag_agent.record_action(decision.action_name)
 
         logger.info(
