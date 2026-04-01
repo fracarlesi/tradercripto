@@ -184,29 +184,31 @@ class FlagTraderAgent:
             symbol, action_name, state_value, tp_pct, sl_pct, elapsed,
         )
 
-        # Log every decision for retraining data
+        # Log every decision for retraining data (non-blocking)
         if self.trade_logger:
-            closes = [c["close"] for c in candles]
-            candles_summary = {
-                "last_close": closes[-1] if closes else 0.0,
-                "pct_change_20": ((closes[-1] / closes[0]) - 1) * 100 if len(closes) >= 2 and closes[0] != 0 else 0.0,
-                "volume_avg": sum(c["volume"] for c in candles) / len(candles) if candles else 0.0,
-            }
-            # Build market state summary for RAG matching
-            ms_summary = self._build_market_state_dict(candles) if candles else None
-            record = TradeRecord(
-                timestamp=datetime.now(timezone.utc).isoformat(),
-                symbol=symbol,
-                action=action_name,
-                action_id=action_id,
-                confidence=state_value,
-                log_prob=float(log_prob),
-                candles_summary=candles_summary,
-                portfolio=portfolio,
-                market_state_summary=ms_summary,
-                prompt_summary=prompt[:200],
-            )
-            self.trade_logger.log_decision(record)
+            try:
+                closes = [c["close"] for c in candles]
+                candles_summary = {
+                    "last_close": closes[-1] if closes else 0.0,
+                    "pct_change_20": ((closes[-1] / closes[0]) - 1) * 100 if len(closes) >= 2 and closes[0] != 0 else 0.0,
+                    "volume_avg": sum(c["volume"] for c in candles) / len(candles) if candles else 0.0,
+                }
+                ms_summary = self._build_market_state_dict(candles) if candles else None
+                record = TradeRecord(
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    symbol=symbol,
+                    action=action_name,
+                    action_id=action_id,
+                    confidence=state_value,
+                    log_prob=float(log_prob),
+                    candles_summary=candles_summary,
+                    portfolio=portfolio,
+                    market_state_summary=ms_summary,
+                    prompt_summary=prompt[:200],
+                )
+                self.trade_logger.log_decision(record)
+            except Exception as e:
+                logger.warning("Trade logger failed (non-blocking): %s", e)
 
         # Only return actionable decisions (Buy/Sell) above confidence threshold
         if action_id == 1:  # Hold
