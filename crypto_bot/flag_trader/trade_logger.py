@@ -74,7 +74,11 @@ class FlagTradeLogger:
             resolved = self.log_dir
         logger.info("FlagTradeLogger log_dir resolved to: %s", resolved)
 
-        self._pending_trades: dict[str, TradeRecord] = {}  # symbol -> record
+        # symbol -> FIFO list of pending decisions. Using a list (instead of a single
+        # record) handles reversal scenarios where a new decision arrives before the
+        # previous one has been closed on the exchange.
+        self._pending_trades: dict[str, list[TradeRecord]] = {}
+        self._pending_cap: int = 10  # max pending records per symbol
 
     def log_decision(self, record: TradeRecord) -> None:
         """Log a trading decision (before execution)."""
@@ -86,9 +90,18 @@ class FlagTradeLogger:
             logger.exception("FlagTradeLogger: failed to write decision for %s to %s", record.symbol, log_file)
             return
 
-        # Track non-HOLD decisions for outcome updates
+        # Track non-HOLD decisions for outcome updates (FIFO per symbol).
         if record.action != "HOLD":
-            self._pending_trades[record.symbol] = record
+            bucket = self._pending_trades.setdefault(record.symbol, [])
+            bucket.append(record)
+            if len(bucket) > self._pending_cap:
+                dropped = bucket.pop(0)
+                logger.warning(
+                    "FlagTradeLogger: pending cap (%d) hit for %s — dropping oldest "
+                    "decision (action=%s ts=%s). Decisions are not being closed; "
+                    "investigate execution/outcome wiring.",
+                    self._pending_cap, record.symbol, dropped.action, dropped.timestamp,
+                )
 
         logger.debug("Decision logged: %s %s (confidence=%.4f)", record.symbol, record.action, record.confidence)
 
@@ -112,7 +125,14 @@ class FlagTradeLogger:
         the outcome is ALWAYS persisted — critical after process restarts where the
         in-memory pending map has been lost.
         """
-        record = self._pending_trades.pop(symbol, None)
+        bucket = self._pending_trades.get(symbol)
+        record: Optional[TradeRecord] = None
+        if bucket:
+            # FIFO: the oldest pending decision matches the close event on the exchange.
+            record = bucket.pop(0)
+            if not bucket:
+                # Keep the dict clean — debug tooling iterates over keys.
+                self._pending_trades.pop(symbol, None)
         if record is None:
             # Fallback: synthesise a minimal record so the outcome is still logged.
             action = "SELL" if (side and side.lower() == "short") else "BUY"

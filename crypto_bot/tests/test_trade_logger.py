@@ -123,3 +123,58 @@ def test_env_var_log_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
 def test_backwards_compat_update_outcome_alias(tmp_path: Path) -> None:
     tl = FlagTradeLogger(log_dir=tmp_path)
     assert tl.update_outcome == tl.log_outcome
+
+
+def test_log_outcome_fifo_order(tmp_path: Path) -> None:
+    """Two pending BUYs for BTC: the first close consumes the OLDEST (FIFO)."""
+    tl = FlagTradeLogger(log_dir=tmp_path)
+    first = _make_record("BTC", "BUY")
+    first.confidence = 1.1
+    second = _make_record("BTC", "BUY")
+    second.confidence = 2.2
+    tl.log_decision(first)
+    tl.log_decision(second)
+
+    tl.log_outcome(
+        symbol="BTC",
+        entry_price=100.0,
+        exit_price=110.0,
+        pnl_usd=10.0,
+        pnl_pct=10.0,
+        exit_reason="take_profit",
+        hold_duration_minutes=30.0,
+    )
+    rows = _read_jsonl(next(tmp_path.glob("outcomes_*.jsonl")))
+    assert len(rows) == 1
+    assert rows[0]["confidence"] == 1.1  # oldest consumed
+    # Second decision still pending
+    assert "BTC" in tl._pending_trades
+    assert len(tl._pending_trades["BTC"]) == 1
+    assert tl._pending_trades["BTC"][0].confidence == 2.2
+
+
+def test_pending_cap_drops_oldest(tmp_path: Path) -> None:
+    tl = FlagTradeLogger(log_dir=tmp_path)
+    for i in range(11):
+        rec = _make_record("BTC", "BUY")
+        rec.confidence = float(i)
+        tl.log_decision(rec)
+    assert len(tl._pending_trades["BTC"]) == 10
+    # Oldest (confidence=0.0) was dropped; list now starts at 1.0
+    assert tl._pending_trades["BTC"][0].confidence == 1.0
+    assert tl._pending_trades["BTC"][-1].confidence == 10.0
+
+
+def test_list_cleared_after_last_pop(tmp_path: Path) -> None:
+    tl = FlagTradeLogger(log_dir=tmp_path)
+    tl.log_decision(_make_record("BTC", "BUY"))
+    tl.log_outcome(
+        symbol="BTC",
+        entry_price=1.0,
+        exit_price=2.0,
+        pnl_usd=1.0,
+        pnl_pct=100.0,
+        exit_reason="tp",
+        hold_duration_minutes=1.0,
+    )
+    assert "BTC" not in tl._pending_trades
