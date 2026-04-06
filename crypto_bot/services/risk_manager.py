@@ -188,6 +188,16 @@ class RiskManagerService(BaseService):
         self._trades_today: int = 0
         self._last_trade_day: Optional[datetime] = None
 
+        # Persistence file for daily trade counter (so restarts don't bypass limit)
+        self._trade_count_file = Path(
+            os.environ.get("HLQUANTBOT_DATA_DIR", str(Path.home() / ".hlquantbot"))
+        ) / "daily_trade_count.json"
+
+        # Aggregated reject reasons (flushed every N seconds)
+        self._reject_reasons: Dict[str, int] = {}
+        self._reject_window_started_at: datetime = datetime.now(timezone.utc)
+        self._reject_flush_interval_seconds: int = 15 * 60
+
         self._logger.info(
             "RiskManagerService initialized: risk=%.1f-%.1f%%, leverage=%d-%dx, max_exposure=%.0f%%",
             self._config.min_per_trade_pct,
@@ -227,6 +237,9 @@ class RiskManagerService(BaseService):
         # Load any active cooldown (no-op, in-memory only)
         await self.load_active_cooldown()
 
+        # Restore the daily trade counter so restarts don't bypass the limit
+        self._load_trade_count_from_disk()
+
     async def _on_stop(self) -> None:
         """Cleanup."""
         self._logger.info("Stopping RiskManagerService...")
@@ -236,6 +249,7 @@ class RiskManagerService(BaseService):
         await self._update_equity()
         await self._sync_positions_from_exchange()
         self._cleanup_stale_intents()
+        self._maybe_flush_reject_reasons()
 
     async def _update_equity(self) -> None:
         """Fetch current equity from exchange."""
@@ -336,6 +350,16 @@ class RiskManagerService(BaseService):
                     setup.id,
                     risk_params.rejection_reason,
                 )
+                # Track rejection reason for aggregated breakdown
+                self._track_rejection(risk_params.rejection_reason or "unknown")
+                self._logger.info(
+                    "RISK REJECT | cid=%s | %s %s @ %.4f | reason=%s",
+                    getattr(setup, "correlation_id", None) or "-",
+                    setup.direction.value,
+                    setup.symbol,
+                    float(setup.entry_price),
+                    risk_params.rejection_reason,
+                )
                 # Publish rejection for counterfactual logger
                 await self.publish(Topic.ORDERS, {
                     "event": "setup_rejected",
@@ -343,6 +367,7 @@ class RiskManagerService(BaseService):
                     "direction": setup.direction.value,
                     "entry_price": float(setup.entry_price),
                     "reason": risk_params.rejection_reason,
+                    "correlation_id": getattr(setup, "correlation_id", None),
                 })
                 return
 
@@ -728,6 +753,7 @@ class RiskManagerService(BaseService):
             regime=setup.regime.value if setup.regime else None,
             prefer_limit=True,
             max_slippage_pct=Decimal(str(self._config.max_slippage_pct)),
+            correlation_id=getattr(setup, "correlation_id", None),
         )
 
     async def _publish_intent(self, intent: TradeIntent, leverage: Optional[int] = None) -> None:
@@ -751,7 +777,8 @@ class RiskManagerService(BaseService):
 
         effective_risk = float(intent.notional_value) * float(self._config.stop_loss_pct) / 100
         self._logger.info(
-            "Published TRADE_INTENT: %s %s, size=%.4f, notional=$%.2f, risk_budget=$%.2f, effective_risk=$%.2f",
+            "RISK APPROVED | cid=%s | %s %s | size=%.4f | notional=$%.2f | risk_budget=$%.2f | effective_risk=$%.2f | reason=approved",
+            getattr(intent, "correlation_id", None) or "-",
             intent.direction.value,
             intent.symbol,
             float(intent.position_size),
@@ -933,16 +960,124 @@ class RiskManagerService(BaseService):
             self._last_trade_day = today_start
 
         self._trades_today += 1
+        self._save_trade_count_to_disk()
         self._logger.info("Daily trade count incremented to %d", self._trades_today)
 
     def decrement_trade_count(self) -> None:
         """Decrement the daily trade counter when an unfilled order is cancelled."""
         if self._trades_today > 0:
             self._trades_today -= 1
+            self._save_trade_count_to_disk()
             self._logger.info(
                 "Daily trade count decremented to %d (cancelled/expired order)",
                 self._trades_today,
             )
+
+    # ---------------------------------------------------------------- reasons
+    @staticmethod
+    def _classify_reject_reason(reason: str) -> str:
+        """Bucket a free-form rejection string into a stable reason code."""
+        if not reason:
+            return "unknown"
+        r = reason.lower()
+        if "already in position" in r:
+            return "already_in_position"
+        if "already pending" in r:
+            return "already_pending"
+        if "rejection cooldown" in r:
+            return "rejection_cooldown"
+        if "post-close cooldown" in r:
+            return "post_close_cooldown"
+        if "cooldown" in r:
+            return "symbol_cooldown"
+        if "per-symbol limit" in r:
+            return "per_symbol_daily_limit"
+        if "correlation" in r:
+            return "correlation_filter"
+        if "equity not loaded" in r:
+            return "equity_not_loaded"
+        if "max exposure" in r:
+            return "max_exposure"
+        if "below exchange minimum" in r or "below minimum" in r:
+            return "min_notional"
+        if "invalid stop" in r:
+            return "invalid_stop"
+        return "other"
+
+    def _track_rejection(self, reason: str) -> None:
+        code = self._classify_reject_reason(reason)
+        self._reject_reasons[code] = self._reject_reasons.get(code, 0) + 1
+
+    def _maybe_flush_reject_reasons(self) -> None:
+        now = datetime.now(timezone.utc)
+        elapsed = (now - self._reject_window_started_at).total_seconds()
+        if elapsed < self._reject_flush_interval_seconds:
+            return
+        if not self._reject_reasons:
+            self._reject_window_started_at = now
+            return
+        total = sum(self._reject_reasons.values())
+        breakdown = ", ".join(
+            f"{k}={v}" for k, v in sorted(self._reject_reasons.items(), key=lambda x: -x[1])
+        )
+        self._logger.info(
+            "RISK REJECT BREAKDOWN | window=%dmin | total=%d | %s",
+            int(elapsed // 60),
+            total,
+            breakdown,
+        )
+        self._reject_reasons = {}
+        self._reject_window_started_at = now
+
+    # ---------------------------------------------------------- persistence
+    def _save_trade_count_to_disk(self) -> None:
+        """Persist the daily trade counter so restarts don't bypass the limit."""
+        if os.environ.get("HLQUANTBOT_PERSIST_TRADE_COUNT", "").strip() not in ("1", "true", "yes"):
+            return
+        try:
+            self._trade_count_file.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "date": (
+                    self._last_trade_day.isoformat() if self._last_trade_day else None
+                ),
+                "count": self._trades_today,
+            }
+            self._trade_count_file.write_text(json.dumps(payload))
+        except Exception as e:
+            self._logger.warning("Failed to persist daily trade count: %s", e)
+
+    def _load_trade_count_from_disk(self) -> None:
+        """Restore the daily trade counter on startup if it's still today's window.
+
+        Opt-in via ``HLQUANTBOT_PERSIST_TRADE_COUNT=1`` so unit tests don't
+        accidentally inherit production state from a shared data dir.
+        """
+        if os.environ.get("HLQUANTBOT_PERSIST_TRADE_COUNT", "").strip() not in ("1", "true", "yes"):
+            return
+        try:
+            if not self._trade_count_file.exists():
+                return
+            data = json.loads(self._trade_count_file.read_text())
+            saved_date = data.get("date")
+            saved_count = int(data.get("count", 0))
+            if not saved_date:
+                return
+            saved_dt = datetime.fromisoformat(saved_date)
+            if saved_dt.tzinfo is None:
+                saved_dt = saved_dt.replace(tzinfo=timezone.utc)
+            now = datetime.now(timezone.utc)
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            if saved_dt >= today_start:
+                self._trades_today = saved_count
+                self._last_trade_day = saved_dt
+                self._logger.info(
+                    "Restored daily trade count from disk: %d (date=%s)",
+                    saved_count, saved_dt.isoformat(),
+                )
+            else:
+                self._trade_count_file.unlink(missing_ok=True)
+        except Exception as e:
+            self._logger.warning("Failed to load daily trade count: %s", e)
 
     def _count_consecutive_stoplosses(self, trades: List[Dict]) -> int:
         """Count consecutive stoploss exits with negative PnL from most recent trade.
