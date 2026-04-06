@@ -643,6 +643,167 @@ class ConfigLoader:
 # Convenience Functions
 # =============================================================================
 
+# =============================================================================
+# BotConfig - unified runtime config consumed by ExecutionEngineService
+# =============================================================================
+#
+# Phase 4 of the config cleanup: replaces the ad-hoc nested classes
+# (_ExecConfig / _StopsConfig / _RiskConfig / _ConfigAdapter) previously
+# defined inside main.py:_init_services. Same field set, real types.
+#
+# This is intentionally separate from the legacy `Config` class above, which
+# is kept only for the original (unused-in-prod) YAML schema. Once that schema
+# is fully retired, the two should be reconciled.
+
+
+class BotExecutionConfig(BaseConfig):
+    """Execution engine runtime config (consumed by ExecutionEngineService)."""
+
+    order_type: Literal["limit", "market"] = Field(default="limit")
+    max_slippage_pct: float = Field(default=0.15, ge=0, le=2.0)
+    max_spread_pct: float = Field(default=0.08, ge=0, le=1.0)
+    limit_timeout_seconds: int = Field(default=60, ge=1, le=600)
+    retry_attempts: int = Field(default=3, ge=1, le=10)
+    retry_delay_seconds: float = Field(default=5.0, ge=0.1, le=60)
+    position_sync_interval: int = Field(default=30, ge=1, le=600)
+    fill_sync_interval: int = Field(default=10, ge=1, le=600)
+    entry_mode: Literal["taker", "maker"] = Field(default="taker")
+    maker_reprice_interval_seconds: int = Field(default=10, ge=1, le=600)
+    maker_max_reprices: int = Field(default=6, ge=0, le=50)
+
+
+class BotStopsConfig(BaseConfig):
+    """Stops/exits runtime config consumed by ExecutionEngineService."""
+
+    initial_atr_mult: float = Field(default=2.5, ge=0)
+    trailing_atr_mult: float = Field(default=0, ge=0)
+    minimal_roi: dict[str, float] = Field(default_factory=dict)
+    max_hold_hours: float = Field(default=0, ge=0)
+    # R-based exit system (flattened from yaml stops.r_based_exits)
+    r_based_exits_enabled: bool = Field(default=True)
+    bp_activation_r: float = Field(default=2.0, ge=0)
+    bp_offset_pct: float = Field(default=0.15, ge=0)
+    strength_exit_r: float = Field(default=3.0, ge=0)
+    trailing_r_enabled: bool = Field(default=True)
+    trailing_start_r: float = Field(default=2.0, ge=0)
+    trailing_step_r: float = Field(default=1.0, ge=0)
+    trailing_lock_r: float = Field(default=0.5, ge=0)
+
+
+class BotRiskConfig(BaseConfig):
+    """Risk fields consumed by ExecutionEngineService (subset of full risk)."""
+
+    take_profit_pct: float = Field(default=0, ge=0)
+    stop_loss_pct: float = Field(default=0, ge=0)
+    leverage: int = Field(default=5, ge=1, le=50)
+    breakeven_threshold_pct: float = Field(default=1.2, ge=0)
+
+
+class BotMomentumExitConfig(BaseConfig):
+    """Momentum-fade exit config."""
+
+    enabled: bool = Field(default=False)
+    min_age_minutes: int = Field(default=15, ge=0)
+    min_profit_pct: float = Field(default=0.1, ge=0)
+    rsi_slope_threshold: float = Field(default=1.0)
+
+
+class BotRegimeConfig(BaseConfig):
+    """Regime fields consumed by ExecutionEngineService."""
+
+    regime_exit_grace_minutes: int = Field(default=5, ge=0)
+
+
+class BotServicesConfig(BaseConfig):
+    """Services container (mirrors execution_engine namespace)."""
+
+    execution_engine: BotExecutionConfig = Field(default_factory=BotExecutionConfig)
+
+
+class BotConfig(BaseModel):
+    """
+    Unified runtime config consumed by ExecutionEngineService.
+
+    Built from a ``ConservativeConfig`` (prod path) via
+    :meth:`from_conservative`, or directly from a YAML file via
+    :meth:`from_yaml`.
+    """
+
+    model_config = ConfigDict(extra="forbid", validate_default=True)
+
+    services: BotServicesConfig = Field(default_factory=BotServicesConfig)
+    risk: BotRiskConfig = Field(default_factory=BotRiskConfig)
+    stops: BotStopsConfig = Field(default_factory=BotStopsConfig)
+    momentum_exit: BotMomentumExitConfig = Field(default_factory=BotMomentumExitConfig)
+    regime: BotRegimeConfig = Field(default_factory=BotRegimeConfig)
+
+    @classmethod
+    def from_conservative(cls, cfg: Any) -> "BotConfig":
+        """Build a BotConfig from a ConservativeConfig dataclass instance.
+
+        Mirrors the legacy main.py:_init_services adapter exactly so the
+        runtime behavior is unchanged.
+        """
+        exec_cfg = BotExecutionConfig(
+            order_type="limit" if cfg.prefer_limit else "market",
+            max_slippage_pct=cfg.max_slippage_pct,
+            max_spread_pct=cfg.max_spread_pct,
+            limit_timeout_seconds=cfg.limit_timeout_seconds,
+            retry_attempts=getattr(cfg, "execution_max_retries", 3),
+            retry_delay_seconds=getattr(cfg, "execution_retry_delay_seconds", 5),
+            position_sync_interval=30,
+            fill_sync_interval=10,
+            entry_mode=cfg.entry_mode,
+            maker_reprice_interval_seconds=cfg.maker_reprice_interval_seconds,
+            maker_max_reprices=cfg.maker_max_reprices,
+        )
+        return cls(
+            services=BotServicesConfig(execution_engine=exec_cfg),
+            risk=BotRiskConfig(
+                take_profit_pct=cfg.take_profit_pct,
+                stop_loss_pct=cfg.stop_loss_pct,
+                leverage=cfg.max_leverage,
+                breakeven_threshold_pct=cfg.breakeven_threshold_pct,
+            ),
+            stops=BotStopsConfig(
+                initial_atr_mult=cfg.initial_atr_mult,
+                trailing_atr_mult=cfg.trailing_atr_mult,
+                minimal_roi=cfg.minimal_roi,
+                max_hold_hours=cfg.max_hold_hours,
+                r_based_exits_enabled=cfg.r_based_exits_enabled,
+                bp_activation_r=cfg.bp_activation_r,
+                bp_offset_pct=cfg.bp_offset_pct,
+                strength_exit_r=cfg.strength_exit_r,
+                trailing_r_enabled=cfg.trailing_r_enabled,
+                trailing_start_r=cfg.trailing_start_r,
+                trailing_step_r=cfg.trailing_step_r,
+                trailing_lock_r=cfg.trailing_lock_r,
+            ),
+            momentum_exit=BotMomentumExitConfig(
+                enabled=cfg.momentum_exit_enabled,
+                min_age_minutes=cfg.momentum_exit_min_age_minutes,
+                min_profit_pct=cfg.momentum_exit_min_profit_pct,
+                rsi_slope_threshold=cfg.momentum_exit_rsi_slope_threshold,
+            ),
+            regime=BotRegimeConfig(
+                regime_exit_grace_minutes=cfg.regime_exit_grace_minutes,
+            ),
+        )
+
+    @classmethod
+    def from_yaml(cls, path: str | Path) -> "BotConfig":
+        """Load a BotConfig directly from a trading.yaml file.
+
+        Goes through ConservativeConfig.from_yaml so the field mapping
+        stays single-sourced.
+        """
+        # Local import to avoid a circular import: main.py imports from
+        # config.loader at module load time.
+        from crypto_bot.main import ConservativeConfig
+        cfg = ConservativeConfig.from_yaml(str(path))
+        return cls.from_conservative(cfg)
+
+
 _default_loader: ConfigLoader | None = None
 
 
