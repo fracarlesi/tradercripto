@@ -9,10 +9,13 @@ Scans assets, builds prompts from candle data, and returns trade decisions.
 from __future__ import annotations
 
 import logging
+import os
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 from typing import Any, Optional
 
 from .model import FlagTraderModel
@@ -37,6 +40,7 @@ class TradeDecision:
     log_prob: float
     tp_pct: float = 2.5  # model-predicted TP%
     sl_pct: float = 1.0  # model-predicted SL%
+    correlation_id: Optional[str] = None  # end-to-end trace id
 
 
 @dataclass
@@ -130,6 +134,24 @@ class FlagTraderAgent:
         )
         return decisions
 
+    def _maybe_dump_prompt(self, symbol: str, prompt: str, correlation_id: str) -> None:
+        """Optionally dump the full LLM prompt to disk for debugging.
+
+        Activated by env var ``HLQUANTBOT_DUMP_PROMPTS=1``.  Files go under
+        ``$HLQUANTBOT_DATA_DIR/prompts/`` (default ``~/.hlquantbot/prompts``).
+        """
+        if os.environ.get("HLQUANTBOT_DUMP_PROMPTS", "").strip() not in ("1", "true", "yes"):
+            return
+        try:
+            base = Path(os.environ.get("HLQUANTBOT_DATA_DIR", str(Path.home() / ".hlquantbot")))
+            dump_dir = base / "prompts"
+            dump_dir.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+            fname = dump_dir / f"{ts}_{symbol}_{correlation_id}.txt"
+            fname.write_text(prompt)
+        except Exception as e:  # pragma: no cover - debug helper
+            logger.debug("prompt dump failed for %s: %s", symbol, e)
+
     async def _evaluate_asset(
         self,
         symbol: str,
@@ -167,9 +189,12 @@ class FlagTraderAgent:
 
         prompt = self.prompt_builder.build_prompt(candles, portfolio, history, similar_trades_text=similar_text)
 
+        correlation_id = uuid.uuid4().hex[:12]
+        self._maybe_dump_prompt(symbol, prompt, correlation_id)
+
         logger.info(
-            "FLAG-Trader INPUT | %s | candles=%d | last_close=%.2f | portfolio=$%.2f | similar_trades=%d",
-            symbol, len(candles), candles[-1]["close"], portfolio.get("total_account_value", 0),
+            "FLAG-Trader INPUT | cid=%s | %s | candles=%d | last_close=%.2f | portfolio=$%.2f | similar_trades=%d",
+            correlation_id, symbol, len(candles), candles[-1]["close"], portfolio.get("total_account_value", 0),
             len(similar),
         )
         logger.debug("FLAG-Trader PROMPT | %s | %s", symbol, prompt[:500])
@@ -229,6 +254,7 @@ class FlagTraderAgent:
             log_prob=float(log_prob),
             tp_pct=tp_pct,
             sl_pct=sl_pct,
+            correlation_id=correlation_id,
         )
 
     async def evaluate_position(

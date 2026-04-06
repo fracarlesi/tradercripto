@@ -193,6 +193,11 @@ class Setup(BaseModel):
     entry_confidence: float = Field(0.0, description="LLM confidence at entry time")
     entry_trigger_details: str = Field("", description="Trigger details (e.g. squeeze params)")
 
+    # Observability: end-to-end correlation id propagated across services
+    correlation_id: Optional[str] = Field(
+        default=None, description="Correlation id linking decision -> setup -> intent -> order/fill"
+    )
+
     class Config:
         json_encoders = {
             Decimal: lambda v: float(v),
@@ -275,6 +280,11 @@ class TradeIntent(BaseModel):
     # Order preferences
     prefer_limit: bool = Field(default=True)
     max_slippage_pct: Decimal = Field(default=Decimal("0.1"))
+
+    # Observability: end-to-end correlation id propagated across services
+    correlation_id: Optional[str] = Field(
+        default=None, description="Correlation id linking decision -> setup -> intent -> order/fill"
+    )
 
     class Config:
         json_encoders = {
