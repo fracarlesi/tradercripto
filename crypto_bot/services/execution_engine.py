@@ -2425,6 +2425,16 @@ class ExecutionEngineService(BaseService):
         try:
             exchange_positions = await self.client.get_positions()
 
+            # LLM-only exit mode: when both SL% and TP% are 0, the FLAG-Trader
+            # agent is the sole exit authority and no protective TP/SL orders are
+            # placed on the exchange. In that mode, the "missing TP/SL protection"
+            # warning is misleading log spam (and the re-attempt call is a no-op).
+            # Gate both on `tp_sl_enforced` so operators only see warnings when
+            # TP/SL placement is actually expected. See incident FET 2026-04-06.
+            cfg_sl = getattr(self._bot_config.risk, "stop_loss_pct", 0)
+            cfg_tp = getattr(self._bot_config.risk, "take_profit_pct", 0)
+            tp_sl_enforced = not (cfg_sl == 0 and cfg_tp == 0)
+
             exchange_symbols = set()
 
             for pos in exchange_positions:
@@ -2473,7 +2483,8 @@ class ExecutionEngineService(BaseService):
                     if symbol in self._tp_sl_confirmed:
                         pass  # Already confirmed via exchange orders, skip re-check
                     elif (
-                        (local_pos.tp_price is None or local_pos.sl_price is None)
+                        tp_sl_enforced
+                        and (local_pos.tp_price is None or local_pos.sl_price is None)
                         and local_pos.status == PositionStatus.OPEN
                         and symbol not in self._settling_symbols
                     ):
@@ -2524,10 +2535,13 @@ class ExecutionEngineService(BaseService):
                     )
 
                     # Check and set SL/TP for newly discovered positions
-                    await self._ensure_tp_sl_for_position(new_pos)
-                    # Mark TP/SL as confirmed if both were set
-                    if new_pos.tp_order_id and new_pos.sl_order_id:
-                        self._tp_sl_confirmed.add(symbol)
+                    # Skip entirely in LLM-only exit mode — the call is a no-op
+                    # in that configuration and would only waste CPU.
+                    if tp_sl_enforced:
+                        await self._ensure_tp_sl_for_position(new_pos)
+                        # Mark TP/SL as confirmed if both were set
+                        if new_pos.tp_order_id and new_pos.sl_order_id:
+                            self._tp_sl_confirmed.add(symbol)
 
             # Check for closed positions (skip settling symbols to avoid spurious notifications)
             closed_symbols = set(self.active_positions.keys()) - exchange_symbols
