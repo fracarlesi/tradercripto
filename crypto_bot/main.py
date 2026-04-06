@@ -663,6 +663,7 @@ class ConservativeBot:
             def __init__(self, cfg: ConservativeConfig):
                 self.order_type = "limit" if cfg.prefer_limit else "market"
                 self.max_slippage_pct = cfg.max_slippage_pct
+                self.max_spread_pct = cfg.max_spread_pct
                 self.limit_timeout_seconds = cfg.limit_timeout_seconds
                 self.retry_attempts = 3
                 self.retry_delay_seconds = 5
