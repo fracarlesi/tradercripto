@@ -135,6 +135,30 @@ def test_max_spread_pct_honored():
         os.unlink(tmp_path)
 
 
+def test_retry_fields_honored():
+    """Phase 4 regression: max_retries / retry_delay_seconds in YAML must
+    reach BotExecutionConfig.retry_attempts / retry_delay_seconds (and
+    must be honored by the execution engine retry loop, which reads them
+    from self._exec_config)."""
+    with open(TRADING_YAML, "r") as f:
+        data = yaml.safe_load(f)
+    data.setdefault("execution", {})["max_retries"] = 7
+    data["execution"]["retry_delay_seconds"] = 4
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", delete=False
+    ) as tmp:
+        yaml.safe_dump(data, tmp)
+        tmp_path = tmp.name
+
+    try:
+        bot_cfg = BotConfig.from_yaml(tmp_path)
+        assert bot_cfg.services.execution_engine.retry_attempts == 7
+        assert bot_cfg.services.execution_engine.retry_delay_seconds == 4
+    finally:
+        os.unlink(tmp_path)
+
+
 def test_no_orphaned_yaml_fields():
     """Whitelist enforcement: every YAML execution key must either map to a
     BotExecutionConfig attr (directly or via EXECUTION_FIELD_MAP) or be in

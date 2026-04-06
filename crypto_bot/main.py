@@ -167,6 +167,8 @@ class ConservativeConfig:
     limit_timeout_seconds: int
     maker_reprice_interval_seconds: int
     maker_max_reprices: int
+    execution_max_retries: int
+    execution_retry_delay_seconds: float
 
     # Momentum Fade Exit
     momentum_exit_enabled: bool
@@ -290,6 +292,8 @@ class ConservativeConfig:
             limit_timeout_seconds=execution.get("limit_timeout_seconds", 60),
             maker_reprice_interval_seconds=execution.get("maker_reprice_interval_seconds", 10),
             maker_max_reprices=execution.get("maker_max_reprices", 6),
+            execution_max_retries=execution.get("max_retries", 3),
+            execution_retry_delay_seconds=execution.get("retry_delay_seconds", 5.0),
             momentum_exit_enabled=me.get("enabled", False),
             momentum_exit_min_age_minutes=me.get("min_age_minutes", 15),
             momentum_exit_min_profit_pct=me.get("min_profit_pct", 0.1),
