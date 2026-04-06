@@ -787,6 +787,25 @@ class ConservativeBot:
                     logger.info("LLM triggered: %s", reason)
                     await self._evaluate_with_flag_trader(triggered_symbols)
                     self._consecutive_scan_errors = 0
+                else:
+                    # Heartbeat ogni 5 min quando non c'è trigger
+                    hb_now = time.time()
+                    if not getattr(self, "_last_heartbeat", None) or (hb_now - self._last_heartbeat) > 300:
+                        self._last_heartbeat = hb_now
+                        try:
+                            squeeze_states_count = len(getattr(self._monitor, "_squeeze_states", {}))
+                        except Exception:
+                            squeeze_states_count = -1
+                        try:
+                            rm = self._services.get("risk_manager")
+                            positions_count = len(rm._open_positions) if rm else 0
+                        except Exception:
+                            positions_count = -1
+                        logger.info(
+                            "MAIN LOOP heartbeat | no_trigger | squeeze_states=%d | positions=%d",
+                            squeeze_states_count,
+                            positions_count,
+                        )
 
                 # --- Evaluate open positions every 60s (LLM-only exit management) ---
                 now = time.time()
