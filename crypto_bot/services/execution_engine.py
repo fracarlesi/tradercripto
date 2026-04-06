@@ -884,12 +884,14 @@ class ExecutionEngineService(BaseService):
         )
         
         self._logger.info(
-            "Placing %s %s order: %.4f %s @ %s",
+            "ORDER SENT | cid=%s | %s %s | %.4f %s @ %s | strategy=%s",
+            signal.get("correlation_id") or "-",
             order_type.upper(),
             side.upper(),
             size,
             symbol,
-            f"{entry_price:.2f}" if order_type == "limit" else "MARKET"
+            f"{entry_price:.2f}" if order_type == "limit" else "MARKET",
+            strategy,
         )
 
         # Pre-flight spread check — skip if bid-ask spread > max_spread_pct
@@ -1455,11 +1457,13 @@ class ExecutionEngineService(BaseService):
         self.metrics.positions_opened += 1
 
         self._logger.info(
-            "Position opened: %s %s %.4f @ %.2f",
+            "FILL RECEIVED | cid=%s | %s %s | %.4f @ %.4f | strategy=%s",
+            signal.get("correlation_id") or "-",
             direction.upper(),
             symbol,
-            size,
-            entry_price
+            float(size),
+            float(entry_price),
+            signal.get("strategy"),
         )
 
         # Notify risk manager so it tracks the position immediately
@@ -1474,6 +1478,7 @@ class ExecutionEngineService(BaseService):
             "entry_reason": signal.get("entry_reason", ""),
             "entry_confidence": float(signal.get("entry_confidence", 0.0)),
             "entry_trigger_details": signal.get("entry_trigger_details", ""),
+            "correlation_id": signal.get("correlation_id"),
         })
 
         # Set TP/SL orders
