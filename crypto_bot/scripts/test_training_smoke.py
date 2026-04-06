@@ -44,13 +44,13 @@ def main() -> None:
         history={"recent_rewards": [], "net_values": [1000.0], "actions": []},
     )
 
-    action_id, value, log_prob = model.get_action(prompt)
+    action_id, value, log_prob = model.get_action(prompt)  # pyright: ignore[reportAssignmentType]  # torch/SDK typing
     assert action_id in (0, 1, 2), f"Invalid action: {action_id}"
     print(f"Forward pass OK: action={action_id}, value={value:.4f}, log_prob={log_prob.item():.4f}")
 
     # 4. Single training step (backward pass)
     tokens = model.tokenizer(prompt, return_tensors="pt", max_length=512, truncation=True, padding=True)
-    logits, val = model.forward(tokens["input_ids"], tokens["attention_mask"])
+    logits, val = model.forward(tokens["input_ids"], tokens["attention_mask"])  # pyright: ignore[reportAssignmentType]  # torch/SDK typing
     loss = -torch.mean(logits) + torch.mean(val)  # Dummy loss
     loss.backward()
     print(f"Backward pass OK: loss={loss.item():.4f}")

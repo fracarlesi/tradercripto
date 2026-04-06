@@ -95,10 +95,10 @@ class TestBreakevenLong:
         await engine._check_breakeven_stops()
 
         # Old SL cancelled
-        engine.client.cancel_order.assert_called_once_with("BTC", 999)
+        engine.client.cancel_order.assert_called_once_with("BTC", 999)  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
         # New SL placed at entry + offset (0.08%)
         expected_sl = 100_000.0 * (1 + BREAKEVEN_OFFSET_PCT / 100)
-        engine._place_trigger_with_retry.assert_called_once_with(
+        engine._place_trigger_with_retry.assert_called_once_with(  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
             symbol="BTC",
             is_buy=False,  # close a long = sell
             size=pos.size,
@@ -139,8 +139,8 @@ class TestBreakevenLong:
 
         await engine._check_breakeven_stops()
 
-        engine.client.cancel_order.assert_not_called()
-        engine._place_trigger_with_retry.assert_not_called()
+        engine.client.cancel_order.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
+        engine._place_trigger_with_retry.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
         assert pos.breakeven_activated is False
 
     @pytest.mark.asyncio
@@ -157,7 +157,7 @@ class TestBreakevenLong:
         await engine._check_breakeven_stops()
 
         assert pos.breakeven_activated is False
-        engine._place_trigger_with_retry.assert_not_called()
+        engine._place_trigger_with_retry.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
 
 
 # =============================================================================
@@ -183,10 +183,10 @@ class TestBreakevenShort:
 
         await engine._check_breakeven_stops()
 
-        engine.client.cancel_order.assert_called_once()
+        engine.client.cancel_order.assert_called_once()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
         # New SL placed at entry - offset (0.08%)
         expected_sl = 100_000.0 * (1 - BREAKEVEN_OFFSET_PCT / 100)
-        engine._place_trigger_with_retry.assert_called_once_with(
+        engine._place_trigger_with_retry.assert_called_once_with(  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
             symbol="ETH",
             is_buy=True,  # close a short = buy
             size=pos.size,
@@ -210,7 +210,7 @@ class TestBreakevenShort:
         await engine._check_breakeven_stops()
 
         assert pos.breakeven_activated is False
-        engine._place_trigger_with_retry.assert_not_called()
+        engine._place_trigger_with_retry.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
 
     @pytest.mark.asyncio
     async def test_does_not_activate_at_loss(self) -> None:
@@ -250,8 +250,8 @@ class TestBreakevenIdempotency:
 
         await engine._check_breakeven_stops()
 
-        engine.client.cancel_order.assert_not_called()
-        engine._place_trigger_with_retry.assert_not_called()
+        engine.client.cancel_order.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
+        engine._place_trigger_with_retry.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
 
     @pytest.mark.asyncio
     async def test_skips_non_open_positions(self) -> None:
@@ -267,7 +267,7 @@ class TestBreakevenIdempotency:
 
         await engine._check_breakeven_stops()
 
-        engine._place_trigger_with_retry.assert_not_called()
+        engine._place_trigger_with_retry.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
 
     @pytest.mark.asyncio
     async def test_skips_settling_symbols(self) -> None:
@@ -283,7 +283,7 @@ class TestBreakevenIdempotency:
 
         await engine._check_breakeven_stops()
 
-        engine._place_trigger_with_retry.assert_not_called()
+        engine._place_trigger_with_retry.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
 
     @pytest.mark.asyncio
     async def test_skips_zero_entry_price(self) -> None:
@@ -298,7 +298,7 @@ class TestBreakevenIdempotency:
 
         await engine._check_breakeven_stops()
 
-        engine._place_trigger_with_retry.assert_not_called()
+        engine._place_trigger_with_retry.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
 
 
 # =============================================================================
@@ -324,15 +324,15 @@ class TestBreakevenOrderLifecycle:
 
         await engine._check_breakeven_stops()
 
-        engine.client.cancel_order.assert_not_called()
-        engine._place_trigger_with_retry.assert_not_called()
+        engine.client.cancel_order.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
+        engine._place_trigger_with_retry.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
         assert pos.breakeven_activated is False
 
     @pytest.mark.asyncio
     async def test_cancel_failure_skips_new_sl(self) -> None:
         """If cancelling the old SL fails, do NOT place a new SL to avoid duplicates."""
         engine = _make_engine()
-        engine.client.cancel_order.side_effect = Exception("Order not found")
+        engine.client.cancel_order.side_effect = Exception("Order not found")  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
         pos = _make_position(
             entry_price=100_000.0,
             current_price=101_300.0,  # +1.3% > 1.2% threshold
@@ -343,9 +343,9 @@ class TestBreakevenOrderLifecycle:
         await engine._check_breakeven_stops()
 
         # Cancel was attempted
-        engine.client.cancel_order.assert_called_once()
+        engine.client.cancel_order.assert_called_once()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
         # New SL NOT placed — cancel failed, so we skip to avoid duplicate orders
-        engine._place_trigger_with_retry.assert_not_called()
+        engine._place_trigger_with_retry.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
         assert pos.breakeven_activated is False
 
     @pytest.mark.asyncio
@@ -365,7 +365,7 @@ class TestBreakevenOrderLifecycle:
         await engine._check_breakeven_stops()
 
         # Old SL was cancelled
-        engine.client.cancel_order.assert_called_once()
+        engine.client.cancel_order.assert_called_once()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
         # breakeven NOT marked (placement failed)
         assert pos.breakeven_activated is False
 
@@ -399,9 +399,9 @@ class TestBreakevenOrderLifecycle:
         assert pos_eth.breakeven_activated is False
 
         # Only BTC's old SL was cancelled
-        engine.client.cancel_order.assert_called_once_with("BTC", 111)
+        engine.client.cancel_order.assert_called_once_with("BTC", 111)  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
         # Only BTC got a new SL
-        engine._place_trigger_with_retry.assert_called_once()
+        engine._place_trigger_with_retry.assert_called_once()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
 
 
 # =============================================================================

@@ -349,7 +349,7 @@ class FlagTraderReplay:
         prompt = self.prompt_builder.build_prompt(
             candles, portfolio, history, market_context=market_ctx,
         )
-        action_id, state_value, _log_prob, tp_pct, sl_pct = self.model.get_action(prompt)
+        action_id, state_value, _log_prob, tp_pct, sl_pct = self.model.get_action(prompt)  # pyright: ignore[reportAssignmentType]  # torch/SDK typing
         return action_id, state_value, tp_pct, sl_pct
 
     def _check_tp_sl(self, trade: ReplayTrade, candle: dict, bar_idx: int) -> bool:

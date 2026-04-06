@@ -200,7 +200,7 @@ class FlagTraderAgent:
         logger.debug("FLAG-Trader PROMPT | %s | %s", symbol, prompt[:500])
 
         start = time.monotonic()
-        action_id, state_value, log_prob, tp_pct, sl_pct = self.model.get_action(prompt)
+        action_id, state_value, log_prob, tp_pct, sl_pct = self.model.get_action(prompt)  # pyright: ignore[reportAssignmentType]  # torch/SDK typing
         elapsed = time.monotonic() - start
         action_name = ACTION_NAMES.get(action_id, "HOLD")
 
@@ -326,7 +326,7 @@ class FlagTraderAgent:
         logger.debug("FLAG-Trader PROMPT | %s | %s", symbol, prompt[:500])
 
         start = time.monotonic()
-        action_id, state_value, log_prob, _tp, _sl = self.model.get_action(prompt)
+        action_id, state_value, log_prob, _tp, _sl = self.model.get_action(prompt)  # pyright: ignore[reportAssignmentType]  # torch/SDK typing
         elapsed = time.monotonic() - start
         action_name = ACTION_NAMES.get(action_id, "HOLD")
 

@@ -522,7 +522,7 @@ class TestFullMetrics:
     def test_metrics_validation_win_rate(self):
         """Test win rate validation (0-1 range)."""
         # Valid win rate
-        metrics = PerformanceMetrics(
+        metrics = PerformanceMetrics(  # pyright: ignore[reportCallIssue]  # test fixture
             timestamp=datetime.now(timezone.utc),
             equity=Decimal("10000"),
             initial_equity=Decimal("10000"),
@@ -534,7 +534,7 @@ class TestFullMetrics:
 
     def test_metrics_json_serialization(self):
         """Test metrics can be serialized to JSON-compatible dict."""
-        metrics = PerformanceMetrics(
+        metrics = PerformanceMetrics(  # pyright: ignore[reportCallIssue]  # test fixture
             timestamp=datetime.now(timezone.utc),
             equity=Decimal("10000"),
             initial_equity=Decimal("10000"),

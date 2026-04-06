@@ -26,7 +26,7 @@ class PromptBuilder:
     def build_prompt(
         self,
         candles: list[dict[str, float]],
-        portfolio: dict[str, float],
+        portfolio: dict[str, Any],
         history: dict[str, list[Any]],
         similar_trades_text: str = "",
         position_info: dict[str, Any] | None = None,

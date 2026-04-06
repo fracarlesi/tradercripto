@@ -195,10 +195,10 @@ class TestRBasedBreakeven:
         await engine._check_r_based_breakeven()
 
         # Old SL cancelled
-        engine.client.cancel_order.assert_called_once_with("BTC", 999)
+        engine.client.cancel_order.assert_called_once_with("BTC", 999)  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
         # New SL at entry + offset (0.15%)
         expected_sl = 100_000.0 * (1 + 0.15 / 100)
-        engine._place_trigger_with_retry.assert_called_once_with(
+        engine._place_trigger_with_retry.assert_called_once_with(  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
             symbol="BTC",
             is_buy=False,
             size=pos.size,
@@ -222,7 +222,7 @@ class TestRBasedBreakeven:
         await engine._check_r_based_breakeven()
 
         expected_sl = 100_000.0 * (1 - 0.15 / 100)
-        engine._place_trigger_with_retry.assert_called_once_with(
+        engine._place_trigger_with_retry.assert_called_once_with(  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
             symbol="BTC",
             is_buy=True,
             size=pos.size,
@@ -244,7 +244,7 @@ class TestRBasedBreakeven:
 
         await engine._check_r_based_breakeven()
 
-        engine.client.cancel_order.assert_not_called()
+        engine.client.cancel_order.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
         assert pos.breakeven_activated is False
 
     @pytest.mark.asyncio
@@ -257,7 +257,7 @@ class TestRBasedBreakeven:
 
         await engine._check_r_based_breakeven()
 
-        engine.client.cancel_order.assert_not_called()
+        engine.client.cancel_order.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
 
     @pytest.mark.asyncio
     async def test_skips_if_disabled(self) -> None:
@@ -269,7 +269,7 @@ class TestRBasedBreakeven:
 
         await engine._check_r_based_breakeven()
 
-        engine.client.cancel_order.assert_not_called()
+        engine.client.cancel_order.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
 
 
 # =============================================================================
@@ -290,7 +290,7 @@ class TestStrengthExit:
 
         await engine._check_strength_exit()
 
-        engine.close_position.assert_called_once_with("BTC")
+        engine.close_position.assert_called_once_with("BTC")  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
         assert pos.exit_reason == "strength_exit"
 
     @pytest.mark.asyncio
@@ -303,7 +303,7 @@ class TestStrengthExit:
 
         await engine._check_strength_exit()
 
-        engine.close_position.assert_not_called()
+        engine.close_position.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
 
     @pytest.mark.asyncio
     async def test_skips_closing_positions(self) -> None:
@@ -316,7 +316,7 @@ class TestStrengthExit:
 
         await engine._check_strength_exit()
 
-        engine.close_position.assert_not_called()
+        engine.close_position.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
 
 
 # =============================================================================
@@ -345,8 +345,8 @@ class TestRBasedTrailing:
         await engine._check_r_based_trailing()
 
         # New SL = entry + 0.5 * 1R = 100_000 + 500 = 100_500
-        engine.client.cancel_order.assert_called_once()
-        call_args = engine._place_trigger_with_retry.call_args
+        engine.client.cancel_order.assert_called_once()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
+        call_args = engine._place_trigger_with_retry.call_args  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
         assert call_args is not None
         expected_sl = 100_500.0
         assert call_args.kwargs["trigger_price"] == expected_sl
@@ -368,7 +368,7 @@ class TestRBasedTrailing:
         await engine._check_r_based_trailing()
 
         # 2 steps => lock 1.0R => SL = 100_000 + 1000 = 101_000
-        call_args = engine._place_trigger_with_retry.call_args
+        call_args = engine._place_trigger_with_retry.call_args  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
         assert call_args is not None
         assert call_args.kwargs["trigger_price"] == 101_000.0
 
@@ -386,7 +386,7 @@ class TestRBasedTrailing:
 
         await engine._check_r_based_trailing()
 
-        engine.client.cancel_order.assert_not_called()
+        engine.client.cancel_order.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
 
     @pytest.mark.asyncio
     async def test_no_trail_before_full_step(self) -> None:
@@ -404,7 +404,7 @@ class TestRBasedTrailing:
 
         await engine._check_r_based_trailing()
 
-        engine.client.cancel_order.assert_not_called()
+        engine.client.cancel_order.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
 
     @pytest.mark.asyncio
     async def test_short_trailing(self) -> None:
@@ -424,7 +424,7 @@ class TestRBasedTrailing:
         await engine._check_r_based_trailing()
 
         # 1 step => lock 0.5R => SL = 100_000 - 500 = 99_500
-        call_args = engine._place_trigger_with_retry.call_args
+        call_args = engine._place_trigger_with_retry.call_args  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
         assert call_args is not None
         assert call_args.kwargs["trigger_price"] == 99_500.0
         assert call_args.kwargs["is_buy"] is True  # Close short = buy

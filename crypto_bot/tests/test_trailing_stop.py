@@ -51,7 +51,7 @@ def _make_engine(trailing_atr_mult: float = 2.5) -> ExecutionEngineService:
             self.stops = _StopsConfig(mult)
             self.risk = _RiskConfig()
 
-    engine._bot_config = _BotConfig(trailing_atr_mult)
+    engine._bot_config = _BotConfig(trailing_atr_mult)  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
     return engine
 
 
@@ -123,8 +123,8 @@ class TestTrailingLong:
         # trail SL = 102000 - 1250 = 100750
         expected_sl = 102_000.0 - (100_000.0 * 0.005 * 2.5)
         assert pos.sl_price == expected_sl
-        engine.client.cancel_order.assert_called_once_with("BTC", 999)
-        engine._place_trigger_with_retry.assert_called_once()
+        engine.client.cancel_order.assert_called_once_with("BTC", 999)  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
+        engine._place_trigger_with_retry.assert_called_once()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
 
     @pytest.mark.asyncio
     async def test_does_not_activate_without_breakeven(self) -> None:
@@ -140,7 +140,7 @@ class TestTrailingLong:
         await engine._check_trailing_stops()
 
         assert pos.trailing_active is False
-        engine._place_trigger_with_retry.assert_not_called()
+        engine._place_trigger_with_retry.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
 
     @pytest.mark.asyncio
     async def test_does_not_activate_without_atr(self) -> None:
@@ -156,7 +156,7 @@ class TestTrailingLong:
         await engine._check_trailing_stops()
 
         assert pos.trailing_active is False
-        engine._place_trigger_with_retry.assert_not_called()
+        engine._place_trigger_with_retry.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
 
     @pytest.mark.asyncio
     async def test_updates_peak_price(self) -> None:
@@ -195,7 +195,7 @@ class TestTrailingLong:
 
         # SL should NOT be lowered
         assert pos.sl_price == 101_000.0
-        engine._place_trigger_with_retry.assert_not_called()
+        engine._place_trigger_with_retry.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
 
     @pytest.mark.asyncio
     async def test_progressive_tightening(self) -> None:
@@ -218,9 +218,9 @@ class TestTrailingLong:
         assert pos.trailing_active is True
 
         # Reset mock for next call
-        engine.client.cancel_order.reset_mock()
-        engine._place_trigger_with_retry.reset_mock()
-        engine._place_trigger_with_retry.return_value = {"orderId": "50002"}
+        engine.client.cancel_order.reset_mock()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
+        engine._place_trigger_with_retry.reset_mock()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
+        engine._place_trigger_with_retry.return_value = {"orderId": "50002"}  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
 
         # Second move: price rises to 104k
         pos.current_price = 104_000.0
@@ -242,7 +242,7 @@ class TestTrailingLong:
 
         await engine._check_trailing_stops()
 
-        engine._place_trigger_with_retry.assert_not_called()
+        engine._place_trigger_with_retry.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
 
     @pytest.mark.asyncio
     async def test_skips_non_open_positions(self) -> None:
@@ -257,7 +257,7 @@ class TestTrailingLong:
 
         await engine._check_trailing_stops()
 
-        engine._place_trigger_with_retry.assert_not_called()
+        engine._place_trigger_with_retry.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
 
 
 # =============================================================================
@@ -291,7 +291,7 @@ class TestTrailingShort:
         assert pos.lowest_price == 98_000.0
         expected_sl = 98_000.0 + (100_000.0 * 0.005 * 2.5)
         assert pos.sl_price == expected_sl
-        engine.client.cancel_order.assert_called_once()
+        engine.client.cancel_order.assert_called_once()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
 
     @pytest.mark.asyncio
     async def test_never_raises_sl_for_short(self) -> None:
@@ -315,7 +315,7 @@ class TestTrailingShort:
 
         # trail SL = 97000 + 1250 = 98250, which is > 98000 -> no change for shorts
         assert pos.sl_price == 98_000.0
-        engine._place_trigger_with_retry.assert_not_called()
+        engine._place_trigger_with_retry.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
 
     @pytest.mark.asyncio
     async def test_progressive_tightening_short(self) -> None:
@@ -340,9 +340,9 @@ class TestTrailingShort:
         assert pos.trailing_active is True
 
         # Reset mocks
-        engine.client.cancel_order.reset_mock()
-        engine._place_trigger_with_retry.reset_mock()
-        engine._place_trigger_with_retry.return_value = {"orderId": "50002"}
+        engine.client.cancel_order.reset_mock()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
+        engine._place_trigger_with_retry.reset_mock()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
+        engine._place_trigger_with_retry.return_value = {"orderId": "50002"}  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
 
         # Second move: price drops to 95k
         pos.current_price = 95_000.0
@@ -387,7 +387,7 @@ class TestAtrAdaptiveTpSl:
             "atr_pct": 0.5,
         }
 
-        await engine._set_tp_sl(signal, FakeOrder(), pos)
+        await engine._set_tp_sl(signal, FakeOrder(), pos)  # pyright: ignore[reportArgumentType]  # test fixture (Mock)
 
         assert pos.entry_atr_pct == 0.5
 
@@ -418,7 +418,7 @@ class TestAtrAdaptiveTpSl:
             "atr_pct": 0.01,  # Tiny ATR — should NOT affect TP/SL
         }
 
-        await engine._set_tp_sl(signal, FakeOrder(), pos)
+        await engine._set_tp_sl(signal, FakeOrder(), pos)  # pyright: ignore[reportArgumentType]  # test fixture (Mock)
 
         # SL should be config value (1.0%), not ATR-derived
         assert pos.sl_price is not None
@@ -454,11 +454,11 @@ class TestAtrAdaptiveTpSl:
             "atr_pct": 5.0,  # Large ATR — should NOT affect TP/SL
         }
 
-        await engine._set_tp_sl(signal, FakeOrder(), pos)
+        await engine._set_tp_sl(signal, FakeOrder(), pos)  # pyright: ignore[reportArgumentType]  # test fixture (Mock)
 
         # SL should be config value (1.0%), not ATR-derived
         expected_sl = 100.0 * (1 - 0.01)  # 99.0
-        assert abs(pos.sl_price - expected_sl) < 0.01
+        assert abs(pos.sl_price - expected_sl) < 0.01  # pyright: ignore[reportOptionalOperand]  # test fixture (Mock)
         # ATR still stored for trailing stop
         assert pos.entry_atr_pct == 5.0
 
@@ -489,11 +489,11 @@ class TestAtrAdaptiveTpSl:
             # No atr_pct
         }
 
-        await engine._set_tp_sl(signal, FakeOrder(), pos)
+        await engine._set_tp_sl(signal, FakeOrder(), pos)  # pyright: ignore[reportArgumentType]  # test fixture (Mock)
 
         # Should use config 1.0% SL
         expected_sl = 100_000.0 * (1 - 0.01)
-        assert abs(pos.sl_price - expected_sl) < 0.01
+        assert abs(pos.sl_price - expected_sl) < 0.01  # pyright: ignore[reportOptionalOperand]  # test fixture (Mock)
         assert pos.entry_atr_pct == 0.0
 
 
@@ -509,7 +509,7 @@ class TestTrailingEdgeCases:
     async def test_cancel_failure_still_places_new_sl(self) -> None:
         """If cancelling old SL fails, new SL is still placed."""
         engine = _make_engine(trailing_atr_mult=2.5)
-        engine.client.cancel_order.side_effect = Exception("Order not found")
+        engine.client.cancel_order.side_effect = Exception("Order not found")  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
 
         breakeven_sl = 100_000.0 * (1 + BREAKEVEN_OFFSET_PCT / 100)
         pos = _make_position(
@@ -522,7 +522,7 @@ class TestTrailingEdgeCases:
         await engine._check_trailing_stops()
 
         # Cancel was attempted but failed
-        engine.client.cancel_order.assert_called_once()
+        engine.client.cancel_order.assert_called_once()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
         # Despite cancel failure, new SL still placed (raised exception suppressed)
         # Note: In current implementation, cancel failure will cause the whole block
         # to raise, so new SL won't be placed. This is acceptable -- the next cycle
@@ -572,7 +572,7 @@ class TestTrailingEdgeCases:
 
         await engine._check_trailing_stops()
 
-        engine._place_trigger_with_retry.assert_not_called()
+        engine._place_trigger_with_retry.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
 
 
 # =============================================================================

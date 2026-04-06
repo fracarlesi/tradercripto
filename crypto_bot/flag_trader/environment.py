@@ -98,7 +98,7 @@ class HyperliquidTradingEnv(gym.Env):
         self._tp_price: float = 0.0
         self._sl_price: float = 0.0
 
-    def reset(
+    def reset(  # pyright: ignore[reportIncompatibleMethodOverride]  # torch/SDK typing
         self,
         seed: int | None = None,
         options: dict[str, Any] | None = None,

@@ -15,6 +15,16 @@ class Topic(str, Enum):
     RISK_ALERTS = "risk_alerts"         # Kill-switch, warnings
     METRICS = "metrics"                 # Performance metrics
 
+    # Legacy topics (kept for backward compatibility with older tests/services)
+    MARKET_DATA = "market_data"
+    OPPORTUNITIES = "opportunities"
+    SIGNALS = "signals"
+    SIZED_SIGNALS = "sized_signals"
+    CONFIG_UPDATES = "config_updates"
+
+    def __str__(self) -> str:
+        return self.value
+
 
 class OrderType(str, Enum):
     """Order types supported by execution engine."""

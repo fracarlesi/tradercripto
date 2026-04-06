@@ -173,7 +173,7 @@ class WalkForwardValidator:
             # Fresh model + trainer for each window
             model = FlagTraderModel(model_name=model_name, freeze_pct=freeze_pct)
             prompt_builder = PromptBuilder(candle_window=window_size)
-            trainer = PPOTrainer(model=model, prompt_builder=prompt_builder, lr=lr, **trainer_kwargs)
+            trainer = PPOTrainer(model=model, prompt_builder=prompt_builder, lr=lr, **trainer_kwargs)  # pyright: ignore[reportArgumentType]  # torch/SDK typing
 
             # Train environment
             train_candles = self.candles[tr_start:tr_end]
@@ -247,7 +247,7 @@ class WalkForwardValidator:
             while True:
                 candles_data, portfolio, history = obs_to_prompt_inputs(obs)
                 prompt = prompt_builder.build_prompt(candles_data, portfolio, history)
-                action, _, _ = model.get_action(prompt)
+                action, _, _ = model.get_action(prompt)  # pyright: ignore[reportAssignmentType]  # torch/SDK typing
                 obs, reward, terminated, truncated, info = env.step(action)
                 last_info = info
 

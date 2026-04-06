@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 import yaml
 
@@ -719,8 +719,10 @@ class ConservativeBot:
                 self.regime = _RegimeConfig(cfg)
 
         assert self._bus is not None, "MessageBus must be initialised before _init_services"
+        assert self._exchange is not None, "Exchange must be initialised before _init_services"
         self._services["execution"] = ExecutionEngineService(
-            bus=self._bus, config=_ConfigAdapter(cfg),
+            bus=self._bus,
+            config=cast(Any, _ConfigAdapter(cfg)),  # adapter quacks like Config
             client=self._exchange,
         )
 

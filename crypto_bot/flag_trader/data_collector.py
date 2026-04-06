@@ -106,7 +106,7 @@ class HyperliquidDataCollector:
 
         if not all_candles:
             logger.warning(f"No candle data returned for {symbol}")
-            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])  # pyright: ignore[reportArgumentType]  # torch/SDK typing
 
         df = pd.DataFrame(all_candles)
         df = df.rename(columns={"t": "timestamp", "o": "open", "h": "high", "l": "low", "c": "close", "v": "volume"})
@@ -118,7 +118,7 @@ class HyperliquidDataCollector:
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
 
         # Remove duplicates and sort
-        df = df.drop_duplicates(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
+        df = df.drop_duplicates(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)  # pyright: ignore[reportCallIssue]  # torch/SDK typing
 
         # Save to parquet
         path = self._parquet_path(symbol, interval)

@@ -42,20 +42,25 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 
 from .base import BaseService
 from .message_bus import Message, MessageBus, Topic
 from ..api.exceptions import OrderRejectedError
 
-# Type hints for optional imports
-try:
+# For type checking we want the real classes; at runtime fall back to Any
+# so the module still imports if the optional deps are missing.
+if TYPE_CHECKING:
     from crypto_bot.api.hyperliquid import HyperliquidClient
     from crypto_bot.config.loader import Config, ExecutionEngineConfig
-except ImportError:
-    HyperliquidClient = Any  # type: ignore
-    Config = Any  # type: ignore
-    ExecutionEngineConfig = Any  # type: ignore
+else:
+    try:
+        from crypto_bot.api.hyperliquid import HyperliquidClient
+        from crypto_bot.config.loader import Config, ExecutionEngineConfig
+    except ImportError:
+        HyperliquidClient = Any
+        Config = Any
+        ExecutionEngineConfig = Any
 
 
 logger = logging.getLogger(__name__)
@@ -501,6 +506,8 @@ class ExecutionEngineService(BaseService):
             cancelled = 0
             for order in orphan_orders:
                 oid = order.get("orderId")
+                if oid is None:
+                    continue
                 symbol = order.get("symbol", "?")
                 side = order.get("side", "?")
                 price = order.get("price", 0)
@@ -703,8 +710,14 @@ class ExecutionEngineService(BaseService):
                     await self._handle_order_filled(signal, order_result)
                 else:
                     # Track pending order with original signal for deferred fill handling
-                    order_result.original_signal = signal
-                    self.pending_orders[order_result.order_id] = order_result
+                    if order_result.order_id is None:
+                        self._logger.warning(
+                            "Pending order returned with no order_id; cannot track (signal=%s)",
+                            signal_id[:8],
+                        )
+                    else:
+                        order_result.original_signal = signal
+                        self.pending_orders[order_result.order_id] = order_result
 
         except Exception as e:
             self._logger.error(
@@ -764,9 +777,13 @@ class ExecutionEngineService(BaseService):
 
         # Grace period: skip regime-close for very new positions
         grace_minutes = self._regime_exit_grace_minutes
-        age_minutes = (
-            datetime.now(timezone.utc) - _ensure_aware(position.opened_at)
-        ).total_seconds() / 60.0
+        if position.opened_at is None:
+            # No open timestamp recorded — treat as "old enough" to allow exit
+            age_minutes = float("inf")
+        else:
+            age_minutes = (
+                datetime.now(timezone.utc) - _ensure_aware(position.opened_at)
+            ).total_seconds() / 60.0
         if age_minutes < grace_minutes:
             self._logger.info(
                 "Skipping regime exit for %s — position age %.1f min < grace %d min",
@@ -1051,7 +1068,7 @@ class ExecutionEngineService(BaseService):
                 reduce_only=order.reduce_only,
                 slippage=slippage,
             )
-        elif self._exec_config.entry_mode == "maker" and not order.reduce_only:
+        elif getattr(self._exec_config, "entry_mode", "taker") == "maker" and not order.reduce_only:
             # Maker (post-only) entry order
             result = await self._place_maker_order(order, is_buy)
         else:
@@ -1160,9 +1177,9 @@ class ExecutionEngineService(BaseService):
 
         now = datetime.now(timezone.utc)
         reprice_interval = timedelta(
-            seconds=self._exec_config.maker_reprice_interval_seconds
+            seconds=getattr(self._exec_config, "maker_reprice_interval_seconds", 5)
         )
-        max_reprices = self._exec_config.maker_max_reprices
+        max_reprices = getattr(self._exec_config, "maker_max_reprices", 6)
 
         for order_id, order in list(self.pending_orders.items()):
             if order.entry_mode != "maker":
@@ -1738,6 +1755,8 @@ class ExecutionEngineService(BaseService):
     ) -> None:
         """Cancel a single duplicate reduce-only order."""
         oid = order.get("orderId")
+        if oid is None:
+            return
         price = float(order.get("price", order.get("limitPx", 0)))
         try:
             await self.client.cancel_order(symbol, int(oid))
@@ -1837,6 +1856,8 @@ class ExecutionEngineService(BaseService):
                     f"CRITICAL: {tpsl.upper()} placement failed for {symbol} after {max_retries} retries: {e}"
                 )
                 raise
+        # Unreachable: loop either returns or raises. Kept to satisfy type checker.
+        raise RuntimeError("_place_trigger_with_retry exited without result")
 
     async def _send_alert(self, message: str) -> None:
         """Send critical alert via notification bus."""
@@ -2128,7 +2149,7 @@ class ExecutionEngineService(BaseService):
         Cancelled orders are removed from local tracking and metrics are
         updated.
         """
-        timeout = timedelta(seconds=self._exec_config.limit_timeout_seconds)
+        timeout = timedelta(seconds=getattr(self._exec_config, "limit_timeout_seconds", 60))
         now = datetime.now(timezone.utc)
 
         stale_ids: List[str] = []
@@ -3131,7 +3152,7 @@ class ExecutionEngineService(BaseService):
                 new_sl = position.highest_price - trail_distance
 
                 # Only tighten SL (never lower it for longs)
-                if new_sl > position.sl_price:
+                if position.sl_price is None or new_sl > position.sl_price:
                     if not position.trailing_active:
                         position.trailing_active = True
                         self._logger.info(
@@ -3185,7 +3206,7 @@ class ExecutionEngineService(BaseService):
                 new_sl = position.lowest_price + trail_distance
 
                 # Only tighten SL (never raise it for shorts)
-                if new_sl < position.sl_price:
+                if position.sl_price is None or new_sl < position.sl_price:
                     if not position.trailing_active:
                         position.trailing_active = True
                         self._logger.info(
@@ -3251,8 +3272,9 @@ class ExecutionEngineService(BaseService):
         # Get ROI config from bot config
         roi_config: Dict[str, float] = {}
         try:
-            if hasattr(self._bot_config, 'stops') and hasattr(self._bot_config.stops, 'minimal_roi'):
-                roi_config = self._bot_config.stops.minimal_roi or {}
+            stops = getattr(self._bot_config, 'stops', None)
+            if stops is not None and hasattr(stops, 'minimal_roi'):
+                roi_config = getattr(stops, 'minimal_roi', None) or {}
         except Exception:
             pass
         
@@ -3580,7 +3602,7 @@ class ExecutionEngineService(BaseService):
         current_equity = 0.0
         try:
             state = await self.client._run_sync(
-                lambda: self.client._info.user_state(self.client._account.address)
+                lambda: self.client._i().user_state(self.client._addr())
             )
             current_equity = float(state.get("marginSummary", {}).get("accountValue", 0))
         except Exception:

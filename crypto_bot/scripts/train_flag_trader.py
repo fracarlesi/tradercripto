@@ -40,7 +40,7 @@ def load_training_data(
     for symbol in available:
         df = collector.load_candles(symbol)
         candles = df[["open", "high", "low", "close", "volume"]].values
-        all_candles.append(candles)
+        all_candles.append(candles)  # pyright: ignore[reportArgumentType]  # torch/SDK typing
 
     print(f"Loaded {len(all_candles)} assets, {sum(len(c) for c in all_candles)} total candles")
 

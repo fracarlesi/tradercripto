@@ -275,7 +275,7 @@ class MarketStateConfig:
     """Configuration for MarketStateService."""
 
     # Assets to track
-    assets: List[str] = None
+    assets: Optional[List[str]] = None
 
     # Timeframe
     timeframe: str = "4h"
@@ -411,7 +411,7 @@ class MarketStateService(BaseService):
 
         # With dynamic asset loading, some assets may not have candle data
         # Consider healthy if we have states for at least 80% of assets
-        total_assets = len(self._state_config.assets)
+        total_assets = len(self._state_config.assets or [])
         if total_assets == 0:
             return False
 
@@ -430,7 +430,7 @@ class MarketStateService(BaseService):
         # Fetch funding rates and open interest once per scan cycle
         asset_ctx_data = await self._fetch_asset_ctx_data()
 
-        for symbol in self._state_config.assets:
+        for symbol in (self._state_config.assets or []):
             try:
                 ctx = asset_ctx_data.get(symbol, {})
                 state = await self._fetch_market_state(symbol, ctx)
@@ -452,11 +452,12 @@ class MarketStateService(BaseService):
         """
         if self._info is None:
             return {}
+        info = self._info  # bind for lambda closure
 
         try:
             loop = asyncio.get_running_loop()
             ctx = await loop.run_in_executor(
-                None, lambda: self._info.meta_and_asset_ctxs()
+                None, lambda: info.meta_and_asset_ctxs()
             )
 
             result: Dict[str, Dict[str, float]] = {}
@@ -699,6 +700,9 @@ class MarketStateService(BaseService):
 
     async def _fetch_ohlcv(self, symbol: str) -> Optional[Dict[str, np.ndarray]]:
         """Fetch OHLCV data from Hyperliquid with 429 retry backoff."""
+        if self._info is None:
+            return None
+        info = self._info  # bind for lambda closure
         max_retries = 3
 
         for attempt in range(max_retries + 1):
@@ -723,7 +727,7 @@ class MarketStateService(BaseService):
                 # Fetch candles (positional args: symbol, interval, start_time, end_time)
                 candles = await loop.run_in_executor(
                     None,
-                    lambda: self._info.candles_snapshot(
+                    lambda: info.candles_snapshot(
                         symbol,
                         self._state_config.timeframe,
                         start_time,

@@ -86,8 +86,8 @@ def _make_engine() -> ExecutionEngineService:
         stops = _StopsConfig()
         services = _ServicesConfig()
 
-    engine._bot_config = _BotConfig()
-    engine._exec_config = _ExecConfig()
+    engine._bot_config = _BotConfig()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
+    engine._exec_config = _ExecConfig()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
 
     return engine
 
@@ -146,7 +146,7 @@ class TestPartialFillGracePeriod:
         await engine._poll_pending_order_fills()
 
         # Should NOT have processed the fill yet
-        engine._handle_order_filled.assert_not_called()
+        engine._handle_order_filled.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
         # Order should still be pending
         assert "12345" in engine.pending_orders
         # Grace period tracking should be active
@@ -168,7 +168,7 @@ class TestPartialFillGracePeriod:
         await engine._poll_pending_order_fills()
 
         # Should process fill immediately
-        engine._handle_order_filled.assert_called_once()
+        engine._handle_order_filled.assert_called_once()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
         # Order should be removed from pending
         assert "12345" not in engine.pending_orders
 
@@ -201,7 +201,7 @@ class TestPartialFillGracePeriod:
         new_time, new_size = engine._partial_fill_first_seen["12345"]
         assert new_size == pytest.approx(120.0)
         # Still not processed
-        engine._handle_order_filled.assert_not_called()
+        engine._handle_order_filled.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
 
     @pytest.mark.asyncio
     async def test_grace_period_expiry_processes_partial(self) -> None:
@@ -224,8 +224,8 @@ class TestPartialFillGracePeriod:
         await engine._poll_pending_order_fills()
 
         # Should now process the fill with actual size
-        engine._handle_order_filled.assert_called_once()
-        call_args = engine._handle_order_filled.call_args
+        engine._handle_order_filled.assert_called_once()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
+        call_args = engine._handle_order_filled.call_args  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
         filled_order = call_args[0][1]  # second positional arg is the order
         assert filled_order.filled_size == pytest.approx(57.7)
         # Order removed from pending
@@ -254,7 +254,7 @@ class TestPartialFillGracePeriod:
         await engine._poll_pending_order_fills()
 
         # Should NOT process
-        engine._handle_order_filled.assert_not_called()
+        engine._handle_order_filled.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
         assert "12345" in engine.pending_orders
 
     @pytest.mark.asyncio
@@ -280,7 +280,7 @@ class TestPartialFillGracePeriod:
         # Tracking should be cleared
         assert "12345" not in engine._partial_fill_first_seen
         # Not processed
-        engine._handle_order_filled.assert_not_called()
+        engine._handle_order_filled.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
 
     @pytest.mark.asyncio
     async def test_no_position_after_removal_is_external_cancel(self) -> None:
@@ -294,10 +294,10 @@ class TestPartialFillGracePeriod:
 
         await engine._poll_pending_order_fills()
 
-        engine._handle_order_filled.assert_not_called()
+        engine._handle_order_filled.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
         assert "12345" not in engine.pending_orders
         # Should publish cancellation event
-        engine.publish.assert_called()
+        engine.publish.assert_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
 
     @pytest.mark.asyncio
     async def test_settling_symbol_skipped(self) -> None:
@@ -311,7 +311,7 @@ class TestPartialFillGracePeriod:
 
         await engine._poll_pending_order_fills()
 
-        engine._handle_order_filled.assert_not_called()
+        engine._handle_order_filled.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
         assert "12345" in engine.pending_orders
 
 
@@ -528,7 +528,7 @@ class TestUpdateTpSlForSizeChange:
         await engine._update_tp_sl_for_size_change(pos)
 
         # Should have cancelled old orders
-        cancel_calls = engine.client.cancel_order.call_args_list
+        cancel_calls = engine.client.cancel_order.call_args_list  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
         assert len(cancel_calls) == 2
         # TP cancel
         assert cancel_calls[0][0] == ("FTT", 10001)
@@ -559,7 +559,7 @@ class TestUpdateTpSlForSizeChange:
         assert engine._tp_sl_placed_size["FTT"] == pytest.approx(191.4)
 
         # Should send alert
-        engine._send_alert.assert_called_once()
+        engine._send_alert.assert_called_once()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
 
     @pytest.mark.asyncio
     async def test_handles_cancel_failure_gracefully(self) -> None:
@@ -588,7 +588,7 @@ class TestUpdateTpSlForSizeChange:
         await engine._update_tp_sl_for_size_change(pos)
 
         # Should still try to place new orders despite cancel failure
-        assert engine._place_trigger_with_retry.call_count == 2
+        assert engine._place_trigger_with_retry.call_count == 2  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
 
     @pytest.mark.asyncio
     async def test_no_tp_price_skips_tp_placement(self) -> None:
@@ -614,8 +614,8 @@ class TestUpdateTpSlForSizeChange:
         await engine._update_tp_sl_for_size_change(pos)
 
         # Should only place SL (1 call), not TP
-        assert engine._place_trigger_with_retry.call_count == 1
-        sl_kwargs = engine._place_trigger_with_retry.call_args[1]
+        assert engine._place_trigger_with_retry.call_count == 1  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
+        sl_kwargs = engine._place_trigger_with_retry.call_args[1]  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
         assert sl_kwargs["tpsl"] == "sl"
 
 
@@ -745,7 +745,7 @@ class TestPartialFillFullScenario:
 
         # Should be in grace period
         assert "12345" in engine._partial_fill_first_seen
-        engine._handle_order_filled.assert_not_called()
+        engine._handle_order_filled.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
 
         # --- Poll 2: More fills arrive (total 120) ---
         engine.client.get_positions = AsyncMock(return_value=[
@@ -756,7 +756,7 @@ class TestPartialFillFullScenario:
         # Grace timer reset, still waiting
         _, last_size = engine._partial_fill_first_seen["12345"]
         assert last_size == pytest.approx(120.0)
-        engine._handle_order_filled.assert_not_called()
+        engine._handle_order_filled.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
 
         # --- Poll 3: Full fill (191.4) ---
         engine.client.get_positions = AsyncMock(return_value=[
@@ -765,8 +765,8 @@ class TestPartialFillFullScenario:
         await engine._poll_pending_order_fills()
 
         # 191.4 / 191.4 = 100% >= 95%, so should process immediately
-        engine._handle_order_filled.assert_called_once()
-        call_args = engine._handle_order_filled.call_args
+        engine._handle_order_filled.assert_called_once()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
+        call_args = engine._handle_order_filled.call_args  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
         filled_order = call_args[0][1]
         assert filled_order.filled_size == pytest.approx(191.4)
         assert "12345" not in engine.pending_orders
@@ -822,11 +822,11 @@ class TestPartialFillFullScenario:
 
         # TP/SL should have been re-placed
         # 2 cancels (old TP + old SL) + 2 placements (new TP + new SL)
-        assert engine.client.cancel_order.call_count == 2
-        assert engine._place_trigger_with_retry.call_count == 2
+        assert engine.client.cancel_order.call_count == 2  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
+        assert engine._place_trigger_with_retry.call_count == 2  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
 
         # Check new trigger orders use full size
-        for call in engine._place_trigger_with_retry.call_args_list:
+        for call in engine._place_trigger_with_retry.call_args_list:  # pyright: ignore[reportAttributeAccessIssue]  # test fixture (Mock)
             assert call[1]["size"] == pytest.approx(191.4)
 
         # Tracking updated

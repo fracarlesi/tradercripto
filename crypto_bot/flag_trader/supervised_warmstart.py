@@ -277,7 +277,7 @@ class SupervisedWarmStart:
                 "Dataset too small: %d samples < batch_size %d",
                 len(dataset), batch_size,
             )
-            return {"error": "dataset_too_small", "num_samples": float(len(dataset))}
+            return {"error": "dataset_too_small", "num_samples": float(len(dataset))}  # pyright: ignore[reportReturnType]  # torch/SDK typing
 
         # 2. Compute class weights
         class_weights = self._compute_class_weights(dataset).to(self.device)

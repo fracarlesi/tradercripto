@@ -381,7 +381,7 @@ class TestRegimeGracePeriod:
 
         await engine._handle_regime_change(_regime_message("BTC", "chaos"))
 
-        engine.client.close_position.assert_not_called()
+        engine.client.close_position.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture
         assert engine.active_positions["BTC"].status == PositionStatus.OPEN
 
     @pytest.mark.asyncio
@@ -396,7 +396,7 @@ class TestRegimeGracePeriod:
 
         await engine._handle_regime_change(_regime_message("BTC", "chaos"))
 
-        engine.client.close_position.assert_called_once_with("BTC")
+        engine.client.close_position.assert_called_once_with("BTC")  # pyright: ignore[reportAttributeAccessIssue]  # test fixture
         assert engine.active_positions["BTC"].exit_reason == "regime_change"
 
     @pytest.mark.asyncio
@@ -410,7 +410,7 @@ class TestRegimeGracePeriod:
 
         await engine._handle_regime_change(_regime_message("BTC", "range"))
 
-        engine.client.close_position.assert_called_once_with("BTC")
+        engine.client.close_position.assert_called_once_with("BTC")  # pyright: ignore[reportAttributeAccessIssue]  # test fixture
 
     @pytest.mark.asyncio
     async def test_same_regime_no_action_regardless_of_age(self) -> None:
@@ -423,7 +423,7 @@ class TestRegimeGracePeriod:
 
         await engine._handle_regime_change(_regime_message("BTC", "trend"))
 
-        engine.client.close_position.assert_not_called()
+        engine.client.close_position.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture
 
 
 # =============================================================================

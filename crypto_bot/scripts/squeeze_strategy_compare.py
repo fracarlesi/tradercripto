@@ -498,11 +498,11 @@ class SqueezeStrategyComparison:
                     all_candles_to_now = all_candles[: bar_idx + 1]
                     market_ctx = compute_market_context(all_candles_to_now, symbol=symbol)
 
-                    prompt = self.prompt_builder.build_prompt(
+                    prompt = self.prompt_builder.build_prompt(  # pyright: ignore[reportOptionalMemberAccess]  # torch/SDK typing
                         candles_prompt, portfolio, history, market_context=market_ctx,
                     )
 
-                    action_id, state_value, _log_prob, tp_pct, sl_pct = self.model.get_action(prompt)
+                    action_id, state_value, _log_prob, tp_pct, sl_pct = self.model.get_action(prompt)  # pyright: ignore[reportOptionalMemberAccess]  # torch/SDK typing
                     action_history.append(ACTION_NAMES[action_id])
 
                     if action_id == 1:  # HOLD

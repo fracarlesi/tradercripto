@@ -71,8 +71,8 @@ def _make_engine(entry_mode: str = "maker") -> ExecutionEngineService:
         maker_reprice_interval_seconds = 10
         maker_max_reprices = 6
 
-    _ExecConfig.entry_mode = entry_mode
-    engine._exec_config = _ExecConfig()
+    _ExecConfig.entry_mode = entry_mode  # pyright: ignore[reportAttributeAccessIssue]  # test fixture
+    engine._exec_config = _ExecConfig()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture
 
     class _RiskConfig:
         stop_loss_pct = 0.8
@@ -92,7 +92,7 @@ def _make_engine(entry_mode: str = "maker") -> ExecutionEngineService:
         stops = _StopsConfig()
         services = _ServicesConfig()
 
-    engine._bot_config = _BotConfig()
+    engine._bot_config = _BotConfig()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture
 
     return engine
 
@@ -138,14 +138,14 @@ def _orderbook(best_bid: float = 3000.0, best_ask: float = 3001.0) -> dict:
 async def test_buy_maker_posts_at_best_bid():
     """BUY maker order should be placed at best bid with Alo TIF."""
     engine = _make_engine(entry_mode="maker")
-    engine.client.get_orderbook.return_value = _orderbook(
+    engine.client.get_orderbook.return_value = _orderbook(  # pyright: ignore[reportFunctionMemberAccess]  # test fixture
         best_bid=3000.0, best_ask=3001.0,
     )
     order = _make_order(side="buy", price=3000.5)
 
     result = await engine._place_maker_order(order, is_buy=True)
 
-    engine.client.place_order.assert_called_once_with(
+    engine.client.place_order.assert_called_once_with(  # pyright: ignore[reportAttributeAccessIssue]  # test fixture
         symbol="ETH",
         is_buy=True,
         size=0.5,
@@ -169,14 +169,14 @@ async def test_buy_maker_posts_at_best_bid():
 async def test_sell_maker_posts_at_best_ask():
     """SELL maker order should be placed at best ask with Alo TIF."""
     engine = _make_engine(entry_mode="maker")
-    engine.client.get_orderbook.return_value = _orderbook(
+    engine.client.get_orderbook.return_value = _orderbook(  # pyright: ignore[reportFunctionMemberAccess]  # test fixture
         best_bid=3000.0, best_ask=3001.0,
     )
     order = _make_order(side="sell", price=3000.5)
 
     result = await engine._place_maker_order(order, is_buy=False)
 
-    engine.client.place_order.assert_called_once_with(
+    engine.client.place_order.assert_called_once_with(  # pyright: ignore[reportAttributeAccessIssue]  # test fixture
         symbol="ETH",
         is_buy=False,
         size=0.5,
@@ -205,7 +205,7 @@ async def test_taker_mode_uses_crossing_offset():
     result = await engine._place_order_on_exchange(order, signal)
 
     # Should use taker fallback (price * 1.001)
-    call_kwargs = engine.client.place_order.call_args.kwargs
+    call_kwargs = engine.client.place_order.call_args.kwargs  # pyright: ignore[reportAttributeAccessIssue]  # test fixture
     assert call_kwargs["price"] == pytest.approx(3000.0 * 1.001, rel=1e-6)
     assert call_kwargs["time_in_force"] == "Gtc"
 
@@ -230,10 +230,10 @@ async def test_reprice_when_price_moves():
     engine.pending_orders["10001"] = order
 
     # New orderbook: bid moved from 3000 to 3005 (0.17% > 0.01%)
-    engine.client.get_orderbook.return_value = _orderbook(
+    engine.client.get_orderbook.return_value = _orderbook(  # pyright: ignore[reportFunctionMemberAccess]  # test fixture
         best_bid=3005.0, best_ask=3006.0,
     )
-    engine.client.place_order.return_value = {
+    engine.client.place_order.return_value = {  # pyright: ignore[reportAttributeAccessIssue]  # test fixture
         "success": True,
         "orderId": "10002",
     }
@@ -241,8 +241,8 @@ async def test_reprice_when_price_moves():
     await engine._reprice_maker_orders()
 
     # Should have cancelled old order and placed new one
-    engine.client.cancel_order.assert_called_once_with("ETH", 10001)
-    engine.client.place_order.assert_called_once_with(
+    engine.client.cancel_order.assert_called_once_with("ETH", 10001)  # pyright: ignore[reportAttributeAccessIssue]  # test fixture
+    engine.client.place_order.assert_called_once_with(  # pyright: ignore[reportAttributeAccessIssue]  # test fixture
         symbol="ETH",
         is_buy=True,
         size=0.5,
@@ -277,15 +277,15 @@ async def test_no_reprice_when_price_stable():
     engine.pending_orders["10001"] = order
 
     # Price barely moved (3000.0 -> 3000.2 = 0.007% < 0.01%)
-    engine.client.get_orderbook.return_value = _orderbook(
+    engine.client.get_orderbook.return_value = _orderbook(  # pyright: ignore[reportFunctionMemberAccess]  # test fixture
         best_bid=3000.2, best_ask=3001.2,
     )
 
     await engine._reprice_maker_orders()
 
     # Should NOT cancel or re-place
-    engine.client.cancel_order.assert_not_called()
-    engine.client.place_order.assert_not_called()
+    engine.client.cancel_order.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture
+    engine.client.place_order.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture
     assert "10001" in engine.pending_orders
 
 
@@ -308,15 +308,15 @@ async def test_max_reprices_stops_repricing():
     order.submitted_at = datetime.now(timezone.utc) - timedelta(seconds=15)
     engine.pending_orders["10001"] = order
 
-    engine.client.get_orderbook.return_value = _orderbook(
+    engine.client.get_orderbook.return_value = _orderbook(  # pyright: ignore[reportFunctionMemberAccess]  # test fixture
         best_bid=3100.0, best_ask=3101.0,  # Big move
     )
 
     await engine._reprice_maker_orders()
 
     # Should NOT reprice — limit reached
-    engine.client.cancel_order.assert_not_called()
-    engine.client.place_order.assert_not_called()
+    engine.client.cancel_order.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture
+    engine.client.place_order.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # test fixture
 
 
 # =============================================================================
@@ -328,13 +328,13 @@ async def test_max_reprices_stops_repricing():
 async def test_empty_orderbook_fallback_to_taker():
     """Empty orderbook should trigger taker fallback."""
     engine = _make_engine(entry_mode="maker")
-    engine.client.get_orderbook.return_value = {"bids": [], "asks": []}
+    engine.client.get_orderbook.return_value = {"bids": [], "asks": []}  # pyright: ignore[reportFunctionMemberAccess]  # test fixture
     order = _make_order(side="buy", price=3000.0)
 
     result = await engine._place_maker_order(order, is_buy=True)
 
     # Should fall back to taker (price * 1.001, Gtc)
-    call_kwargs = engine.client.place_order.call_args.kwargs
+    call_kwargs = engine.client.place_order.call_args.kwargs  # pyright: ignore[reportAttributeAccessIssue]  # test fixture
     assert call_kwargs["time_in_force"] == "Gtc"
     assert call_kwargs["price"] == pytest.approx(3000.0 * 1.001, rel=1e-6)
     assert order.entry_mode == "taker"
@@ -349,11 +349,11 @@ async def test_empty_orderbook_fallback_to_taker():
 async def test_alo_rejection_fallback_to_taker():
     """Alo rejection (would cross spread) should trigger taker fallback."""
     engine = _make_engine(entry_mode="maker")
-    engine.client.get_orderbook.return_value = _orderbook(
+    engine.client.get_orderbook.return_value = _orderbook(  # pyright: ignore[reportFunctionMemberAccess]  # test fixture
         best_bid=3000.0, best_ask=3001.0,
     )
     # First call: Alo rejected; second call: taker succeeds
-    engine.client.place_order.side_effect = [
+    engine.client.place_order.side_effect = [  # pyright: ignore[reportAttributeAccessIssue]  # test fixture
         {"success": False},  # Alo rejected
         {"success": True, "orderId": "10002"},  # Taker fallback
     ]
@@ -361,9 +361,9 @@ async def test_alo_rejection_fallback_to_taker():
 
     result = await engine._place_maker_order(order, is_buy=True)
 
-    assert engine.client.place_order.call_count == 2
+    assert engine.client.place_order.call_count == 2  # pyright: ignore[reportAttributeAccessIssue]  # test fixture
     # Second call should be taker (Gtc)
-    second_call = engine.client.place_order.call_args_list[1].kwargs
+    second_call = engine.client.place_order.call_args_list[1].kwargs  # pyright: ignore[reportAttributeAccessIssue]  # test fixture
     assert second_call["time_in_force"] == "Gtc"
     assert result["success"] is True
     assert order.entry_mode == "taker"

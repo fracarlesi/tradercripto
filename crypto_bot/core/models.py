@@ -85,33 +85,33 @@ class MarketState(BaseModel):
     sma50: Decimal = Field(..., ge=0, description="SMA(50)")
 
     # Fast EMAs for momentum scalper strategy
-    ema9: Optional[Decimal] = Field(None, ge=0, description="EMA(9)")
-    ema21: Optional[Decimal] = Field(None, ge=0, description="EMA(21)")
+    ema9: Optional[Decimal] = Field(default=None, ge=0, description="EMA(9)")
+    ema21: Optional[Decimal] = Field(default=None, ge=0, description="EMA(21)")
 
     # EMA slopes (4-bar lookback, as fractional change)
     ema9_slope: Decimal = Field(default=Decimal("0"), description="EMA9 slope: (ema9 - ema9_4bars_ago) / ema9_4bars_ago")
     ema21_slope: Decimal = Field(default=Decimal("0"), description="EMA21 slope: (ema21 - ema21_4bars_ago) / ema21_4bars_ago")
 
     # Previous candle data for candlestick pattern detection
-    prev_open: Optional[Decimal] = Field(None, ge=0, description="Previous candle open")
-    prev_high: Optional[Decimal] = Field(None, ge=0, description="Previous candle high")
-    prev_low: Optional[Decimal] = Field(None, ge=0, description="Previous candle low")
-    prev_close: Optional[Decimal] = Field(None, ge=0, description="Previous candle close")
+    prev_open: Optional[Decimal] = Field(default=None, ge=0, description="Previous candle open")
+    prev_high: Optional[Decimal] = Field(default=None, ge=0, description="Previous candle high")
+    prev_low: Optional[Decimal] = Field(default=None, ge=0, description="Previous candle low")
+    prev_close: Optional[Decimal] = Field(default=None, ge=0, description="Previous candle close")
 
     # Candlestick pattern signals for entry confirmation
     bullish_engulfing: bool = Field(default=False, description="Bullish engulfing pattern detected")
     bearish_engulfing: bool = Field(default=False, description="Bearish engulfing pattern detected")
 
     # Volume metrics
-    volume_usd: Optional[Decimal] = Field(None, ge=0, description="Volume in USD (close * volume)")
-    volume_sma20: Optional[Decimal] = Field(None, ge=0, description="20-period SMA of volume")
-    volume_ratio: Optional[Decimal] = Field(None, ge=0, description="Current volume / SMA20 volume")
+    volume_usd: Optional[Decimal] = Field(default=None, ge=0, description="Volume in USD (close * volume)")
+    volume_sma20: Optional[Decimal] = Field(default=None, ge=0, description="20-period SMA of volume")
+    volume_ratio: Optional[Decimal] = Field(default=None, ge=0, description="Current volume / SMA20 volume")
 
     # Optional indicators
-    choppiness: Optional[Decimal] = Field(None, ge=0, le=100, description="Choppiness Index")
-    bb_upper: Optional[Decimal] = Field(None, ge=0, description="Bollinger upper band")
-    bb_lower: Optional[Decimal] = Field(None, ge=0, description="Bollinger lower band")
-    bb_mid: Optional[Decimal] = Field(None, ge=0, description="Bollinger middle band")
+    choppiness: Optional[Decimal] = Field(default=None, ge=0, le=100, description="Choppiness Index")
+    bb_upper: Optional[Decimal] = Field(default=None, ge=0, description="Bollinger upper band")
+    bb_lower: Optional[Decimal] = Field(default=None, ge=0, description="Bollinger lower band")
+    bb_mid: Optional[Decimal] = Field(default=None, ge=0, description="Bollinger middle band")
 
     # RSI slope (2-bar lookback: RSI[current] - RSI[2 bars ago])
     rsi_slope: Decimal = Field(default=Decimal("0"), description="RSI slope: RSI[i] - RSI[i-2]")
@@ -120,18 +120,18 @@ class MarketState(BaseModel):
     adx_slope: Decimal = Field(default=Decimal("0"), description="ADX slope: (adx[i] - adx[i-4]) / max(adx[i-4], 1.0)")
 
     # Multi-timeframe indicators (1h-equivalent computed from 15m bars)
-    rsi_1h: Optional[Decimal] = Field(None, ge=0, le=100, description="RSI(56) — 1h equivalent")
-    adx_1h: Optional[Decimal] = Field(None, ge=0, le=100, description="ADX(56) — 1h equivalent")
-    ema9_1h: Optional[Decimal] = Field(None, ge=0, description="EMA(36) — 1h EMA9 equivalent")
-    ema21_1h: Optional[Decimal] = Field(None, ge=0, description="EMA(84) — 1h EMA21 equivalent")
+    rsi_1h: Optional[Decimal] = Field(default=None, ge=0, le=100, description="RSI(56) — 1h equivalent")
+    adx_1h: Optional[Decimal] = Field(default=None, ge=0, le=100, description="ADX(56) — 1h equivalent")
+    ema9_1h: Optional[Decimal] = Field(default=None, ge=0, description="EMA(36) — 1h EMA9 equivalent")
+    ema21_1h: Optional[Decimal] = Field(default=None, ge=0, description="EMA(84) — 1h EMA21 equivalent")
 
     # ATR percentile rank (percentile of current ATR in last 100 bars, [0,1])
-    atr_percentile: Optional[Decimal] = Field(None, ge=0, le=1, description="ATR percentile rank in last 100 bars")
+    atr_percentile: Optional[Decimal] = Field(default=None, ge=0, le=1, description="ATR percentile rank in last 100 bars")
 
     # Exchange data (live only — used as ML feature)
-    funding_rate: Optional[Decimal] = Field(None, description="Current funding rate for symbol")
-    open_interest: Optional[Decimal] = Field(None, description="Current open interest in USD")
-    volume_24h: Optional[Decimal] = Field(None, ge=0, description="24h notional volume in USD")
+    funding_rate: Optional[Decimal] = Field(default=None, description="Current funding rate for symbol")
+    open_interest: Optional[Decimal] = Field(default=None, description="Current open interest in USD")
+    volume_24h: Optional[Decimal] = Field(default=None, ge=0, description="24h notional volume in USD")
 
     # Derived
     regime: Regime = Field(..., description="Detected market regime")
@@ -169,7 +169,7 @@ class Setup(BaseModel):
 
     # Indicators at setup time
     atr: Decimal = Field(..., ge=0)
-    atr_pct: Optional[Decimal] = Field(None, ge=0, description="ATR as % of price")
+    atr_pct: Optional[Decimal] = Field(default=None, ge=0, description="ATR as % of price")
     adx: Decimal = Field(..., ge=0, le=100)
     rsi: Decimal = Field(..., ge=0, le=100)
 
@@ -180,13 +180,13 @@ class Setup(BaseModel):
                                 description="Strategy confidence 0-1")
 
     # Model-predicted TP/SL (FLAG-Trader heads)
-    model_tp_pct: Optional[float] = Field(None, description="Model-predicted TP %")
-    model_sl_pct: Optional[float] = Field(None, description="Model-predicted SL %")
+    model_tp_pct: Optional[float] = Field(default=None, description="Model-predicted TP %")
+    model_sl_pct: Optional[float] = Field(default=None, description="Model-predicted SL %")
 
     # LLM veto (filled after veto check)
-    llm_approved: Optional[bool] = Field(None, description="LLM approval status")
-    llm_confidence: Optional[Decimal] = Field(None, ge=0, le=1)
-    llm_reason: Optional[str] = Field(None)
+    llm_approved: Optional[bool] = Field(default=None, description="LLM approval status")
+    llm_confidence: Optional[Decimal] = Field(default=None, ge=0, le=1)
+    llm_reason: Optional[str] = Field(default=None)
 
     # Entry context (for LLM exit evaluation)
     entry_reason: str = Field("", description="Why position was opened (e.g. squeeze_fire)")
@@ -230,7 +230,7 @@ class RiskParams(BaseModel):
 
     # Validation flags
     size_approved: bool = Field(default=True)
-    rejection_reason: Optional[str] = Field(None)
+    rejection_reason: Optional[str] = Field(default=None)
 
     class Config:
         json_encoders = {
@@ -268,11 +268,11 @@ class TradeIntent(BaseModel):
     risk_pct: Decimal = Field(..., ge=0, le=100)
 
     # Market context (for ATR-adaptive stops in execution engine)
-    atr_pct: Optional[Decimal] = Field(None, ge=0, description="ATR as % of price at entry")
+    atr_pct: Optional[Decimal] = Field(default=None, ge=0, description="ATR as % of price at entry")
 
     # Model-predicted TP/SL (FLAG-Trader heads) — passed through for R-based exits
-    model_tp_pct: Optional[float] = Field(None, description="Model-predicted TP %")
-    model_sl_pct: Optional[float] = Field(None, description="Model-predicted SL % (defines 1R)")
+    model_tp_pct: Optional[float] = Field(default=None, description="Model-predicted TP %")
+    model_sl_pct: Optional[float] = Field(default=None, description="Model-predicted SL % (defines 1R)")
 
     # Regime at entry (for regime-invalidation exits)
     regime: Optional[str] = Field(default=None, description="Regime when setup was created")
@@ -313,8 +313,8 @@ class LLMDecision(BaseModel):
     setup_type: SetupType = Field(...)
 
     # Outcome tracking (filled after trade closes)
-    trade_pnl: Optional[Decimal] = Field(None)
-    was_correct: Optional[bool] = Field(None)
+    trade_pnl: Optional[Decimal] = Field(default=None)
+    was_correct: Optional[bool] = Field(default=None)
 
     class Config:
         json_encoders = {
@@ -361,7 +361,7 @@ class Order(BaseModel):
     """Order model for execution tracking."""
 
     id: str = Field(..., description="Local order ID")
-    exchange_id: Optional[str] = Field(None, description="Exchange order ID")
+    exchange_id: Optional[str] = Field(default=None, description="Exchange order ID")
     intent_id: str = Field(..., description="TradeIntent ID")
 
     symbol: str = Field(...)
@@ -370,20 +370,20 @@ class Order(BaseModel):
 
     # Order details
     size: Decimal = Field(..., ge=0)
-    price: Optional[Decimal] = Field(None, ge=0)
+    price: Optional[Decimal] = Field(default=None, ge=0)
 
     # Status
     status: str = Field(default="pending")  # OrderStatus as string
     filled_size: Decimal = Field(default=Decimal("0"), ge=0)
-    filled_price: Optional[Decimal] = Field(None, ge=0)
+    filled_price: Optional[Decimal] = Field(default=None, ge=0)
 
     # Timestamps
     created_at: datetime = Field(...)
-    submitted_at: Optional[datetime] = Field(None)
-    filled_at: Optional[datetime] = Field(None)
+    submitted_at: Optional[datetime] = Field(default=None)
+    filled_at: Optional[datetime] = Field(default=None)
 
     # Execution quality
-    slippage_pct: Optional[Decimal] = Field(None)
+    slippage_pct: Optional[Decimal] = Field(default=None)
     fees: Decimal = Field(default=Decimal("0"))
 
     class Config:
@@ -440,9 +440,9 @@ class CooldownState(BaseModel):
     """
 
     active: bool = Field(default=False, description="Whether cooldown is active")
-    reason: Optional[CooldownReason] = Field(None, description="Reason for cooldown")
-    triggered_at: Optional[datetime] = Field(None, description="When cooldown was triggered")
-    cooldown_until: Optional[datetime] = Field(None, description="When cooldown expires")
+    reason: Optional[CooldownReason] = Field(default=None, description="Reason for cooldown")
+    triggered_at: Optional[datetime] = Field(default=None, description="When cooldown was triggered")
+    cooldown_until: Optional[datetime] = Field(default=None, description="When cooldown expires")
     trigger_details: dict = Field(default_factory=dict, description="Extra context about trigger")
 
     class Config:
@@ -539,7 +539,7 @@ class PerformanceMetrics(BaseModel):
 
     # Additional stats
     total_fees: Decimal = Field(default=Decimal("0"), description="Total fees paid")
-    avg_trade_duration_seconds: Optional[int] = Field(None, description="Average trade duration")
+    avg_trade_duration_seconds: Optional[int] = Field(default=None, description="Average trade duration")
     largest_win: Decimal = Field(default=Decimal("0"), description="Largest winning trade")
     largest_loss: Decimal = Field(default=Decimal("0"), description="Largest losing trade")
 

@@ -33,10 +33,10 @@ def env(fake_candles: np.ndarray) -> HyperliquidTradingEnv:
 
 
 def test_env_creation(env: HyperliquidTradingEnv) -> None:
-    assert env.action_space.n == 3
-    assert "candles" in env.observation_space.spaces
-    assert "portfolio" in env.observation_space.spaces
-    assert "history" in env.observation_space.spaces
+    assert env.action_space.n == 3  # pyright: ignore[reportAttributeAccessIssue]  # test fixture
+    assert "candles" in env.observation_space.spaces  # pyright: ignore[reportAttributeAccessIssue]  # test fixture
+    assert "portfolio" in env.observation_space.spaces  # pyright: ignore[reportAttributeAccessIssue]  # test fixture
+    assert "history" in env.observation_space.spaces  # pyright: ignore[reportAttributeAccessIssue]  # test fixture
 
 
 def test_reset(env: HyperliquidTradingEnv) -> None:

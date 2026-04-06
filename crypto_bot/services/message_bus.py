@@ -44,48 +44,14 @@ logger = logging.getLogger(__name__)
 # Topics
 # =============================================================================
 
-class Topic(str, Enum):
-    """Available message topics for pub/sub routing.
+# Topic is canonically defined in crypto_bot.core.enums.
+# We re-export it here so existing imports `from .message_bus import Topic`
+# keep working AND so type checkers see a single Topic class everywhere
+# (previously there were two structurally identical but distinct enums,
+# which caused widespread reportArgumentType errors).
+from ..core.enums import Topic as _CoreTopic
 
-    Conservative refactor topics:
-    - MARKET_STATE: OHLCV + indicators per asset (replaces MARKET_DATA for new flow)
-    - REGIME: TREND/RANGE/CHAOS detection
-    - SETUPS: Trade setup candidates
-    - TRADE_INTENT: Sized and approved trades
-    - ORDERS: Orders sent to exchange
-    - FILLS: Executed orders
-    - RISK_ALERTS: Kill-switch, warnings
-    - METRICS: Performance data
-
-    Legacy topics (kept for backward compatibility):
-    - MARKET_DATA: Raw market data (scanner output)
-    - OPPORTUNITIES: Ranked opportunities
-    - SIGNALS: Strategy signals
-    - SIZED_SIGNALS: Sized signals
-    - CONFIG_UPDATES: Configuration updates
-    """
-
-    # New topics (conservative refactor)
-    MARKET_STATE = "market_state"
-    REGIME = "regime"
-    SETUPS = "setups"
-    TRADE_INTENT = "trade_intent"
-    RISK_ALERTS = "risk_alerts"
-
-    # Core topics (both old and new)
-    ORDERS = "orders"
-    FILLS = "fills"
-    METRICS = "metrics"
-
-    # Legacy topics (backward compatibility)
-    MARKET_DATA = "market_data"
-    OPPORTUNITIES = "opportunities"
-    SIGNALS = "signals"
-    SIZED_SIGNALS = "sized_signals"
-    CONFIG_UPDATES = "config_updates"
-
-    def __str__(self) -> str:
-        return self.value
+Topic = _CoreTopic
 
 
 # =============================================================================

@@ -9,11 +9,15 @@ Tests both small (576) and large (2560) hidden sizes.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
 import torch.nn as nn
+
+if TYPE_CHECKING:
+    from crypto_bot.flag_trader.model import FlagTraderModel
 
 
 class FakeLlamaLayer(nn.Module):
@@ -208,7 +212,7 @@ class TestGetAction:
     """Test action sampling from prompt."""
 
     def test_get_action_returns_valid(self, model: "FlagTraderModel") -> None:
-        action_id, value, log_prob, tp_pct, sl_pct = model.get_action("fake prompt")
+        action_id, value, log_prob, tp_pct, sl_pct = model.get_action("fake prompt")  # pyright: ignore[reportAssignmentType]  # test fixture (torch typing)
         assert action_id in (0, 1, 2)
         assert isinstance(value, float)
         assert isinstance(log_prob, torch.Tensor)
@@ -271,12 +275,12 @@ class TestSaveLoad:
         model.save_trainable(ckpt)
         assert ckpt.exists()
 
-        original_weight = model.policy_head[0].weight.data.clone()
-        model.policy_head[0].weight.data.fill_(999.0)
-        assert not torch.equal(model.policy_head[0].weight.data, original_weight)
+        original_weight = model.policy_head[0].weight.data.clone()  # pyright: ignore[reportCallIssue]  # test fixture (torch typing)
+        model.policy_head[0].weight.data.fill_(999.0)  # pyright: ignore[reportCallIssue]  # test fixture (torch typing)
+        assert not torch.equal(model.policy_head[0].weight.data, original_weight)  # pyright: ignore[reportArgumentType]  # test fixture (torch typing)
 
         model.load_trainable(ckpt)
-        assert torch.equal(model.policy_head[0].weight.data, original_weight)
+        assert torch.equal(model.policy_head[0].weight.data, original_weight)  # pyright: ignore[reportArgumentType]  # test fixture (torch typing)
 
 
 class TestParseActionThinking:

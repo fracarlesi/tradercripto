@@ -11,6 +11,7 @@ Based on FLAG-Trader paper Section 4.2.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -124,27 +125,29 @@ class FlagTraderModel(nn.Module):
         - model.transformer.h (GPT-2, GPT-Neo)
         - model.model.decoder.layers (OPT)
         """
-        if hasattr(self.llm, "model") and hasattr(self.llm.model, "layers"):
-            return self.llm.model.layers
-        elif hasattr(self.llm, "transformer") and hasattr(self.llm.transformer, "h"):
-            return self.llm.transformer.h
+        # SDK untyped: Hugging Face model architectures expose layers in
+        # different attribute paths; we probe at runtime.
+        llm: Any = self.llm
+        if hasattr(llm, "model") and hasattr(llm.model, "layers"):
+            return llm.model.layers
+        elif hasattr(llm, "transformer") and hasattr(llm.transformer, "h"):
+            return llm.transformer.h
         elif (
-            hasattr(self.llm, "model")
-            and hasattr(self.llm.model, "decoder")
-            and hasattr(self.llm.model.decoder, "layers")
+            hasattr(llm, "model")
+            and hasattr(llm.model, "decoder")
+            and hasattr(llm.model.decoder, "layers")
         ):
-            return self.llm.model.decoder.layers
+            return llm.model.decoder.layers
         else:
             return []
 
     def _get_embeddings(self) -> nn.Module | None:
         """Auto-detect embedding layer from various architectures."""
-        if hasattr(self.llm, "model") and hasattr(self.llm.model, "embed_tokens"):
-            return self.llm.model.embed_tokens
-        elif hasattr(self.llm, "transformer") and hasattr(
-            self.llm.transformer, "wte"
-        ):
-            return self.llm.transformer.wte
+        llm: Any = self.llm
+        if hasattr(llm, "model") and hasattr(llm.model, "embed_tokens"):
+            return llm.model.embed_tokens
+        elif hasattr(llm, "transformer") and hasattr(llm.transformer, "wte"):
+            return llm.transformer.wte
         return None
 
     def _get_inner_model(self) -> nn.Module:
@@ -152,12 +155,13 @@ class FlagTraderModel(nn.Module):
 
         Used for forward pass to get hidden states.
         """
-        if hasattr(self.llm, "model"):
-            return self.llm.model
-        elif hasattr(self.llm, "transformer"):
-            return self.llm.transformer
+        llm: Any = self.llm
+        if hasattr(llm, "model"):
+            return llm.model
+        elif hasattr(llm, "transformer"):
+            return llm.transformer
         else:
-            return self.llm
+            return llm
 
     def _freeze_layers(self, freeze_pct: float) -> None:
         """Freeze the bottom freeze_pct of transformer layers."""

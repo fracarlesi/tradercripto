@@ -220,7 +220,7 @@ class PPOTrainer:
         for _ in range(num_steps):
             prompt = self._obs_to_prompt(obs, env=env)
             result = self.model.get_action(prompt, return_tokens=True)
-            action, value, log_prob, tp_pct, sl_pct, input_ids, attention_mask = result
+            action, value, log_prob, tp_pct, sl_pct, input_ids, attention_mask = result  # pyright: ignore[reportAssignmentType]  # torch/SDK typing
 
             # Set TP/SL on env before step
             env.set_tp_sl(tp_pct, sl_pct)
@@ -316,7 +316,7 @@ class PPOTrainer:
 
                 prompt = self._obs_to_prompt(obs, env=env)
                 result = self.model.get_action(prompt, return_tokens=True)
-                action, value, log_prob, tp_pct, sl_pct, input_ids, attention_mask = result
+                action, value, log_prob, tp_pct, sl_pct, input_ids, attention_mask = result  # pyright: ignore[reportAssignmentType]  # torch/SDK typing
 
                 env.set_tp_sl(tp_pct, sl_pct)
                 next_obs, reward, terminated, truncated, info = env.step(action)
@@ -474,7 +474,7 @@ class PPOTrainer:
                 b_returns = returns[batch_idx].to(self.model.device)
 
                 # Forward + loss computation (all under AMP if CUDA)
-                amp_ctx = torch.amp.autocast("cuda", dtype=torch.bfloat16) if use_amp else contextlib.nullcontext()
+                amp_ctx = torch.amp.autocast("cuda", dtype=torch.bfloat16) if use_amp else contextlib.nullcontext()  # pyright: ignore[reportPrivateImportUsage]  # torch/SDK typing
                 with amp_ctx:
                     new_log_probs, new_values, entropy, pred_tp, pred_sl = self.model.evaluate_actions(
                         b_input_ids, b_attention_mask, b_actions
@@ -635,7 +635,7 @@ class PPOTrainer:
 
             while True:
                 prompt = self._obs_to_prompt(obs, env=env)
-                action, _, _, tp_pct, sl_pct = self.model.get_action(prompt)
+                action, _, _, tp_pct, sl_pct = self.model.get_action(prompt)  # pyright: ignore[reportAssignmentType]  # torch/SDK typing
                 env.set_tp_sl(tp_pct, sl_pct)
                 obs, reward, terminated, truncated, info = env.step(action)
 

@@ -154,7 +154,7 @@ class RiskManagerService(BaseService):
             loop_interval_seconds=60,  # Check every minute
         )
 
-        self._config = config or RiskConfig()
+        self._risk_config = config or RiskConfig()
         self._client = client  # HyperliquidClient for equity updates
         self._telegram = telegram  # TelegramService for alerts
         self._performance_monitor = performance_monitor  # For cooldown trade history
@@ -200,11 +200,11 @@ class RiskManagerService(BaseService):
 
         self._logger.info(
             "RiskManagerService initialized: risk=%.1f-%.1f%%, leverage=%d-%dx, max_exposure=%.0f%%",
-            self._config.min_per_trade_pct,
-            self._config.max_per_trade_pct,
-            self._config.min_leverage,
-            self._config.max_leverage,
-            self._config.max_exposure_pct,
+            self._risk_config.min_per_trade_pct,
+            self._risk_config.max_per_trade_pct,
+            self._risk_config.min_leverage,
+            self._risk_config.max_leverage,
+            self._risk_config.max_exposure_pct,
         )
 
     # =========================================================================
@@ -508,7 +508,7 @@ class RiskManagerService(BaseService):
             position_size = risk_amount / (stop_distance_pct * entry_price)
         """
         equity = self._current_equity
-        cfg = self._config
+        cfg = self._risk_config
 
         def _reject(reason: str) -> RiskParams:
             """Create a rejection RiskParams."""
@@ -752,7 +752,7 @@ class RiskManagerService(BaseService):
             model_sl_pct=setup.model_sl_pct,
             regime=setup.regime.value if setup.regime else None,
             prefer_limit=True,
-            max_slippage_pct=Decimal(str(self._config.max_slippage_pct)),
+            max_slippage_pct=Decimal(str(self._risk_config.max_slippage_pct)),
             correlation_id=getattr(setup, "correlation_id", None),
         )
 
@@ -775,7 +775,7 @@ class RiskManagerService(BaseService):
             intent_data["leverage_used"] = leverage
         await self.publish(Topic.TRADE_INTENT, intent_data)
 
-        effective_risk = float(intent.notional_value) * float(self._config.stop_loss_pct) / 100
+        effective_risk = float(intent.notional_value) * float(self._risk_config.stop_loss_pct) / 100
         self._logger.info(
             "RISK APPROVED | cid=%s | %s %s | size=%.4f | notional=$%.2f | risk_budget=$%.2f | effective_risk=$%.2f | reason=approved",
             getattr(intent, "correlation_id", None) or "-",
@@ -1253,8 +1253,8 @@ class RiskManagerService(BaseService):
             "equity": float(self._current_equity),
             "open_positions": len(self._open_positions),
             "total_exposure_pct": float(self._get_total_exposure_pct()),
-            "risk_per_trade_pct_range": f"{self._config.min_per_trade_pct}-{self._config.max_per_trade_pct}%",
-            "leverage_range": f"{self._config.min_leverage}-{self._config.max_leverage}x",
+            "risk_per_trade_pct_range": f"{self._risk_config.min_per_trade_pct}-{self._risk_config.max_per_trade_pct}%",
+            "leverage_range": f"{self._risk_config.min_leverage}-{self._risk_config.max_leverage}x",
             "cooldown": cooldown_info,
         }
 

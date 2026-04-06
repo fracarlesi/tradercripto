@@ -41,7 +41,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Any, Callable, Optional, TypeVar
+from typing import Any, Callable, Coroutine, Optional, TypeVar
 
 from eth_account import Account
 from hyperliquid.exchange import Exchange
@@ -134,10 +134,10 @@ def with_retry(
         exponential_base: Base for exponential backoff
         retryable_exceptions: Exceptions that trigger retry
     """
-    def decorator(func: Callable[..., T]) -> Callable[..., T]:
+    def decorator(func: Callable[..., Coroutine[Any, Any, T]]) -> Callable[..., Coroutine[Any, Any, T]]:
         @functools.wraps(func)
-        async def wrapper(*args, **kwargs) -> T:
-            last_exception = None
+        async def wrapper(*args: Any, **kwargs: Any) -> T:
+            last_exception: Optional[BaseException] = None
 
             for attempt in range(max_attempts):
                 try:
@@ -161,6 +161,7 @@ def with_retry(
                     else:
                         logger.error(f"{func.__name__} failed after {max_attempts} attempts: {e}")
 
+            assert last_exception is not None
             raise last_exception
 
         return wrapper
@@ -227,7 +228,22 @@ class HyperliquidClient:
         """Get the wallet address."""
         if not self._account:
             raise ConnectionError("Client not connected")
-        return self._account.address
+        return self._account.address  # pyright: ignore[reportAttributeAccessIssue]  # SDK untyped: LocalAccount.address
+
+    # Internal accessors that assert connection — used to keep type checker
+    # happy without spraying `assert` calls inside every lambda. After
+    # connect() succeeds these are guaranteed non-None.
+    def _i(self) -> Info:
+        assert self._info is not None, "Client not connected"
+        return self._info
+
+    def _x(self) -> Exchange:
+        assert self._exchange is not None, "Client not connected"
+        return self._exchange
+
+    def _addr(self) -> str:
+        assert self._account is not None, "Client not connected"
+        return self._account.address  # pyright: ignore[reportAttributeAccessIssue]  # SDK untyped: LocalAccount.address
 
     async def connect(self) -> None:
         """
@@ -252,16 +268,17 @@ class HyperliquidClient:
         try:
             # Create account from private key
             self._account = Account.from_key(self._private_key)
-            logger.info(f"Wallet address: {self._account.address}")
+            account_address: str = self._account.address  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # SDK untyped: LocalAccount.address
+            logger.info(f"Wallet address: {account_address}")
 
             # Override wallet address if derived
             if not self._wallet_address:
-                self._wallet_address = self._account.address
+                self._wallet_address = account_address
 
             # Initialize clients
             # Note: SDK clients are synchronous but we wrap them in async
             self._info = Info(self._base_url, skip_ws=True)
-            self._exchange = Exchange(self._account, self._base_url)
+            self._exchange = Exchange(self._account, self._base_url)  # pyright: ignore[reportArgumentType]  # SDK untyped: LocalAccount
 
             # Verify connection
             await self._verify_connection()
@@ -289,7 +306,7 @@ class HyperliquidClient:
         """Verify connection by fetching account state."""
         try:
             user_state = await self._run_sync(
-                lambda: self._info.user_state(self._account.address)
+                lambda: self._i().user_state(self._addr())
             )
             margin = float(user_state.get("marginSummary", {}).get("accountValue", 0))
             logger.info(f"Account value: ${margin:.2f}")
@@ -330,16 +347,16 @@ class HyperliquidClient:
             return cached
 
         async with self._rate_limiter.info:
-            meta = await self._run_sync(lambda: self._info.meta())
+            meta = await self._run_sync(lambda: self._i().meta())
 
         markets = meta.get("universe", [])
 
         # Update symbol info cache
         for market in markets:
-            self._symbol_info[market["name"]] = market
+            self._symbol_info[market["name"]] = market  # pyright: ignore[reportArgumentType]  # SDK untyped: AssetInfo
 
         self._cache.set("markets", markets, ttl=300.0)
-        return markets
+        return markets  # pyright: ignore[reportReturnType]  # SDK untyped: list[AssetInfo]
 
     @with_retry(max_attempts=3)
     async def get_all_mids(self) -> dict[str, float]:
@@ -350,7 +367,7 @@ class HyperliquidClient:
         """
         self._ensure_connected()
         async with self._rate_limiter.info:
-            raw = await self._run_sync(lambda: self._info.all_mids())
+            raw = await self._run_sync(lambda: self._i().all_mids())
         return {symbol: float(price) for symbol, price in raw.items()}
 
     @with_retry(max_attempts=3)
@@ -373,14 +390,14 @@ class HyperliquidClient:
         self._ensure_connected()
 
         async with self._rate_limiter.info:
-            all_mids = await self._run_sync(lambda: self._info.all_mids())
+            all_mids = await self._run_sync(lambda: self._i().all_mids())
 
         if symbol not in all_mids:
             raise SymbolNotFoundError(symbol)
 
         # Get additional data from meta_and_asset_ctxs
         async with self._rate_limiter.info:
-            ctx = await self._run_sync(lambda: self._info.meta_and_asset_ctxs())
+            ctx = await self._run_sync(lambda: self._i().meta_and_asset_ctxs())
 
         # Find context for symbol
         asset_ctx = None
@@ -417,7 +434,7 @@ class HyperliquidClient:
             return cached
 
         async with self._rate_limiter.info:
-            ctx = await self._run_sync(lambda: self._info.meta_and_asset_ctxs())
+            ctx = await self._run_sync(lambda: self._i().meta_and_asset_ctxs())
 
         result = {}
         meta = ctx[0] if len(ctx) > 0 else {}
@@ -493,7 +510,7 @@ class HyperliquidClient:
 
         async with self._rate_limiter.info:
             candles = await self._run_sync(
-                lambda: self._info.candles_snapshot(symbol, interval, start_time, end_time)
+                lambda: self._i().candles_snapshot(symbol, interval, start_time, end_time)
             )
 
         return [
@@ -526,7 +543,7 @@ class HyperliquidClient:
         self._ensure_connected()
 
         async with self._rate_limiter.info:
-            l2 = await self._run_sync(lambda: self._info.l2_snapshot(symbol))
+            l2 = await self._run_sync(lambda: self._i().l2_snapshot(symbol))
 
         return {
             "bids": [[float(p["px"]), float(p["sz"])] for p in l2.get("levels", [[]])[0][:depth]],
@@ -552,7 +569,7 @@ class HyperliquidClient:
             self._ensure_connected()
 
             async with self._rate_limiter.info:
-                l2 = await self._run_sync(lambda: self._info.l2_snapshot(symbol))
+                l2 = await self._run_sync(lambda: self._i().l2_snapshot(symbol))
 
             levels = l2.get("levels", [[], []])
             bids = levels[0] if len(levels) > 0 else []
@@ -598,7 +615,7 @@ class HyperliquidClient:
 
         async with self._rate_limiter.info:
             user_state = await self._run_sync(
-                lambda: self._info.user_state(self._account.address)
+                lambda: self._i().user_state(self._addr())
             )
 
         margin_summary = user_state.get("marginSummary", {})
@@ -674,7 +691,7 @@ class HyperliquidClient:
 
         async with self._rate_limiter.info:
             orders = await self._run_sync(
-                lambda: self._info.open_orders(self._account.address)
+                lambda: self._i().open_orders(self._addr())
             )
 
         return [
@@ -714,7 +731,7 @@ class HyperliquidClient:
 
         async with self._rate_limiter.info:
             fills = await self._run_sync(
-                lambda: self._info.user_fills(self._account.address)
+                lambda: self._i().user_fills(self._addr())
             )
 
         result = []
@@ -798,22 +815,35 @@ class HyperliquidClient:
             async with self._rate_limiter.orders:
                 if order_type.lower() == "market":
                     result = await self._run_sync(
-                        lambda: self._exchange.market_open(
+                        lambda: self._x().market_open(
                             symbol, is_buy, size, price, slippage
                         )
                     )
                 else:
+                    # Limit order requires an explicit price
+                    if price is None:
+                        raise InvalidOrderError(
+                            "Limit order requires a price",
+                            symbol=symbol,
+                        )
+                    limit_price: float = price
                     # Build order
                     order = {
                         "a": self._get_asset_index(symbol),
                         "b": is_buy,
-                        "p": str(price),
+                        "p": str(limit_price),
                         "s": str(size),
                         "r": reduce_only,
                         "t": {"limit": {"tif": time_in_force}},
                     }
+                    # SDK untyped: order_type param accepts dict at runtime
+                    _order_type_arg: Any = {"limit": {"tif": time_in_force}}
                     result = await self._run_sync(
-                        lambda: self._exchange.order(symbol, is_buy, size, price, {"limit": {"tif": time_in_force}}, reduce_only=reduce_only)
+                        lambda: self._x().order(
+                            symbol, is_buy, size, limit_price,
+                            _order_type_arg,
+                            reduce_only=reduce_only,
+                        )
                     )
 
             return self._parse_order_result(result, is_market=(order_type.lower() == "market"))
@@ -895,14 +925,16 @@ class HyperliquidClient:
                     }
                 }
 
+                # SDK untyped: order_type param accepts dict at runtime
+                _trigger_order_type: Any = order_type
                 result = await self._run_sync(
-                    lambda: self._exchange.order(
+                    lambda: self._x().order(
                         symbol,
                         is_buy,
                         size,
                         order_price,
-                        order_type,
-                        reduce_only=reduce_only
+                        _trigger_order_type,
+                        reduce_only=reduce_only,
                     )
                 )
 
@@ -939,7 +971,7 @@ class HyperliquidClient:
         try:
             async with self._rate_limiter.orders:
                 result = await self._run_sync(
-                    lambda: self._exchange.cancel(symbol, order_id)
+                    lambda: self._x().cancel(symbol, order_id)
                 )
 
             success = result.get("status") == "ok"
@@ -1024,7 +1056,7 @@ class HyperliquidClient:
         try:
             async with self._rate_limiter.orders:
                 result = await self._run_sync(
-                    lambda: self._exchange.update_leverage(leverage, symbol)
+                    lambda: self._x().update_leverage(leverage, symbol)
                 )
 
             success = result.get("status") == "ok"
@@ -1069,7 +1101,7 @@ class HyperliquidClient:
         try:
             async with self._rate_limiter.orders:
                 result = await self._run_sync(
-                    lambda: self._exchange.market_close(symbol, position["size"], slippage=slippage)
+                    lambda: self._x().market_close(symbol, position["size"], slippage=slippage)
                 )
 
             return self._parse_order_result(result, is_market=True)
