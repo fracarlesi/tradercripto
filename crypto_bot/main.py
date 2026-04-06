@@ -876,19 +876,42 @@ class ConservativeBot:
                     pnl_pct = 0.0
 
                 # Anti-churn: skip if position too young
+                # FAIL-SAFE: when in doubt about age, DO NOT close.
                 opened_at = pos.get("opened_at")
-                if opened_at:
-                    if isinstance(opened_at, str):
-                        from datetime import datetime as _dt
-                        opened_at = _dt.fromisoformat(opened_at)
-                    age_minutes = (datetime.now(timezone.utc) - opened_at).total_seconds() / 60
-                    min_hold = self.config.flag_trader_config.get("min_hold_minutes", 30)
-                    if age_minutes < min_hold:
-                        logger.info(
-                            "FLAG-Trader EXIT SKIPPED | %s %s too young (%.1f min < %d min)",
-                            side.upper(), symbol, age_minutes, min_hold,
-                        )
-                        continue
+
+                # Fallback to execution_engine's opened_at if risk_manager hasn't
+                # populated it yet (race window between fill handler and metadata setter).
+                if opened_at is None:
+                    exec_engine_age = self._services.get("execution")
+                    if exec_engine_age:
+                        exec_pos_age = getattr(exec_engine_age, 'active_positions', {}).get(symbol)
+                        if exec_pos_age and getattr(exec_pos_age, 'opened_at', None) is not None:
+                            opened_at = exec_pos_age.opened_at
+                            logger.debug(
+                                "FLAG-Trader EXIT | %s opened_at from execution_engine fallback: %s",
+                                symbol, opened_at,
+                            )
+
+                if opened_at is None:
+                    # Race: position just opened, metadata not yet populated anywhere.
+                    # Default to "too young" to be safe — anti-churning protection.
+                    logger.info(
+                        "FLAG-Trader EXIT SKIPPED | %s %s opened_at not yet populated (race window after fill)",
+                        side.upper(), symbol,
+                    )
+                    continue
+
+                if isinstance(opened_at, str):
+                    from datetime import datetime as _dt
+                    opened_at = _dt.fromisoformat(opened_at)
+                age_minutes = (datetime.now(timezone.utc) - opened_at).total_seconds() / 60
+                min_hold = self.config.flag_trader_config.get("min_hold_minutes", 30)
+                if age_minutes < min_hold:
+                    logger.info(
+                        "FLAG-Trader EXIT SKIPPED | %s %s too young (%.1f min < %d min)",
+                        side.upper(), symbol, age_minutes, min_hold,
+                    )
+                    continue
 
                 # Build entry context for the LLM prompt
                 entry_context = {}
