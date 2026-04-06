@@ -1594,23 +1594,121 @@ class ExecutionEngineService(BaseService):
                     return
 
             elif len(reduce_only_orders) == 1:
-                # Recover the single order's price before placing the missing one
+                # Recover the single order's price and place ONLY the missing
+                # side (TP or SL). Previously this branch fell through to the
+                # fresh-place code below, which re-placed BOTH orders and
+                # silently duplicated whichever side already existed on the
+                # exchange. See PR fix/duplicate-orders-fall-through.
                 single = reduce_only_orders[0]
                 single_price = float(single.get("limitPx", single.get("price", 0)))
-                tp_orders, sl_orders = self._classify_tp_sl_orders(reduce_only_orders, position)
+                tp_orders, sl_orders = self._classify_tp_sl_orders(
+                    reduce_only_orders, position
+                )
+
+                # Default percentages — both > 0 here because the function is
+                # gated on `tp_sl_enforced` (see top of method).
+                tp_pct = self._bot_config.risk.take_profit_pct / 100
+                sl_pct = self._bot_config.risk.stop_loss_pct / 100
+
+                missing_side: str = ""  # "tp" or "sl"
+                missing_price: float = 0.0
+                paired_tp: float = 0.0
+                paired_sl: float = 0.0
                 if tp_orders:
+                    # Existing order is TP -> need to place SL
                     position.tp_price = single_price
                     position.tp_order_id = str(single.get("orderId", ""))
-                    self._logger.info("%s: recovered single TP order price=%.6f", symbol, single_price)
+                    self._logger.info(
+                        "%s: recovered single TP order price=%.6f, will place missing SL",
+                        symbol, single_price,
+                    )
+                    missing_side = "sl"
+                    missing_price = (
+                        entry_price * (1 - sl_pct) if is_long
+                        else entry_price * (1 + sl_pct)
+                    )
+                    paired_tp = single_price
+                    paired_sl = missing_price
                 elif sl_orders:
+                    # Existing order is SL -> need to place TP
                     position.sl_price = single_price
                     position.sl_order_id = str(single.get("orderId", ""))
-                    self._logger.info("%s: recovered single SL order price=%.6f", symbol, single_price)
-                # Only 1 order — need to place the missing one
-                self._logger.warning(
-                    "%s has only 1 reduce-only order — will place missing TP or SL",
-                    symbol,
-                )
+                    self._logger.info(
+                        "%s: recovered single SL order price=%.6f, will place missing TP",
+                        symbol, single_price,
+                    )
+                    missing_side = "tp"
+                    missing_price = (
+                        entry_price * (1 + tp_pct) if is_long
+                        else entry_price * (1 - tp_pct)
+                    )
+                    paired_tp = missing_price
+                    paired_sl = single_price
+                else:
+                    # _classify_tp_sl_orders returned both empty — defensive
+                    # fallback. Treat as "no orders" and let the fresh-place
+                    # code below run (this matches pre-fix behaviour for an
+                    # edge case that should not occur in practice).
+                    self._logger.warning(
+                        "%s: single reduce-only order could not be classified "
+                        "as TP or SL — falling through to fresh placement",
+                        symbol,
+                    )
+                    missing_side = ""
+
+                if missing_side:
+                    # Validate the *paired* TP/SL distances before placing.
+                    if not self._validate_stop_distance(
+                        entry_price, paired_tp, paired_sl, symbol
+                    ):
+                        self._logger.error(
+                            "%s: missing %s distance invalid after rounding — "
+                            "leaving lone existing order in place, NOT duplicating",
+                            symbol, missing_side.upper(),
+                        )
+                        return
+
+                    try:
+                        if missing_side == "tp":
+                            result = await self._place_trigger_with_retry(
+                                symbol=symbol,
+                                is_buy=not is_long,
+                                size=size,
+                                trigger_price=missing_price,
+                                tpsl="tp",
+                                limit_price=missing_price,
+                            )
+                            position.tp_order_id = result.get("orderId")
+                            position.tp_price = missing_price
+                            self._logger.info(
+                                "%s: placed missing TP @ %.4f (%s)",
+                                symbol, missing_price, position.tp_order_id,
+                            )
+                        else:
+                            result = await self._place_trigger_with_retry(
+                                symbol=symbol,
+                                is_buy=not is_long,
+                                size=size,
+                                trigger_price=missing_price,
+                                tpsl="sl",
+                            )
+                            position.sl_order_id = result.get("orderId")
+                            position.sl_price = missing_price
+                            self._logger.info(
+                                "%s: placed missing SL @ %.4f (%s)",
+                                symbol, missing_price, position.sl_order_id,
+                            )
+                        self._tp_sl_confirmed.add(symbol)
+                        self._tp_sl_placed_size[symbol] = float(size)
+                    except Exception as e:
+                        self._logger.error(
+                            "%s: failed to place missing %s after retries: %s — "
+                            "NOT falling through to avoid duplicating existing order",
+                            symbol, missing_side.upper(), e,
+                        )
+                    # IMPORTANT: return regardless of success to prevent the
+                    # fresh-place code below from duplicating the existing order.
+                    return
 
         except Exception as e:
             self._logger.warning("Could not check existing orders for %s: %s", symbol, e)
