@@ -497,9 +497,17 @@ class ConservativeBot:
         model.eval()  # Set to inference mode
         prompt_builder = PromptBuilder(candle_window=ft_cfg.candle_window)
 
-        # Trade logger for retraining data
-        self._trade_logger = FlagTradeLogger(log_dir=Path("data/trade_logs"))
-        logger.info("Trade logger initialized: %s", self._trade_logger.log_dir)
+        # Trade logger for retraining data.
+        # Prefer HLQUANTBOT_DATA_DIR (set in docker-compose to /data/hlquantbot)
+        # over cwd-relative default so decisions/outcomes always land in a known
+        # absolute path regardless of where the process is launched.
+        _data_dir_env = os.environ.get("HLQUANTBOT_DATA_DIR")
+        if _data_dir_env:
+            _trade_log_dir = Path(_data_dir_env) / "trade_logs"
+        else:
+            _trade_log_dir = Path("data/trade_logs")
+        self._trade_logger = FlagTradeLogger(log_dir=_trade_log_dir)
+        logger.info("Trade logger initialized: %s", self._trade_logger.log_dir.resolve())
 
         self._flag_agent = FlagTraderAgent(
             config=ft_cfg,
@@ -1391,15 +1399,19 @@ class ConservativeBot:
             except (ValueError, TypeError):
                 pass
 
-        self._trade_logger.update_outcome(
-            symbol=symbol,
-            entry_price=float(payload.get("entry_price", 0)),
-            exit_price=float(payload.get("exit_price", 0)),
-            pnl_usd=float(payload.get("realized_pnl", 0)),
-            pnl_pct=float(payload.get("pnl_pct", 0)),
-            exit_reason=payload.get("exit_reason", "unknown"),
-            hold_duration_minutes=hold_minutes,
-        )
+        try:
+            self._trade_logger.log_outcome(
+                symbol=symbol,
+                entry_price=float(payload.get("entry_price", 0)),
+                exit_price=float(payload.get("exit_price", 0)),
+                pnl_usd=float(payload.get("realized_pnl", 0)),
+                pnl_pct=float(payload.get("pnl_pct", 0)),
+                exit_reason=payload.get("exit_reason") or "unknown",
+                hold_duration_minutes=hold_minutes,
+                side=payload.get("side"),
+            )
+        except Exception:
+            logger.exception("trade_logger.log_outcome failed for %s", symbol)
 
     # =========================================================================
     # Health Monitoring

@@ -49,16 +49,42 @@ class TradeRecord:
 class FlagTradeLogger:
     """Logs every FLAG-Trader decision and trade outcome for future retraining."""
 
-    def __init__(self, log_dir: Path = Path("data/trade_logs")) -> None:
-        self.log_dir = log_dir
-        self.log_dir.mkdir(parents=True, exist_ok=True)
+    def __init__(self, log_dir: Optional[Path] = None) -> None:
+        # Resolve log_dir: explicit arg > HLQUANTBOT_DATA_DIR env > default cwd-relative
+        import os
+
+        if log_dir is None:
+            env_dir = os.environ.get("HLQUANTBOT_DATA_DIR")
+            if env_dir:
+                log_dir = Path(env_dir) / "trade_logs"
+            else:
+                log_dir = Path("data/trade_logs")
+
+        self.log_dir = Path(log_dir)
+        try:
+            self.log_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            logger.exception("FlagTradeLogger: failed to create log_dir=%s", self.log_dir)
+            raise
+
+        # Log the resolved absolute path so we can see it in container logs
+        try:
+            resolved = self.log_dir.resolve()
+        except OSError:
+            resolved = self.log_dir
+        logger.info("FlagTradeLogger log_dir resolved to: %s", resolved)
+
         self._pending_trades: dict[str, TradeRecord] = {}  # symbol -> record
 
     def log_decision(self, record: TradeRecord) -> None:
         """Log a trading decision (before execution)."""
         log_file = self.log_dir / f"decisions_{datetime.now(timezone.utc).strftime('%Y_%m')}.jsonl"
-        with open(log_file, "a") as f:
-            f.write(json.dumps(asdict(record), default=str) + "\n")
+        try:
+            with open(log_file, "a") as f:
+                f.write(json.dumps(asdict(record), default=str) + "\n")
+        except OSError:
+            logger.exception("FlagTradeLogger: failed to write decision for %s to %s", record.symbol, log_file)
+            return
 
         # Track non-HOLD decisions for outcome updates
         if record.action != "HOLD":
@@ -66,7 +92,7 @@ class FlagTradeLogger:
 
         logger.debug("Decision logged: %s %s (confidence=%.4f)", record.symbol, record.action, record.confidence)
 
-    def update_outcome(
+    def log_outcome(
         self,
         symbol: str,
         entry_price: float,
@@ -75,11 +101,36 @@ class FlagTradeLogger:
         pnl_pct: float,
         exit_reason: str,
         hold_duration_minutes: float,
+        side: Optional[str] = None,
     ) -> None:
-        """Update a pending trade with its outcome."""
+        """
+        Log a closed trade outcome.
+
+        If a matching decision is in ``_pending_trades`` (same process, not restarted),
+        we enrich the outcome record with decision-time context (confidence, prompt,
+        market_state_summary, etc.). Otherwise we synthesise a minimal TradeRecord so
+        the outcome is ALWAYS persisted — critical after process restarts where the
+        in-memory pending map has been lost.
+        """
         record = self._pending_trades.pop(symbol, None)
         if record is None:
-            return
+            # Fallback: synthesise a minimal record so the outcome is still logged.
+            action = "SELL" if (side and side.lower() == "short") else "BUY"
+            record = TradeRecord(
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                symbol=symbol,
+                action=action,
+                action_id=0 if action == "SELL" else 2,
+                confidence=0.0,
+                log_prob=0.0,
+                candles_summary={},
+                portfolio={},
+            )
+            logger.debug(
+                "log_outcome: no pending decision for %s (likely restart); "
+                "writing minimal outcome record",
+                symbol,
+            )
 
         record.entry_price = entry_price
         record.exit_price = exit_price
@@ -89,10 +140,20 @@ class FlagTradeLogger:
         record.hold_duration_minutes = hold_duration_minutes
 
         log_file = self.log_dir / f"outcomes_{datetime.now(timezone.utc).strftime('%Y_%m')}.jsonl"
-        with open(log_file, "a") as f:
-            f.write(json.dumps(asdict(record), default=str) + "\n")
+        try:
+            with open(log_file, "a") as f:
+                f.write(json.dumps(asdict(record), default=str) + "\n")
+        except OSError:
+            logger.exception("FlagTradeLogger: failed to write outcome for %s to %s", symbol, log_file)
+            return
 
-        logger.info("Trade outcome logged: %s %s PnL=$%.2f (%s)", symbol, record.action, pnl_usd, exit_reason)
+        logger.info(
+            "Trade outcome logged: %s %s PnL=$%.2f (%s) -> %s",
+            symbol, record.action, pnl_usd, exit_reason, log_file.name,
+        )
+
+    # Backwards-compatible alias (callers may still use the old name).
+    update_outcome = log_outcome
 
     def get_training_data(self, min_date: Optional[str] = None) -> list[dict]:
         """Load all outcomes for retraining."""
