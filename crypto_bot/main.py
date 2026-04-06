@@ -999,6 +999,19 @@ class ConservativeBot:
                         )
                         continue
 
+                    # Hard age floor: refuse to close ANY position younger than 60 seconds.
+                    # Paranoid second line to min_hold_minutes — nothing (no reason, no PnL,
+                    # no config, no fee-gate fall-through) should bypass this. Defends
+                    # against race conditions and any future bypass bug.
+                    HARD_AGE_FLOOR_SECONDS = 60
+                    age_seconds = age_minutes * 60
+                    if age_seconds < HARD_AGE_FLOOR_SECONDS:
+                        logger.warning(
+                            "FLAG-Trader EXIT REFUSED | %s %s age=%.1fs < hard floor %ds — race-condition guard",
+                            side.upper(), symbol, age_seconds, HARD_AGE_FLOOR_SECONDS,
+                        )
+                        continue
+
                     logger.info(
                         "FLAG-Trader EXIT | CLOSE %s %s | confidence=%.4f | reason=%s | pnl=%.3f%%",
                         side.upper(), symbol, exit_decision.confidence, exit_decision.reason, pnl_pct,
