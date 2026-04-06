@@ -422,12 +422,13 @@ class ExecutionEngineService(BaseService):
         # getattr() is needed for execution_engine / stops top-level access.
         self._exec_config: BotExecutionConfig = self._bot_config.services.execution_engine
 
-        max_hold_h = self._bot_config.stops.max_hold_hours or 6.0
+        max_hold_h = self._bot_config.stops.max_hold_hours
+        max_hold_label = "disabled" if max_hold_h <= 0 else f"{max_hold_h:.1f}h"
         self._logger.info(
-            "ExecutionEngine initialized: order_type=%s, max_slippage=%.2f%%, max_hold=%.1fh",
+            "ExecutionEngine initialized: order_type=%s, max_slippage=%.2f%%, max_hold=%s",
             self._exec_config.order_type,
             self._exec_config.max_slippage_pct,
-            max_hold_h,
+            max_hold_label,
         )
     
     def update_market_states(self, states: Dict[str, Any]) -> None:
