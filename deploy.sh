@@ -73,6 +73,10 @@ case $MODE in
         ;;
 esac
 
+# Step 5b: Install/update audit systemd timer (idempotent, skipped if not configured)
+echo "[5b/6] Installing audit systemd timer..."
+ssh $VPS_USER@$VPS_IP "if [ -f /etc/hlquantbot/audit.env ]; then bash $DEPLOY_DIR/deploy/install_audit_systemd.sh; else echo '  Skipped: /etc/hlquantbot/audit.env not found'; fi"
+
 # Step 6: Clean up old Docker images and build cache
 echo "[6/6] Cleaning up old Docker images..."
 ssh $VPS_USER@$VPS_IP "docker image prune -af && docker builder prune -af" 2>/dev/null || true
