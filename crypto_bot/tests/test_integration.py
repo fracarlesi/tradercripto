@@ -94,24 +94,24 @@ class TestImports:
     def test_import_config(self):
         """Test config loader imports."""
         from crypto_bot.config.loader import (
-            Config,
-            ConfigLoader,
-            load_config,
-            get_config,
-            reload_config,
+            BotConfig,
+            BotExecutionConfig,
+            BotStopsConfig,
             SystemConfig,
             HyperliquidConfig,
-            ServicesConfig,
             RiskConfig,
             LLMConfig,
             StrategiesConfig,
         )
 
-        assert Config is not None
-        assert ConfigLoader is not None
-        assert load_config is not None
-        assert get_config is not None
-        assert reload_config is not None
+        assert BotConfig is not None
+        assert BotExecutionConfig is not None
+        assert BotStopsConfig is not None
+        assert SystemConfig is not None
+        assert HyperliquidConfig is not None
+        assert RiskConfig is not None
+        assert LLMConfig is not None
+        assert StrategiesConfig is not None
     
     def test_import_api_client(self):
         """Test Hyperliquid API client imports."""
@@ -314,16 +314,16 @@ class TestMessageBus:
 class TestConfiguration:
     """Test configuration loading and validation."""
     
-    def test_default_config_creation(self):
-        """Test creating config with defaults."""
-        from crypto_bot.config.loader import Config
-        
-        config = Config()
-        
-        assert config.system.name == "HLQuantBot-v2"
-        assert config.system.mode == "testnet"
-        assert config.hyperliquid.testnet is True
+    def test_default_bot_config_creation(self):
+        """Test creating BotConfig with defaults."""
+        from crypto_bot.config.loader import BotConfig
+
+        config = BotConfig()
+
+        assert config.services.execution_engine.order_type == "limit"
+        assert config.services.execution_engine.entry_mode == "taker"
         assert config.risk.leverage == 5
+        assert config.stops.r_based_exits_enabled is True
     
     def test_system_config_validation(self):
         """Test system config validation."""

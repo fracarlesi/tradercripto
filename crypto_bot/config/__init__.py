@@ -1,42 +1,33 @@
 """
 HLQuantBot v3.0 - Configuration Module
 
-Usage:
-    >>> from crypto_bot.config import load_config, Config
-    >>> config = load_config("path/to/config.yaml")
-    >>> print(config.system.mode)
-    testnet
+Production path:
+    >>> from crypto_bot.config import BotConfig
+    >>> bot_config = BotConfig.from_yaml("crypto_bot/config/trading.yaml")
+
+Phase 4 cleanup: the legacy ``Config`` / ``ConfigLoader`` / ``load_config``
+helpers were unused in production and have been removed. The remaining
+nested models (SystemConfig, RiskConfig, LLMConfig, ...) are still
+exported for callers that import them directly.
 """
 
 from crypto_bot.config.loader import (
-    # Main entry points
-    load_config,
-    get_config,
-    reload_config,
+    # Production runtime config
+    BotConfig,
+    BotExecutionConfig,
+    BotStopsConfig,
+    BotRiskConfig,
+    BotMomentumExitConfig,
+    BotRegimeConfig,
+    BotServicesConfig,
 
-    # Loader class for advanced usage
-    ConfigLoader,
-
-    # Main config
-    Config,
-
-    # System configs
+    # Standalone nested models (still used by callers / tests)
     SystemConfig,
     HyperliquidConfig,
-
-    # Service configs
-    ServicesConfig,
-    ExecutionEngineConfig,
-
-    # Risk and LLM
     RiskConfig,
     LLMConfig,
-
-    # Strategy configs
     StrategiesConfig,
     MomentumStrategyConfig,
-
-    # Optional configs
     TelegramConfig,
     HealthConfig,
 
@@ -45,15 +36,15 @@ from crypto_bot.config.loader import (
 )
 
 __all__ = [
-    "load_config",
-    "get_config",
-    "reload_config",
-    "ConfigLoader",
-    "Config",
+    "BotConfig",
+    "BotExecutionConfig",
+    "BotStopsConfig",
+    "BotRiskConfig",
+    "BotMomentumExitConfig",
+    "BotRegimeConfig",
+    "BotServicesConfig",
     "SystemConfig",
     "HyperliquidConfig",
-    "ServicesConfig",
-    "ExecutionEngineConfig",
     "RiskConfig",
     "LLMConfig",
     "StrategiesConfig",

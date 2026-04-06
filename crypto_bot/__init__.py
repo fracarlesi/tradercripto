@@ -20,14 +20,8 @@ License: MIT
 __version__ = "3.0.0"
 __author__ = "Francesco Carlesi"
 
-# Config
-from .config.loader import (
-    Config,
-    load_config,
-    get_config,
-    reload_config,
-    ConfigLoader,
-)
+# Config (phase 4: BotConfig is the production runtime config)
+from .config.loader import BotConfig
 
 # API Client
 from .api.hyperliquid import (
@@ -67,11 +61,7 @@ __all__ = [
     "__author__",
     "get_version",
     "run_bot",
-    "Config",
-    "load_config",
-    "get_config",
-    "reload_config",
-    "ConfigLoader",
+    "BotConfig",
     "HyperliquidClient",
     "create_hyperliquid_client",
 ]
