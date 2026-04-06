@@ -658,72 +658,15 @@ class ConservativeBot:
             client=self._exchange, telegram=telegram_service,
         )
 
-        # Execution Engine
-        class _ExecConfig:
-            def __init__(self, cfg: ConservativeConfig):
-                self.order_type = "limit" if cfg.prefer_limit else "market"
-                self.max_slippage_pct = cfg.max_slippage_pct
-                self.max_spread_pct = cfg.max_spread_pct
-                self.limit_timeout_seconds = cfg.limit_timeout_seconds
-                self.retry_attempts = 3
-                self.retry_delay_seconds = 5
-                self.position_sync_interval = 30
-                self.fill_sync_interval = 10
-                self.entry_mode = cfg.entry_mode
-                self.maker_reprice_interval_seconds = cfg.maker_reprice_interval_seconds
-                self.maker_max_reprices = cfg.maker_max_reprices
-
-        class _RiskConfig:
-            def __init__(self, cfg: ConservativeConfig):
-                self.take_profit_pct = cfg.take_profit_pct
-                self.stop_loss_pct = cfg.stop_loss_pct
-                self.leverage = cfg.max_leverage  # Use max as default for execution engine
-                self.breakeven_threshold_pct = cfg.breakeven_threshold_pct
-
-        class _StopsConfig:
-            def __init__(self, cfg: ConservativeConfig):
-                self.initial_atr_mult = cfg.initial_atr_mult
-                self.trailing_atr_mult = cfg.trailing_atr_mult
-                self.minimal_roi = cfg.minimal_roi
-                self.max_hold_hours = cfg.max_hold_hours
-                # R-based exit system
-                self.r_based_exits_enabled = cfg.r_based_exits_enabled
-                self.bp_activation_r = cfg.bp_activation_r
-                self.bp_offset_pct = cfg.bp_offset_pct
-                self.strength_exit_r = cfg.strength_exit_r
-                self.trailing_r_enabled = cfg.trailing_r_enabled
-                self.trailing_start_r = cfg.trailing_start_r
-                self.trailing_step_r = cfg.trailing_step_r
-                self.trailing_lock_r = cfg.trailing_lock_r
-
-        class _ServicesConfig:
-            def __init__(self, exec_cfg: _ExecConfig):
-                self.execution_engine = exec_cfg
-
-        class _MomentumExitConfig:
-            def __init__(self, cfg: ConservativeConfig):
-                self.enabled = cfg.momentum_exit_enabled
-                self.min_age_minutes = cfg.momentum_exit_min_age_minutes
-                self.min_profit_pct = cfg.momentum_exit_min_profit_pct
-                self.rsi_slope_threshold = cfg.momentum_exit_rsi_slope_threshold
-
-        class _RegimeConfig:
-            def __init__(self, cfg: ConservativeConfig):
-                self.regime_exit_grace_minutes = cfg.regime_exit_grace_minutes
-
-        class _ConfigAdapter:
-            def __init__(self, cfg: ConservativeConfig):
-                self.services = _ServicesConfig(_ExecConfig(cfg))
-                self.risk = _RiskConfig(cfg)
-                self.stops = _StopsConfig(cfg)
-                self.momentum_exit = _MomentumExitConfig(cfg)
-                self.regime = _RegimeConfig(cfg)
+        # Execution Engine — config built via BotConfig (Pydantic, real types)
+        from .config.loader import BotConfig
+        bot_config = BotConfig.from_conservative(cfg)
 
         assert self._bus is not None, "MessageBus must be initialised before _init_services"
         assert self._exchange is not None, "Exchange must be initialised before _init_services"
         self._services["execution"] = ExecutionEngineService(
             bus=self._bus,
-            config=cast(Any, _ConfigAdapter(cfg)),  # adapter quacks like Config
+            config=cast(Any, bot_config),
             client=self._exchange,
         )
 
