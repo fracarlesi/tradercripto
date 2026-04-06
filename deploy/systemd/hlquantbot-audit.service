@@ -1,0 +1,18 @@
+[Unit]
+Description=HLQuantBot trade audit
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/hlquantbot/audit.env
+WorkingDirectory=/opt/hlquantbot
+# Runs on the host in a dedicated venv (see install_audit_systemd.sh).
+# The script reads JSONL from the host-mounted trade_logs volume and calls
+# `docker logs hlquantbot_crypto` for bot state — so it needs `docker` CLI
+# on PATH, not to be inside the container.
+Environment=HLQUANTBOT_TRADE_LOGS_PATH=/opt/hlquantbot_trade_logs
+ExecStart=/opt/hlquantbot/.audit-venv/bin/python /opt/hlquantbot/crypto_bot/scripts/audit_trades.py
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=300
