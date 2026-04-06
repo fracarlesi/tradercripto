@@ -67,6 +67,7 @@ from .flag_trader.agent import FlagTraderAgent, FlagTraderConfig, TradeDecision
 from .flag_trader.model import FlagTraderModel
 from .flag_trader.prompt import PromptBuilder
 from .flag_trader.trade_logger import FlagTradeLogger
+from .flag_trader.trade_memory_rag import TradeMemoryRAG
 
 # API Client
 from .api.hyperliquid import HyperliquidClient
@@ -509,11 +510,22 @@ class ConservativeBot:
         self._trade_logger = FlagTradeLogger(log_dir=_trade_log_dir)
         logger.info("Trade logger initialized: %s", self._trade_logger.log_dir.resolve())
 
+        # RAG memory: retrieves similar past trades to inject as few-shot
+        # examples into the LLM prompt. Reads from outcomes_*.jsonl via the
+        # trade_logger's get_training_data().
+        self._trade_memory_rag = TradeMemoryRAG(trade_logger=self._trade_logger)
+        _initial_outcomes = len(self._trade_memory_rag._load_outcomes())
+        logger.info(
+            "TradeMemoryRAG initialized: %d historical outcomes loaded",
+            _initial_outcomes,
+        )
+
         self._flag_agent = FlagTraderAgent(
             config=ft_cfg,
             model=model,
             prompt_builder=prompt_builder,
             trade_logger=self._trade_logger,
+            trade_memory_rag=self._trade_memory_rag,
         )
 
         logger.info(
