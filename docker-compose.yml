@@ -10,6 +10,9 @@ services:
       - ./logs:/app/logs
       - ./models:/app/models
       - ./data:/app/data
+      # trade_logs isolated from ./data bind mount: lives on a host path
+      # outside /opt/hlquantbot/ so deploy rsync can never touch it.
+      - hlquantbot_trade_logs:/app/data/trade_logs
       - hlquantbot_data:/root/.hlquantbot
     restart: unless-stopped
     logging:
@@ -87,3 +90,13 @@ services:
 volumes:
   hlquantbot_data:
   hlquantbot_paper_data:
+  # Persistent trade decision/outcome logs for FLAG-Trader RAG memory.
+  # Bound to a host path OUTSIDE /opt/hlquantbot/ so deploy rsync --delete
+  # can never wipe it. Populated via: mkdir -p /opt/hlquantbot_trade_logs
+  # and copying existing data before first docker compose up.
+  hlquantbot_trade_logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/hlquantbot_trade_logs
