@@ -41,11 +41,10 @@ import yaml
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from .core.enums import Topic
 from .core.models import Direction, Setup, SetupType
 
 # Services
-from .services.message_bus import MessageBus
+from .services.message_bus import MessageBus, Topic
 from .services.market_state import (
     MarketStateService,
     MarketStateConfig,
@@ -719,6 +718,7 @@ class ConservativeBot:
                 self.momentum_exit = _MomentumExitConfig(cfg)
                 self.regime = _RegimeConfig(cfg)
 
+        assert self._bus is not None, "MessageBus must be initialised before _init_services"
         self._services["execution"] = ExecutionEngineService(
             bus=self._bus, config=_ConfigAdapter(cfg),
             client=self._exchange,
@@ -1166,6 +1166,7 @@ class ConservativeBot:
 
         # --- Update market states for execution engine ---
         market_state_svc = self._services.get("market_state")
+        states: dict = {}
         if market_state_svc:
             states = market_state_svc.get_all_states()
             exec_engine = self._services.get("execution")
@@ -1210,7 +1211,7 @@ class ConservativeBot:
             cf_logger = self._services.get("counterfactual_logger")
             if cf_logger:
                 for d in decisions:
-                    state = states.get(d.symbol) if 'states' in locals() else None
+                    state = states.get(d.symbol)
                     price = float(state.close) if state is not None else 0.0
                     if price <= 0:
                         continue
@@ -1316,6 +1317,9 @@ class ConservativeBot:
             confidence=Decimal(str(round(min(abs(decision.confidence), 1.0), 4))),
             model_tp_pct=round(decision.tp_pct, 2),
             model_sl_pct=round(decision.sl_pct, 2),
+            llm_approved=None,
+            llm_confidence=None,
+            llm_reason=None,
             entry_reason="squeeze_fire",
             entry_confidence=round(min(abs(decision.confidence), 1.0), 4),
             entry_trigger_details=trigger_details,
@@ -1495,6 +1499,7 @@ class ConservativeBot:
                 warnings.append(msg)
 
         try:
+            assert self._exchange is not None, "Exchange must be initialised"
             open_orders = await self._exchange.get_open_orders()
             for symbol in positions:
                 sym_reduce = [
