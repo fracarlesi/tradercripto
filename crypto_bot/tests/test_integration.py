@@ -643,10 +643,10 @@ class TestFactoryFunctions:
     def test_create_execution_engine(self, mock_bus, mock_exchange):
         """Test execution engine factory."""
         from crypto_bot.services import ExecutionEngineService
-        from crypto_bot.config.loader import Config
+        from crypto_bot.config.loader import BotConfig
 
-        # Create full config with default values
-        config = Config()
+        # Create runtime BotConfig with default values
+        config = BotConfig()
 
         # Need a real client mock with is_connected attribute
         mock_exchange.is_connected = True

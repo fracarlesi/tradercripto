@@ -52,15 +52,15 @@ from ..api.exceptions import OrderRejectedError
 # so the module still imports if the optional deps are missing.
 if TYPE_CHECKING:
     from crypto_bot.api.hyperliquid import HyperliquidClient
-    from crypto_bot.config.loader import Config, ExecutionEngineConfig
+    from crypto_bot.config.loader import BotConfig, BotExecutionConfig
 else:
     try:
         from crypto_bot.api.hyperliquid import HyperliquidClient
-        from crypto_bot.config.loader import Config, ExecutionEngineConfig
+        from crypto_bot.config.loader import BotConfig, BotExecutionConfig
     except ImportError:
         HyperliquidClient = Any
-        Config = Any
-        ExecutionEngineConfig = Any
+        BotConfig = Any
+        BotExecutionConfig = Any
 
 
 logger = logging.getLogger(__name__)
@@ -367,7 +367,7 @@ class ExecutionEngineService(BaseService):
     def __init__(
         self,
         bus: MessageBus,
-        config: Config,
+        config: BotConfig,
         client: HyperliquidClient,
     ) -> None:
         """
@@ -417,16 +417,12 @@ class ExecutionEngineService(BaseService):
         # Background tasks
         self._position_monitor_task: Optional[asyncio.Task] = None
         
-        # Configuration shortcuts
-        # Note: _bot_config is typed as loader.Config (dead schema) but at
-        # runtime is a _ConfigAdapter from main.py with extra fields (entry_mode,
-        # maker_*, limit_timeout_seconds). Cast to Any so direct attribute access
-        # works without defensive getattr() fallbacks. The YAML→runtime roundtrip
-        # test (tests/test_config_roundtrip.py) guarantees these fields exist.
-        self._exec_config: Any = self._bot_config.services.execution_engine
-        
-        stops_cfg = getattr(self._bot_config, "stops", None)
-        max_hold_h = getattr(stops_cfg, "max_hold_hours", 6.0) if stops_cfg else 6.0
+        # Configuration shortcuts — _bot_config is a BotConfig (Pydantic).
+        # All fields are guaranteed by the model schema, so no defensive
+        # getattr() is needed for execution_engine / stops top-level access.
+        self._exec_config: BotExecutionConfig = self._bot_config.services.execution_engine
+
+        max_hold_h = self._bot_config.stops.max_hold_hours or 6.0
         self._logger.info(
             "ExecutionEngine initialized: order_type=%s, max_slippage=%.2f%%, max_hold=%.1fh",
             self._exec_config.order_type,
@@ -3754,7 +3750,7 @@ class ExecutionEngineService(BaseService):
 
 def create_execution_engine(
     bus: MessageBus,
-    config: Config,
+    config: BotConfig,
     client: HyperliquidClient,
 ) -> ExecutionEngineService:
     """
