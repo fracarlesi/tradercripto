@@ -418,7 +418,12 @@ class ExecutionEngineService(BaseService):
         self._position_monitor_task: Optional[asyncio.Task] = None
         
         # Configuration shortcuts
-        self._exec_config = self._bot_config.services.execution_engine
+        # Note: _bot_config is typed as loader.Config (dead schema) but at
+        # runtime is a _ConfigAdapter from main.py with extra fields (entry_mode,
+        # maker_*, limit_timeout_seconds). Cast to Any so direct attribute access
+        # works without defensive getattr() fallbacks. The YAML→runtime roundtrip
+        # test (tests/test_config_roundtrip.py) guarantees these fields exist.
+        self._exec_config: Any = self._bot_config.services.execution_engine
         
         stops_cfg = getattr(self._bot_config, "stops", None)
         max_hold_h = getattr(stops_cfg, "max_hold_hours", 6.0) if stops_cfg else 6.0
@@ -913,7 +918,7 @@ class ExecutionEngineService(BaseService):
 
         # Pre-flight spread check — skip if bid-ask spread > max_spread_pct
         # to avoid the open→slippage-reject→close cycle that burns double fees.
-        max_spread = getattr(self._exec_config, "max_spread_pct", 0.08)
+        max_spread = self._exec_config.max_spread_pct
         try:
             spread = await self._get_spread(symbol)
             if spread > max_spread:
@@ -1068,7 +1073,7 @@ class ExecutionEngineService(BaseService):
                 reduce_only=order.reduce_only,
                 slippage=slippage,
             )
-        elif getattr(self._exec_config, "entry_mode", "taker") == "maker" and not order.reduce_only:
+        elif self._exec_config.entry_mode == "maker" and not order.reduce_only:
             # Maker (post-only) entry order
             result = await self._place_maker_order(order, is_buy)
         else:
@@ -1177,9 +1182,9 @@ class ExecutionEngineService(BaseService):
 
         now = datetime.now(timezone.utc)
         reprice_interval = timedelta(
-            seconds=getattr(self._exec_config, "maker_reprice_interval_seconds", 5)
+            seconds=self._exec_config.maker_reprice_interval_seconds
         )
-        max_reprices = getattr(self._exec_config, "maker_max_reprices", 6)
+        max_reprices = self._exec_config.maker_max_reprices
 
         for order_id, order in list(self.pending_orders.items()):
             if order.entry_mode != "maker":
@@ -2149,7 +2154,7 @@ class ExecutionEngineService(BaseService):
         Cancelled orders are removed from local tracking and metrics are
         updated.
         """
-        timeout = timedelta(seconds=getattr(self._exec_config, "limit_timeout_seconds", 60))
+        timeout = timedelta(seconds=self._exec_config.limit_timeout_seconds)
         now = datetime.now(timezone.utc)
 
         stale_ids: List[str] = []
