@@ -42,6 +42,7 @@ rsync -avz --delete \
     --exclude='*.log' \
     --exclude='node_modules' \
     --exclude='firebase-debug.log' \
+    --exclude='data/trade_logs/' \
     ./ $VPS_USER@$VPS_IP:$DEPLOY_DIR/
 
 # Step 3: Copy .env file(s)
