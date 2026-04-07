@@ -1,4 +1,10 @@
 # pyright: reportArgumentType=false
+import pytest
+pytest.skip(
+    "STAGE A: min_hold race tests removed — _evaluate_positions_with_llm "
+    "is now a no-op (predict-and-place execution).",
+    allow_module_level=True,
+)
 """
 Tests for the FLAG-Trader EXIT eval min_hold race-condition fix.
 ================================================================

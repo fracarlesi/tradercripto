@@ -13,7 +13,7 @@ import os
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Optional
@@ -25,13 +25,17 @@ from .trade_memory_rag import TradeMemoryRAG
 
 logger = logging.getLogger(__name__)
 
-# Action mapping: model output -> human-readable
-ACTION_NAMES = {0: "SELL", 1: "HOLD", 2: "BUY"}
 
 
 @dataclass
 class TradeDecision:
-    """A single trade decision from the FLAG-Trader model."""
+    """A single trade decision from the FLAG-Trader model.
+
+    STAGE A: model emits ``tp_pct`` / ``sl_pct`` at entry; bot then waits
+    for TP / SL fill or expiry. ``expiry_at`` and ``k_candles`` carry the
+    fixed-horizon expiry computed at decision time so the execution engine
+    can place an unconditional time-based exit alongside TP/SL.
+    """
 
     symbol: str
     action: int  # 0=Sell, 1=Hold, 2=Buy
@@ -41,17 +45,12 @@ class TradeDecision:
     tp_pct: float = 2.5  # model-predicted TP%
     sl_pct: float = 1.0  # model-predicted SL%
     correlation_id: Optional[str] = None  # end-to-end trace id
-
-
-@dataclass
-class ExitDecision:
-    """Decision on whether to close an existing position."""
-
-    symbol: str
-    should_close: bool
-    action_name: str  # what the model said (BUY/SELL/HOLD)
-    confidence: float
-    reason: str  # "model_reversal" or "hold"
+    # STAGE A forecast-mode fields
+    expiry_at: Optional[datetime] = None
+    k_candles: int = 34
+    predicted_tp_pct: Optional[float] = None
+    predicted_sl_pct: Optional[float] = None
+    trade_id: Optional[str] = None
 
 
 @dataclass
@@ -66,6 +65,9 @@ class FlagTraderConfig:
     candle_window: int = 20
     candle_interval: str = "15m"
     confidence_threshold: float = 0.6
+    # STAGE A forecast-mode parameters (read from config.forecast.*).
+    k_candles: int = 34
+    candle_period_minutes: int = 15
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> FlagTraderConfig:
@@ -202,7 +204,7 @@ class FlagTraderAgent:
         start = time.monotonic()
         action_id, state_value, log_prob, tp_pct, sl_pct = self.model.get_action(prompt)  # pyright: ignore[reportAssignmentType]  # torch/SDK typing
         elapsed = time.monotonic() - start
-        action_name = ACTION_NAMES.get(action_id, "HOLD")
+        action_name = {0: "SELL", 1: "HOLD", 2: "BUY"}.get(action_id, "HOLD")
 
         logger.info(
             "FLAG-Trader | %s | action=%s | value=%.4f | tp=%.1f%% | sl=%.1f%% | time=%.1fs",
@@ -219,8 +221,27 @@ class FlagTraderAgent:
                     "volume_avg": sum(c["volume"] for c in candles) / len(candles) if candles else 0.0,
                 }
                 ms_summary = self._build_market_state_dict(candles) if candles else None
+                # STAGE A: pre-compute predicted prices and expiry for the
+                # forecast-mode pipeline. The execution engine will place
+                # TP/SL atomically at entry and a time-based expiry exit.
+                last_close = float(closes[-1]) if closes else 0.0
+                is_long = action_id == 2
+                pred_tp_price: Optional[float] = None
+                pred_sl_price: Optional[float] = None
+                if last_close > 0 and tp_pct > 0:
+                    pred_tp_price = last_close * (
+                        1 + tp_pct / 100 if is_long else 1 - tp_pct / 100
+                    )
+                if last_close > 0 and sl_pct > 0:
+                    pred_sl_price = last_close * (
+                        1 - sl_pct / 100 if is_long else 1 + sl_pct / 100
+                    )
+                now_utc = datetime.now(timezone.utc)
+                expiry_at = now_utc + timedelta(
+                    minutes=self.config.k_candles * self.config.candle_period_minutes
+                )
                 record = TradeRecord(
-                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    timestamp=now_utc.isoformat(),
                     symbol=symbol,
                     action=action_name,
                     action_id=action_id,
@@ -230,8 +251,20 @@ class FlagTraderAgent:
                     portfolio=portfolio,
                     market_state_summary=ms_summary,
                     prompt_summary=prompt[:200],
+                    predicted_tp_pct=float(tp_pct),
+                    predicted_sl_pct=float(sl_pct),
+                    predicted_tp_price=pred_tp_price,
+                    predicted_sl_price=pred_sl_price,
+                    expiry_at=expiry_at.isoformat(),
+                    k_candles=self.config.k_candles,
+                    candle_interval_sec=self.config.candle_period_minutes * 60,
                 )
                 self.trade_logger.log_decision(record)
+                # Stash trade_id (assigned by log_decision) so callers can
+                # propagate it through the TradeIntent → ExecutionPosition
+                # chain and use it to write the per-trade sidecar at exit.
+                self._last_trade_id = record.trade_id
+                self._last_expiry_at = expiry_at
             except Exception as e:
                 logger.warning("Trade logger failed (non-blocking): %s", e)
 
@@ -255,125 +288,15 @@ class FlagTraderAgent:
             tp_pct=tp_pct,
             sl_pct=sl_pct,
             correlation_id=correlation_id,
+            expiry_at=getattr(self, "_last_expiry_at", None),
+            k_candles=self.config.k_candles,
+            predicted_tp_pct=float(tp_pct),
+            predicted_sl_pct=float(sl_pct),
+            trade_id=getattr(self, "_last_trade_id", None),
         )
 
-    async def evaluate_position(
-        self,
-        symbol: str,
-        direction: str,  # "long" or "short"
-        entry_price: float,
-        pnl_pct: float,
-        candle_fetcher: Any,
-        portfolio: dict[str, float] | None = None,
-    ) -> ExitDecision:
-        """Evaluate whether an open position should be closed.
-
-        Uses the LLM to decide: if model says opposite direction
-        (LONG+SELL or SHORT+BUY), the position should be closed.
-        """
-        if portfolio is None:
-            portfolio = {"cash_balance": 0.0, "asset_position": 0.0, "total_account_value": 0.0}
-
-        candles_raw = await candle_fetcher.get_candles(
-            symbol,
-            interval=self.config.candle_interval,
-            limit=self.config.candle_window + 5,
-        )
-
-        if not candles_raw or len(candles_raw) < self.config.candle_window:
-            logger.debug("Insufficient candle data for position eval %s", symbol)
-            return ExitDecision(
-                symbol=symbol, should_close=False, action_name="HOLD",
-                confidence=0.0, reason="insufficient_data",
-            )
-
-        candles = self._candles_to_prompt_format(candles_raw)
-        history = {
-            "recent_rewards": [],
-            "net_values": [],
-            "actions": self._trade_history[-10:],
-        }
-
-        similar_text = ""
-        if self.trade_memory_rag:
-            ms_dict = self._build_market_state_dict(candles)
-            # Find trades that entered in the same direction as current position
-            entry_action = "BUY" if direction == "long" else "SELL"
-            similar = self.trade_memory_rag.find_similar_trades(
-                symbol, ms_dict, current_action=entry_action,
-            )
-            similar_text = self.trade_memory_rag.format_for_prompt(
-                similar, symbol=symbol, current_action=entry_action,
-            )
-
-        position_info = {
-            "direction": direction,
-            "symbol": symbol,
-            "entry_price": entry_price,
-            "pnl_pct": pnl_pct,
-        }
-
-        prompt = self.prompt_builder.build_prompt(
-            candles, portfolio, history,
-            similar_trades_text=similar_text,
-            position_info=position_info,
-        )
-
-        logger.info(
-            "FLAG-Trader POSITION INPUT | %s | direction=%s | entry=%.2f | pnl=%.1f%% | candles=%d",
-            symbol, direction, entry_price, pnl_pct, len(candles),
-        )
-        logger.debug("FLAG-Trader PROMPT | %s | %s", symbol, prompt[:500])
-
-        start = time.monotonic()
-        action_id, state_value, log_prob, _tp, _sl = self.model.get_action(prompt)  # pyright: ignore[reportAssignmentType]  # torch/SDK typing
-        elapsed = time.monotonic() - start
-        action_name = ACTION_NAMES.get(action_id, "HOLD")
-
-        # Determine if model wants to reverse position
-        should_close = False
-        reason = "hold"
-        if direction == "long" and action_id == 0:  # LONG + SELL
-            should_close = True
-            reason = "model_reversal"
-        elif direction == "short" and action_id == 2:  # SHORT + BUY
-            should_close = True
-            reason = "model_reversal"
-
-        logger.info(
-            "FLAG-Trader EXIT eval | %s %s | model=%s | value=%.4f | close=%s | time=%.1fs",
-            direction.upper(), symbol, action_name, state_value, should_close, elapsed,
-        )
-
-        # Log decision
-        if self.trade_logger:
-            closes = [c["close"] for c in candles]
-            candles_summary = {
-                "last_close": closes[-1] if closes else 0.0,
-                "pct_change_20": ((closes[-1] / closes[0]) - 1) * 100 if len(closes) >= 2 and closes[0] != 0 else 0.0,
-                "volume_avg": sum(c["volume"] for c in candles) / len(candles) if candles else 0.0,
-            }
-            ms_summary = self._build_market_state_dict(candles) if candles else None
-            record = TradeRecord(
-                timestamp=datetime.now(timezone.utc).isoformat(),
-                symbol=symbol,
-                action=f"EXIT_EVAL_{action_name}",
-                action_id=action_id,
-                confidence=state_value,
-                log_prob=float(log_prob),
-                candles_summary=candles_summary,
-                portfolio=portfolio,
-                market_state_summary=ms_summary,
-            )
-            self.trade_logger.log_decision(record)
-
-        return ExitDecision(
-            symbol=symbol,
-            should_close=should_close,
-            action_name=action_name,
-            confidence=state_value,
-            reason=reason,
-        )
+    # Removed in STAGE A (forecast-mode simplification): the bot no longer
+    # re-evaluates open positions with the LLM. Exits are TP / SL / expiry.
 
     @staticmethod
     def _candles_to_prompt_format(candles_raw: list[dict]) -> list[dict[str, float]]:
