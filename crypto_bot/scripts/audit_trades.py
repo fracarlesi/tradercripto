@@ -296,8 +296,21 @@ def compute_flags(outcomes: list[dict[str, Any]], state: BotState) -> list[Flag]
         pnl_usd = rec.get("pnl_usd")
         pnl_pct = rec.get("pnl_pct")
 
-        # HIGH: Churn (<2 min)
-        if isinstance(hold, (int, float)) and hold < 2.0:
+        # HIGH: Churn (<2 min) — exempt target-based planned exits.
+        # A fast take_profit/stop_loss/roi_target/max_hold_time hit is a
+        # planned closure, not churning. Only unplanned/model-driven exits
+        # under 2 min are genuine churn symptoms.
+        TARGET_BASED_EXITS = {
+            "take_profit",
+            "stop_loss",
+            "roi_target",
+            "max_hold_time",
+        }
+        if (
+            isinstance(hold, (int, float))
+            and hold < 2.0
+            and exit_reason not in TARGET_BASED_EXITS
+        ):
             flags.append(
                 Flag(
                     kind="churn",
