@@ -9,7 +9,7 @@ Features:
 - Sends scheduled reports at 08:00 and 20:00 (Europe/Rome), each covering last 12h
 - Alerts if win rate drops below 35% after 10+ trades
 - Persists trade history to ~/.hlquantbot/performance_monitor.json
-- Rolling 30-day window to keep data manageable
+- Snapshot fallback uses 12h rolling window; on-disk history trimmed to 30 days
 
 Author: Francesco Carlesi
 """
@@ -36,7 +36,8 @@ DATA_FILE = DATA_DIR / "performance_monitor.json"
 # Thresholds
 WIN_RATE_ALERT_THRESHOLD = 0.35  # Alert if win rate < 35%
 MIN_TRADES_FOR_ALERT = 10        # Only alert after N trades
-ROLLING_WINDOW_DAYS = 30         # Keep 30 days of history
+ROLLING_WINDOW_DAYS = 30         # Keep 30 days of history on disk (storage cleanup only)
+ROLLING_WINDOW_HOURS = 12        # Snapshot stats window (recent fixes make 30d stale)
 
 # Schedule: report times in Europe/Rome timezone
 REPORT_TIMEZONE = ZoneInfo("Europe/Rome")
@@ -190,9 +191,9 @@ class PerformanceMonitorService(BaseService):
             (trades, level_label, level_num, status, target_capital,
              min_closed_trades, min_live_days)
 
-        Falls back to 30-day rolling window if no capital ladder is configured.
+        Falls back to 12-hour rolling window if no capital ladder is configured.
         """
-        level_label = "30d"
+        level_label = "12h"
         level_num = -1
         status = ""
         target_capital = 0.0
@@ -224,8 +225,8 @@ class PerformanceMonitorService(BaseService):
                     break
 
         if cutoff_dt is None:
-            # Fallback: 30-day rolling window
-            cutoff_dt = datetime.now(timezone.utc) - timedelta(days=ROLLING_WINDOW_DAYS)
+            # Fallback: 12-hour rolling window (recent fixes make longer windows stale)
+            cutoff_dt = datetime.now(timezone.utc) - timedelta(hours=ROLLING_WINDOW_HOURS)
 
         trades = []
         for t in self._trades:
@@ -244,7 +245,7 @@ class PerformanceMonitorService(BaseService):
         """Send Account Snapshot via ntfy.
 
         Metrics are scoped to the current capital-ladder level (started_at).
-        Falls back to 30-day rolling window when no ladder is configured.
+        Falls back to 12-hour rolling window when no ladder is configured.
         """
         if not self._whatsapp:
             return
@@ -359,7 +360,7 @@ class PerformanceMonitorService(BaseService):
                 f"Equity: {equity_str} | Open: {open_positions}\n"
                 f"Today: ${today_pnl_str} ({today_wins}W/{today_count - today_wins}L)\n"
                 f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
-                f"30d: {total} trades | WR: {win_rate:.0f}% | PF: {pf:.2f}\n"
+                f"12h: {total} trades | WR: {win_rate:.0f}% | PF: {pf:.2f}\n"
                 f"Net: ${net_pnl:+.2f} | DD: ${max_dd:.2f}\n"
                 f"Top: {top_line}"
             )
