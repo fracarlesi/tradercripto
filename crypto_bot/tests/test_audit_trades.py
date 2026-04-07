@@ -98,14 +98,14 @@ def test_no_recent_trades_returns_ok(tmp_path, capsys):
 
 
 def test_churn_flag_detected():
-    """Outcome with hold < 2min -> HIGH churn flag."""
+    """Outcome with hold < 2min on a non-target exit -> HIGH churn flag."""
     outcomes = [
         {
             "timestamp": _iso(5),
             "symbol": "ETH",
             "action": "BUY",
             "hold_duration_minutes": 1.5,
-            "exit_reason": "take_profit",
+            "exit_reason": "momentum_fade",
             "pnl_usd": 0.30,
             "pnl_pct": 0.02,
         }
@@ -115,6 +115,48 @@ def test_churn_flag_detected():
     assert len(churn) == 1
     assert churn[0].severity == "HIGH"
     assert churn[0].symbol == "ETH"
+
+
+def test_churn_not_flagged_when_take_profit():
+    """Fast take_profit exit (hold < 2min) must NOT be flagged as churn.
+
+    Regression test for XPL incident 2026-04-07 01:19: a 32s trade closed
+    at take_profit (+$0.18) was falsely flagged as churn. Target-based
+    exits are planned closures, not churning.
+    """
+    outcomes = [
+        {
+            "timestamp": _iso(5),
+            "symbol": "XPL",
+            "action": "BUY",
+            "hold_duration_minutes": 0.5,
+            "exit_reason": "take_profit",
+            "pnl_usd": 0.18,
+            "pnl_pct": 0.12,
+        }
+    ]
+    flags = audit.compute_flags(outcomes, _empty_state())
+    churn = [f for f in flags if f.kind == "churn"]
+    assert len(churn) == 0
+
+
+def test_churn_flagged_when_model_reversal():
+    """Fast exit via model_reversal (hold < 2min) IS churn (regression guard)."""
+    outcomes = [
+        {
+            "timestamp": _iso(5),
+            "symbol": "BTC",
+            "action": "BUY",
+            "hold_duration_minutes": 0.5,
+            "exit_reason": "model_reversal",
+            "pnl_usd": -0.25,
+            "pnl_pct": -0.15,
+        }
+    ]
+    flags = audit.compute_flags(outcomes, _empty_state())
+    churn = [f for f in flags if f.kind == "churn"]
+    assert len(churn) == 1
+    assert churn[0].symbol == "BTC"
 
 
 def test_min_hold_violation_detected():
