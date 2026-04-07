@@ -121,7 +121,7 @@ stops:
 # No re-evaluation, no trailing, no breakeven, no R-based logic.
 # Default false to allow safe rollout via feature-flag.
 forecast:
-  mode_enabled: false
+  mode_enabled: true
   k_candles: 34                 # 34 x 15min = 8.5h hard expiry
   candle_period_minutes: 15
   expiry_action: market_close
