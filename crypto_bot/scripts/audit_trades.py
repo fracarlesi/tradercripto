@@ -305,6 +305,11 @@ def compute_flags(outcomes: list[dict[str, Any]], state: BotState) -> list[Flag]
             "stop_loss",
             "roi_target",
             "max_hold_time",
+            # LLM-only mode neutral close: exchange-side close with no
+            # TP/SL enforcement configured. Treated as planned/neutral —
+            # the LLM is the sole exit authority in that regime, so any
+            # close is by definition intentional, not churn.
+            "external_close",
         }
         if (
             isinstance(hold, (int, float))

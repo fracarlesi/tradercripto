@@ -492,6 +492,12 @@ class BotStopsConfig(BaseConfig):
     trailing_start_r: float = Field(default=2.0, ge=0)
     trailing_step_r: float = Field(default=1.0, ge=0)
     trailing_lock_r: float = Field(default=0.5, ge=0)
+    # Anti-churn: minimum time a position must be held before any in-bot
+    # mechanical close path (strength_exit, roi_target, momentum_fade,
+    # regime_change, max_hold_time, TP/SL) is allowed to close it.
+    # 0 disables the gate. Emergency paths may override via
+    # close_position(override_min_hold=True).
+    min_hold_minutes: int = Field(default=0, ge=0)
 
 
 class BotRiskConfig(BaseConfig):
@@ -582,6 +588,9 @@ class BotConfig(BaseModel):
                 trailing_start_r=cfg.trailing_start_r,
                 trailing_step_r=cfg.trailing_step_r,
                 trailing_lock_r=cfg.trailing_lock_r,
+                min_hold_minutes=int(
+                    (cfg.flag_trader_config or {}).get("min_hold_minutes", 0)
+                ),
             ),
             momentum_exit=BotMomentumExitConfig(
                 enabled=cfg.momentum_exit_enabled,

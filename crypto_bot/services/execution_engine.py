@@ -416,7 +416,16 @@ class ExecutionEngineService(BaseService):
         
         # Background tasks
         self._position_monitor_task: Optional[asyncio.Task] = None
-        
+
+        # Stray trigger-order cleanup scheduling (Bug B fix).
+        # Residual reduce-only TP/SL trigger orders from previous (pre-LLM-only)
+        # deploys can fire on the exchange and close positions before our own
+        # min_hold timer elapses.  We reconcile periodically from the monitor
+        # loop using this interval.
+        self._stray_trigger_cleanup_interval_s: float = 1800.0  # 30 min
+        self._last_stray_trigger_cleanup: float = 0.0
+
+
         # Configuration shortcuts — _bot_config is a BotConfig (Pydantic).
         # All fields are guaranteed by the model schema, so no defensive
         # getattr() is needed for execution_engine / stops top-level access.
@@ -455,6 +464,13 @@ class ExecutionEngineService(BaseService):
 
         # Sync existing positions from exchange
         await self._sync_positions_from_exchange()
+
+        # SAFETY (Bug B): cancel stray reduce-only trigger orders that do NOT
+        # correspond to any tracked position.  These are residue from previous
+        # (pre-LLM-only) deploys and can fire on the exchange, bypassing our
+        # min_hold / FLAG-Trader exit authority.
+        await self._cleanup_stray_trigger_orders()
+        self._last_stray_trigger_cleanup = asyncio.get_event_loop().time()
 
         # Start background tasks AFTER initial sync completes
         self._position_monitor_task = asyncio.create_task(
@@ -537,6 +553,121 @@ class ExecutionEngineService(BaseService):
 
         except Exception as e:
             self._logger.error("Startup orphan order cleanup failed: %s", e)
+
+    async def _cleanup_stray_trigger_orders(self) -> None:
+        """Cancel reduce-only TP/SL trigger orders left behind by previous deploys.
+
+        Bug B root cause: a pre-LLM-only deploy left reduce-only trigger orders
+        (Stop Market / Take Profit Market) on the exchange.  In LLM-only exit
+        mode the bot does NOT place protective TP/SL, so when such a residual
+        trigger fires, the position is closed on-exchange before our min_hold
+        timer elapses.  ``_check_position_sync`` then reactively cleans up,
+        but the close itself was unintended.
+
+        This method:
+        - Fetches current open orders via ``client.get_open_orders()``.
+        - Selects only ``reduceOnly=True`` orders whose ``orderType`` looks
+          like a trigger order (Stop / Take Profit / Trigger / TP / SL).
+        - For each, checks whether the symbol has a tracked active position
+          AND the order id matches the tracked ``tp_order_id`` / ``sl_order_id``.
+          If YES → leave it alone (tracked, legitimate).
+          If NO  → cancel it (stray).
+        - Skips symbols in ``_settling_symbols`` / ``_closing_positions`` to
+          avoid racing a partial sync state.
+        - Never touches non-reduce-only orders (handled by the orphan cleanup).
+
+        Idempotent and defensive: any failure is logged but never raised.
+        """
+        try:
+            open_orders = await self.client.get_open_orders()
+        except Exception as e:
+            self._logger.error("Stray trigger cleanup: get_open_orders failed: %s", e)
+            return
+
+        if not open_orders:
+            self._logger.debug("Stray trigger cleanup: no open orders")
+            return
+
+        trigger_markers = ("stop", "take profit", "trigger", "tp", "sl")
+
+        def _is_trigger(order: Dict[str, Any]) -> bool:
+            if not order.get("reduceOnly", False):
+                return False
+            otype = str(order.get("orderType", "")).lower()
+            if not otype:
+                return False
+            return any(m in otype for m in trigger_markers)
+
+        candidates = [o for o in open_orders if _is_trigger(o)]
+        if not candidates:
+            self._logger.debug("Stray trigger cleanup: no reduce-only trigger orders")
+            return
+
+        cancelled = 0
+        skipped_tracked = 0
+        skipped_settling = 0
+
+        for order in candidates:
+            symbol = order.get("symbol")
+            oid = order.get("orderId")
+            if symbol is None or oid is None:
+                continue
+
+            # Defensive: never touch a symbol mid-open/close/rejection.
+            if symbol in self._settling_symbols or symbol in self._closing_positions:
+                skipped_settling += 1
+                continue
+
+            # Tracked?  Compare as strings because ExecutionPosition stores
+            # tp_order_id/sl_order_id as Optional[str] while the SDK returns
+            # order ids as int.
+            tracked_position = self.active_positions.get(symbol)
+            if tracked_position is not None:
+                oid_str = str(oid)
+                tracked_ids = {
+                    str(tracked_position.tp_order_id) if tracked_position.tp_order_id else None,
+                    str(tracked_position.sl_order_id) if tracked_position.sl_order_id else None,
+                }
+                tracked_ids.discard(None)
+                if oid_str in tracked_ids:
+                    skipped_tracked += 1
+                    continue
+                # Symbol IS tracked but this trigger id is unknown.  Duplicate
+                # cleanup is handled by _ensure_tp_sl_for_position — do NOT
+                # double-cancel here to avoid racing that reconciler.
+                skipped_tracked += 1
+                continue
+
+            # Not tracked → cancel.
+            side = order.get("side", "?")
+            trigger_price = order.get("triggerPx", order.get("price", 0))
+            otype = order.get("orderType", "?")
+            try:
+                await self.client.cancel_order(symbol, int(oid))
+                cancelled += 1
+                self._logger.warning(
+                    "Stray trigger cleanup: cancelled %s order %s "
+                    "(symbol=%s side=%s trigger_price=%s) — no tracked position",
+                    otype, oid, symbol, side, trigger_price,
+                )
+            except Exception as e:
+                self._logger.error(
+                    "Stray trigger cleanup: failed to cancel order %s for %s: %s",
+                    oid, symbol, e,
+                )
+
+        self._logger.info(
+            "Stray trigger cleanup: examined=%d cancelled=%d skipped_tracked=%d skipped_settling=%d",
+            len(candidates), cancelled, skipped_tracked, skipped_settling,
+        )
+        if cancelled > 0:
+            try:
+                await self._send_alert(
+                    f"Cancelled {cancelled} stray reduce-only trigger orders "
+                    "(no tracked position)"
+                )
+            except Exception:
+                pass
 
     async def _run_iteration(self) -> None:
         """No-op: position sync is handled exclusively by _monitor_positions().
@@ -2509,6 +2640,14 @@ class ExecutionEngineService(BaseService):
                 # Check for momentum fade exits
                 await self._check_momentum_fade()
 
+                # Periodic stray trigger-order cleanup (Bug B).  Runs roughly
+                # every _stray_trigger_cleanup_interval_s (default 30 min).
+                now_mono = asyncio.get_event_loop().time()
+                if (now_mono - self._last_stray_trigger_cleanup
+                        >= self._stray_trigger_cleanup_interval_s):
+                    await self._cleanup_stray_trigger_orders()
+                    self._last_stray_trigger_cleanup = now_mono
+
                 await asyncio.sleep(5)  # Check every 5 seconds
 
             except asyncio.CancelledError:
@@ -3624,17 +3763,53 @@ class ExecutionEngineService(BaseService):
                     sl_pct = getattr(getattr(self._bot_config, 'risk', None), 'stop_loss_pct', 1.0) / 100
                     is_long = position.side == "long"
                     entry = float(position.entry_price) if position.entry_price else 0
-                    if entry > 0:
-                        exit_px = float(position.current_price) if position.current_price else entry
+                    exit_px_f = float(position.current_price) if position.current_price else entry
+
+                    # LLM-only mode detection: no TP/SL enforcement configured AND
+                    # neither a runtime tp_price nor sl_price was ever set on the
+                    # position. In that regime the fallback ternary would collapse
+                    # to "stop_loss" because implied_tp == implied_sl == entry,
+                    # mislabeling every winning trade. Emit a neutral
+                    # "external_close" label and let downstream consumers bucket
+                    # win/loss from realized PnL sign instead.
+                    # LLM-only mode = risk config disables both TP and SL
+                    # enforcement. We intentionally do NOT also treat "both
+                    # tp_price and sl_price None" as LLM-only, because in
+                    # normal mode a position whose exchange-side TP/SL
+                    # orders have not yet been materialized also has those
+                    # fields None, and we still want the config-threshold
+                    # inference path for it.
+                    llm_only_mode = (tp_pct == 0 and sl_pct == 0)
+
+                    if llm_only_mode:
+                        position.exit_reason = "external_close"
+                        pnl_sign = "win" if (position.unrealized_pnl or 0) > 0 else (
+                            "loss" if (position.unrealized_pnl or 0) < 0 else "flat"
+                        )
+                        self._logger.info(
+                            "%s exit_reason=external_close (LLM-only mode, pnl_sign=%s, exit_px=%.4f, entry=%.4f)",
+                            position.symbol, pnl_sign, exit_px_f, entry,
+                        )
+                    elif entry > 0:
                         implied_tp = entry * (1 + tp_pct) if is_long else entry * (1 - tp_pct)
                         implied_sl = entry * (1 - sl_pct) if is_long else entry * (1 + sl_pct)
-                        tp_dist = abs(exit_px - implied_tp)
-                        sl_dist = abs(exit_px - implied_sl)
-                        position.exit_reason = "take_profit" if tp_dist < sl_dist else "stop_loss"
+                        tp_dist = abs(exit_px_f - implied_tp)
+                        sl_dist = abs(exit_px_f - implied_sl)
+                        if tp_dist == sl_dist:
+                            # Degenerate tie — use realized PnL sign instead of
+                            # defaulting to stop_loss (which mislabels winners).
+                            pnl = position.unrealized_pnl or 0
+                            position.exit_reason = "take_profit" if pnl > 0 else (
+                                "stop_loss" if pnl < 0 else "external_close"
+                            )
+                        else:
+                            position.exit_reason = "take_profit" if tp_dist < sl_dist else "stop_loss"
                         self._logger.info(
                             "%s exit_reason inferred from config thresholds: %s (exit_px=%.4f, implied_tp=%.4f, implied_sl=%.4f)",
-                            position.symbol, position.exit_reason, exit_px, implied_tp, implied_sl,
+                            position.symbol, position.exit_reason, exit_px_f, implied_tp, implied_sl,
                         )
+                    else:
+                        position.exit_reason = "unknown"
                 except Exception as e:
                     self._logger.warning("Failed to infer exit_reason for %s: %s", position.symbol, e)
                     position.exit_reason = "unknown"
@@ -3825,22 +4000,71 @@ class ExecutionEngineService(BaseService):
         self.metrics.orders_cancelled += cancelled
         return cancelled
     
-    async def close_position(self, symbol: str) -> Optional[Dict[str, Any]]:
+    def _should_block_close_for_min_hold(self, position: ExecutionPosition) -> bool:
+        """Return True if the position is younger than config min_hold_minutes.
+
+        Reads ``self._bot_config.stops.min_hold_minutes`` (anti-churn gate).
+        A value of 0 disables the gate. If ``position.opened_at`` is unknown,
+        we fail OPEN (do not block) to avoid wedging the bot; the FLAG-Trader
+        exit path already has its own fail-safe for that race window.
+        """
+        min_hold = int(getattr(self._bot_config.stops, "min_hold_minutes", 0) or 0)
+        if min_hold <= 0:
+            return False
+        if position.opened_at is None:
+            return False
+        age_minutes = (
+            datetime.now(timezone.utc) - _ensure_aware(position.opened_at)
+        ).total_seconds() / 60.0
+        return age_minutes < float(min_hold)
+
+    async def close_position(
+        self,
+        symbol: str,
+        *,
+        override_min_hold: bool = False,
+    ) -> Optional[Dict[str, Any]]:
         """
         Close a specific position.
-        
+
         Args:
             symbol: Symbol to close
-            
+            override_min_hold: If True, bypass the anti-churn min_hold gate.
+                Reserved for emergency/manual paths. Normal in-bot decision
+                paths (strength_exit, roi_target, momentum_fade,
+                regime_change, max_hold_time, TP/SL hit) must leave this
+                False so the configured min_hold window is respected.
+
         Returns:
-            Order result or None if no position
+            Order result or None if no position (or blocked by min_hold).
         """
         if symbol not in self.active_positions:
             self._logger.warning("No position to close for %s", symbol)
             return None
-        
+
         position = self.active_positions[symbol]
-        
+
+        if not override_min_hold and self._should_block_close_for_min_hold(position):
+            age_min = (
+                (datetime.now(timezone.utc) - _ensure_aware(position.opened_at)).total_seconds() / 60.0
+                if position.opened_at is not None
+                else -1.0
+            )
+            min_hold = int(getattr(self._bot_config.stops, "min_hold_minutes", 0) or 0)
+            self._logger.info(
+                "close blocked by min_hold: %s age=%.1fm < min_hold=%dm (exit_reason=%s)",
+                symbol,
+                age_min,
+                min_hold,
+                position.exit_reason,
+            )
+            # Roll back the closing guard / status so the next cycle can retry
+            # once the min_hold window elapses.
+            self._closing_positions.discard(symbol)
+            if position.status == PositionStatus.CLOSING:
+                position.status = PositionStatus.OPEN
+            return None
+
         # Cancel existing TP/SL orders
         for order_id in [position.tp_order_id, position.sl_order_id]:
             if order_id:
