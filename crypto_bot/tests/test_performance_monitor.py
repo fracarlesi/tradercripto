@@ -4,7 +4,7 @@ Tests for PerformanceMonitorService — snapshot notification.
 
 Verifies:
 - Level-scoped metrics (trades filtered by capital_ladder.started_at)
-- Fallback to 30-day rolling window when no ladder
+- Fallback to 12-hour rolling window when no ladder
 - Ladder status displayed correctly from persisted state
 - Notification format (concise, no redundancy)
 
@@ -162,21 +162,21 @@ class TestGetLevelTrades:
         assert min_trades == 30
         assert min_days == 14
 
-    def test_fallback_to_30d_without_ladder(self) -> None:
-        """Without a ladder, uses 30-day rolling window."""
+    def test_fallback_to_12h_without_ladder(self) -> None:
+        """Without a ladder, uses 12-hour rolling window."""
         old_trade = _make_trade(
-            closed_at=(datetime.now(timezone.utc) - timedelta(days=45)).isoformat(),
+            closed_at=(datetime.now(timezone.utc) - timedelta(hours=24)).isoformat(),
             pnl=-0.5,
         )
         recent_trade = _make_trade(
-            closed_at=(datetime.now(timezone.utc) - timedelta(days=5)).isoformat(),
+            closed_at=(datetime.now(timezone.utc) - timedelta(hours=2)).isoformat(),
             pnl=0.3,
         )
         svc = _make_service(trades=[old_trade, recent_trade], capital_ladder=None)
 
         trades, label, level_num, *_ = svc._get_level_trades()
         assert level_num == -1
-        assert label == "30d"
+        assert label == "12h"
         assert len(trades) == 1  # Only the recent trade
 
     def test_empty_started_at_falls_back(self) -> None:
@@ -237,7 +237,7 @@ class TestSnapshotNotification:
 
     @pytest.mark.asyncio
     async def test_no_ladder_fallback_format(self) -> None:
-        """Without ladder, report shows 30d rolling window."""
+        """Without ladder, report shows 12h rolling window."""
         trades = [
             _make_trade(pnl=0.5, closed_at=datetime.now(timezone.utc).isoformat()),
         ]
@@ -247,8 +247,35 @@ class TestSnapshotNotification:
         await svc._send_scheduled_report()
 
         body = wa._send_message.call_args[0][0]
-        assert "30d:" in body
+        assert "12h:" in body
         assert "Level" not in body
+
+    @pytest.mark.asyncio
+    async def test_fallback_snapshot_uses_12h_window(self) -> None:
+        """Fallback snapshot includes only trades closed in the last 12 hours."""
+        now = datetime.now(timezone.utc)
+        trades = [
+            # Inside 12h window
+            _make_trade(symbol="ETH", pnl=0.4, closed_at=(now - timedelta(hours=1)).isoformat()),
+            _make_trade(symbol="BTC", pnl=0.2, closed_at=(now - timedelta(hours=6)).isoformat()),
+            _make_trade(symbol="SOL", pnl=-0.1, closed_at=(now - timedelta(hours=11, minutes=30)).isoformat()),
+            # Outside 12h window
+            _make_trade(symbol="OLD1", pnl=99.0, closed_at=(now - timedelta(hours=13)).isoformat()),
+            _make_trade(symbol="OLD2", pnl=-50.0, closed_at=(now - timedelta(days=2)).isoformat()),
+            _make_trade(symbol="OLD3", pnl=10.0, closed_at=(now - timedelta(days=20)).isoformat()),
+        ]
+        wa = _make_whatsapp()
+        svc = _make_service(trades=trades, capital_ladder=None, whatsapp=wa)
+
+        await svc._send_scheduled_report()
+
+        body = wa._send_message.call_args[0][0]
+        # Only the 3 in-window trades should be counted
+        assert "12h: 3 trades" in body
+        # Old symbols must not appear in the Top line
+        assert "OLD1" not in body
+        assert "OLD2" not in body
+        assert "OLD3" not in body
 
     @pytest.mark.asyncio
     async def test_ladder_status_reads_from_state(self) -> None:
@@ -336,9 +363,9 @@ class TestMetricsProperty:
         assert m["level_label"] == "step_250"
 
     def test_metrics_without_ladder(self) -> None:
-        """Without ladder, metrics use 30d window."""
+        """Without ladder, metrics use 12h window."""
         recent = _make_trade(
-            closed_at=(datetime.now(timezone.utc) - timedelta(days=2)).isoformat(),
+            closed_at=(datetime.now(timezone.utc) - timedelta(hours=2)).isoformat(),
             pnl=1.0,
         )
         svc = _make_service(trades=[recent], capital_ladder=None)
