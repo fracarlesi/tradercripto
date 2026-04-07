@@ -1213,6 +1213,22 @@ class ConservativeBot:
             except (ValueError, TypeError):
                 pass
 
+        # STAGE A: capture real high/low curves observed between entry and exit
+        # so the dashboard can overlay them against the predicted TP/SL levels.
+        real_high: list | None = None
+        real_low: list | None = None
+        try:
+            if self._exchange and opened_at:
+                # Fetch enough 15m candles to comfortably cover the K-candle window.
+                candles_raw = await self._exchange.get_candles(
+                    symbol, interval="15m", limit=80,
+                )
+                if candles_raw:
+                    real_high = [float(c.get("h", c.get("high", 0))) for c in candles_raw]
+                    real_low = [float(c.get("l", c.get("low", 0))) for c in candles_raw]
+        except Exception as exc:  # pragma: no cover - best-effort
+            logger.debug("real curve fetch failed for %s: %s", symbol, exc)
+
         try:
             self._trade_logger.log_outcome(
                 symbol=symbol,
@@ -1223,6 +1239,8 @@ class ConservativeBot:
                 exit_reason=payload.get("exit_reason") or "unknown",
                 hold_duration_minutes=hold_minutes,
                 side=payload.get("side"),
+                real_high_curve=real_high,
+                real_low_curve=real_low,
             )
         except Exception:
             logger.exception("trade_logger.log_outcome failed for %s", symbol)

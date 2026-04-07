@@ -86,6 +86,22 @@ def _ensure_aware(dt: datetime) -> datetime:
     return dt
 
 
+def _exit_reason_to_v2(legacy: Optional[str]) -> Optional[str]:
+    """Map legacy exit_reason -> STAGE A v2 enum {tp, sl, expiry, manual}."""
+    if not legacy:
+        return None
+    s = str(legacy).lower()
+    if s in ("take_profit", "tp"):
+        return "tp"
+    if s in ("stop_loss", "sl", "trailing_stop", "violation_exit"):
+        return "sl"
+    if s in ("timeout", "regime_change", "max_hold", "expiry", "regime_exit"):
+        return "expiry"
+    if s in ("manual", "external_close"):
+        return "manual"
+    return None
+
+
 # =============================================================================
 # Data Classes
 # =============================================================================
@@ -242,6 +258,13 @@ class ExecutionPosition:
     entry_reason: str = ""           # Why position was opened (e.g. "squeeze_fire")
     entry_confidence: float = 0.0    # LLM confidence at entry time
     entry_trigger_details: str = ""  # Details about the trigger (e.g. squeeze params)
+
+    # STAGE A forecast-mode fields (predict-and-place)
+    expiry_at: Optional[datetime] = None
+    k_candles: int = 0
+    predicted_tp_pct: Optional[float] = None
+    predicted_sl_pct: Optional[float] = None
+    trade_id: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary."""
@@ -455,8 +478,7 @@ class ExecutionEngineService(BaseService):
         # Subscribe to trade intents (from risk manager)
         await self.subscribe(Topic.TRADE_INTENT, self._handle_signal)
 
-        # Subscribe to regime changes (close positions on regime invalidation)
-        await self.subscribe(Topic.REGIME, self._handle_regime_change)
+        # STAGE A: regime-change exits removed (predict-and-place execution).
 
         # SAFETY: Cancel orphan non-reduce-only orders from previous instances
         # before syncing positions or starting the monitor loop.
@@ -877,71 +899,8 @@ class ExecutionEngineService(BaseService):
         return self._DEFAULT_REGIME_GRACE_MINUTES
 
     async def _handle_regime_change(self, message: Message) -> None:
-        """Close positions whose entry regime no longer matches current regime.
-
-        If a position was opened in TREND and regime flips to RANGE/CHAOS,
-        close at market to free the slot for a better opportunity.
-
-        A configurable grace period (regime_exit_grace_minutes) protects
-        recently opened positions from being closed by transient regime
-        readings, especially after a service restart where the confirmation
-        counter resets.
-        """
-        payload = message.payload
-        symbol = payload.get("symbol", "")
-        new_regime = payload.get("regime", "")
-
-        if symbol not in self.active_positions:
-            return
-
-        position = self.active_positions[symbol]
-
-        # Only act on positions with known entry regime
-        if not position.entry_regime:
-            return
-
-        # Only close if regime actually changed from entry
-        if new_regime == position.entry_regime:
-            return
-
-        # Position is already closing — skip
-        if position.status != PositionStatus.OPEN:
-            return
-
-        # Grace period: skip regime-close for very new positions
-        grace_minutes = self._regime_exit_grace_minutes
-        if position.opened_at is None:
-            # No open timestamp recorded — treat as "old enough" to allow exit
-            age_minutes = float("inf")
-        else:
-            age_minutes = (
-                datetime.now(timezone.utc) - _ensure_aware(position.opened_at)
-            ).total_seconds() / 60.0
-        if age_minutes < grace_minutes:
-            self._logger.info(
-                "Skipping regime exit for %s — position age %.1f min < grace %d min",
-                symbol,
-                age_minutes,
-                grace_minutes,
-            )
-            return
-
-        self._logger.info(
-            "Regime invalidation: %s changed %s -> %s, closing %s %s position",
-            symbol,
-            position.entry_regime,
-            new_regime,
-            position.side,
-            symbol,
-        )
-
-        position.exit_reason = "regime_change"
-        try:
-            await self.close_position(symbol)
-        except Exception as e:
-            self._logger.error(
-                "Failed to close %s on regime_change: %s", symbol, e
-            )
+        """STAGE A: disabled — regime exits removed."""
+        return None
 
     def _validate_signal(self, signal: Dict[str, Any]) -> bool:
         """
@@ -1601,7 +1560,28 @@ class ExecutionEngineService(BaseService):
             entry_trigger_details=signal.get("entry_trigger_details", ""),
             one_r_pct=one_r_pct,
             one_r_price=one_r_price,
+            predicted_tp_pct=signal.get("model_tp_pct"),
+            predicted_sl_pct=signal.get("model_sl_pct"),
+            trade_id=signal.get("trade_id"),
         )
+
+        # STAGE A: derive expiry_at from forecast config when not provided.
+        # The TradeIntent pydantic model does not yet carry expiry_at, so we
+        # compute it here at fill time.
+        forecast_cfg = getattr(self._bot_config, "forecast", None)
+        k_candles_cfg = int(getattr(forecast_cfg, "k_candles", 34) or 34)
+        candle_period_min = int(getattr(forecast_cfg, "candle_period_minutes", 15) or 15)
+        signal_expiry = signal.get("expiry_at")
+        if signal_expiry is not None:
+            position.expiry_at = (
+                signal_expiry if isinstance(signal_expiry, datetime)
+                else datetime.fromisoformat(str(signal_expiry))
+            )
+        else:
+            position.expiry_at = datetime.now(timezone.utc) + timedelta(
+                minutes=k_candles_cfg * candle_period_min
+            )
+        position.k_candles = int(signal.get("k_candles") or k_candles_cfg)
         
         self.active_positions[symbol] = position
         self.metrics.positions_opened += 1
@@ -2599,57 +2579,40 @@ class ExecutionEngineService(BaseService):
                 )
 
     async def _monitor_positions(self) -> None:
-        """Background task to monitor positions and fills."""
-        self._logger.info("Position monitoring started")
+        """STAGE A: predict-and-place monitor loop.
 
+        Only three exit checks remain:
+          1. TP filled  (detected via _check_closed_positions / sync)
+          2. SL filled  (detected via _check_closed_positions / sync)
+          3. now >= expiry_at -> close_position(reason="expiry")
+
+        All R-based, breakeven, trailing, ROI, momentum-fade and regime-exit
+        logic has been disabled. Maker reprice + stale-order cleanup are
+        retained because they belong to the entry-side execution path.
+        """
+        self._logger.info("Position monitoring started (STAGE A: predict-and-place)")
         while True:
             try:
-                # Poll for limit order fills (detect filled orders and set TP/SL)
+                # Entry-side housekeeping (not exit logic).
                 await self._poll_pending_order_fills()
-
-                # Reprice pending maker orders if best bid/ask moved
                 await self._reprice_maker_orders()
-
-                # Cancel stale limit orders that exceeded timeout
                 await self._cancel_stale_orders()
 
-                # Sync positions from exchange
+                # Exit detection — TP/SL fills.
                 await self._sync_positions_from_exchange()
-
-                # Check for closed positions (SL/TP hit)
                 await self._check_closed_positions()
 
-                # Update R-multiples for all positions
-                self._update_r_multiples()
+                # Hard expiry: K-candle timeout.
+                await self._check_expiry_exits()
 
-                # R-based exits: breakeven protection, strength TP, trailing
-                await self._check_r_based_breakeven()
-                await self._check_strength_exit()
-                await self._check_r_based_trailing()
-
-                # Legacy breakeven/trailing (only active when R-based disabled)
-                await self._check_breakeven_stops()
-                await self._check_trailing_stops()
-
-                # Close dead trades that exceeded max hold time
-                await self._check_max_hold_time()
-
-                # Check for ROI-based exits (time-based take profit)
-                await self._check_roi_exits()
-
-                # Check for momentum fade exits
-                await self._check_momentum_fade()
-
-                # Periodic stray trigger-order cleanup (Bug B).  Runs roughly
-                # every _stray_trigger_cleanup_interval_s (default 30 min).
+                # Periodic stray reduce-only trigger cleanup (defensive).
                 now_mono = asyncio.get_event_loop().time()
                 if (now_mono - self._last_stray_trigger_cleanup
                         >= self._stray_trigger_cleanup_interval_s):
                     await self._cleanup_stray_trigger_orders()
                     self._last_stray_trigger_cleanup = now_mono
 
-                await asyncio.sleep(5)  # Check every 5 seconds
-
+                await asyncio.sleep(5)
             except asyncio.CancelledError:
                 self._logger.debug("Position monitoring cancelled")
                 break
@@ -2927,806 +2890,86 @@ class ExecutionEngineService(BaseService):
                     self._closing_positions.discard(symbol)
                     position.status = PositionStatus.OPEN
 
+    async def _check_expiry_exits(self) -> None:
+        """STAGE A: close any open position whose K-candle expiry has elapsed."""
+        forecast_cfg = getattr(self._bot_config, "forecast", None)
+        offset_bps = float(getattr(forecast_cfg, "expiry_limit_offset_bps", 5))
+        _timeout_sec = float(getattr(forecast_cfg, "expiry_limit_timeout_sec", 10))
+        _ = (offset_bps, _timeout_sec)  # reserved for limit-then-market path
+
+        now = datetime.now(timezone.utc)
+        for symbol, position in list(self.active_positions.items()):
+            if position.status not in (PositionStatus.OPEN,):
+                continue
+            if symbol in self._closing_positions or symbol in self._settling_symbols:
+                continue
+            if position.expiry_at is None:
+                continue
+            expiry = _ensure_aware(position.expiry_at)
+            if now < expiry:
+                continue
+
+            self._logger.info(
+                "%s expiry hit (now=%s >= expiry_at=%s) - closing on K-candle timeout",
+                symbol, now.isoformat(), expiry.isoformat(),
+            )
+            self._closing_positions.add(symbol)
+            position.status = PositionStatus.CLOSING
+            position.exit_reason = "expiry"
+            try:
+                await self.close_position(symbol)
+            except Exception as e:
+                self._logger.error("Failed to close %s on expiry: %s", symbol, e)
+                self._closing_positions.discard(symbol)
+                position.status = PositionStatus.OPEN
+
     # =========================================================================
     # R-Based Exit System (Mechanical — No LLM)
     # =========================================================================
 
     def _update_r_multiples(self) -> None:
-        """Update current and peak R-multiples for all open positions.
-
-        Called every monitor cycle (5s). R-multiple = profit / 1R distance.
-        """
-        for symbol, position in self.active_positions.items():
-            if position.status != PositionStatus.OPEN:
-                continue
-            if position.one_r_price <= 0 or position.entry_price <= 0:
-                continue
-
-            # Calculate current profit in price units
-            if position.side == "long":
-                profit_price = position.current_price - position.entry_price
-            else:
-                profit_price = position.entry_price - position.current_price
-
-            # R-multiple = profit / 1R
-            r_mult = profit_price / position.one_r_price
-            position.current_r_multiple = round(r_mult, 2)
-
-            # Track peak R
-            if r_mult > position.peak_r_multiple:
-                position.peak_r_multiple = round(r_mult, 2)
+        """STAGE A: disabled."""
+        return None
 
     async def _check_r_based_breakeven(self) -> None:
-        """Move SL to entry price (breakeven) when profit reaches bp_activation_r.
-
-        This is a MECHANICAL rule — no LLM decision needed.
-        When position reaches +2R (configurable), the stop loss moves to entry + offset.
-        This makes the trade risk-free.
-
-        Requires:
-        - R-based exits enabled in config
-        - Position has one_r_pct > 0 (model predicted a SL)
-        - Position not already at breakeven
-        - Position has an existing SL order to replace
-        """
-        stops_cfg = getattr(self._bot_config, "stops", None)
-        if not stops_cfg or not getattr(stops_cfg, "r_based_exits_enabled", False):
-            return
-
-        bp_activation_r = getattr(stops_cfg, "bp_activation_r", 2.0)
-        bp_offset_pct = getattr(stops_cfg, "bp_offset_pct", 0.15)
-
-        for symbol, position in list(self.active_positions.items()):
-            if position.status != PositionStatus.OPEN:
-                continue
-            if position.breakeven_activated:
-                continue
-            if symbol in self._settling_symbols:
-                continue
-            if position.one_r_pct <= 0:
-                continue  # No 1R defined, skip R-based logic
-            if position.entry_price <= 0:
-                continue
-
-            if position.current_r_multiple < bp_activation_r:
-                continue
-
-            # --- Breakeven triggered at bp_activation_r ---
-            is_long = position.side == "long"
-            if is_long:
-                new_sl_price = position.entry_price * (1 + bp_offset_pct / 100)
-            else:
-                new_sl_price = position.entry_price * (1 - bp_offset_pct / 100)
-
-            self._logger.info(
-                "R-BREAKEVEN triggered: %s %s | R=%.1f >= %.1f | SL -> entry %.4f (offset %.2f%%)",
-                "LONG" if is_long else "SHORT", symbol,
-                position.current_r_multiple, bp_activation_r,
-                new_sl_price, bp_offset_pct,
-            )
-
-            # Cancel old SL first — must succeed before placing new one
-            if position.sl_order_id:
-                try:
-                    await self.client.cancel_order(symbol, int(position.sl_order_id))
-                    self._logger.debug("Cancelled old SL %s for %s", position.sl_order_id, symbol)
-                except Exception as e:
-                    self._logger.warning(
-                        "Failed to cancel old SL %s for %s: %s — skipping R-breakeven",
-                        position.sl_order_id, symbol, e,
-                    )
-                    continue
-            else:
-                self._logger.warning(
-                    "No existing SL order_id for %s — skipping R-breakeven to avoid duplicate orders",
-                    symbol,
-                )
-                continue
-
-            # Place new SL at breakeven
-            try:
-                sl_result = await self._place_trigger_with_retry(
-                    symbol=symbol,
-                    is_buy=not is_long,
-                    size=position.size,
-                    trigger_price=new_sl_price,
-                    tpsl="sl",
-                )
-                position.sl_order_id = sl_result.get("orderId")
-                position.sl_price = new_sl_price
-                position.breakeven_activated = True
-                position.last_trail_r = bp_activation_r
-                self._logger.info(
-                    "R-BREAKEVEN SL placed: %s @ %.4f (order %s) | 1R=%.2f%%",
-                    symbol, new_sl_price, position.sl_order_id, position.one_r_pct,
-                )
-            except Exception as e:
-                self._logger.error("Failed to place R-breakeven SL for %s: %s", symbol, e)
+        """STAGE A: disabled. Predict-and-place uses TP/SL/expiry only."""
+        return None
 
     async def _check_strength_exit(self) -> None:
-        """Auto-close position when profit reaches strength_exit_r.
-
-        This is a MECHANICAL take-profit — no LLM decision needed.
-        When position reaches +3R (configurable), close immediately.
-        """
-        stops_cfg = getattr(self._bot_config, "stops", None)
-        if not stops_cfg or not getattr(stops_cfg, "r_based_exits_enabled", False):
-            return
-
-        strength_r = getattr(stops_cfg, "strength_exit_r", 3.0)
-
-        for symbol, position in list(self.active_positions.items()):
-            if position.status != PositionStatus.OPEN:
-                continue
-            if symbol in self._settling_symbols:
-                continue
-            if position.one_r_pct <= 0:
-                continue
-            if symbol in self._closing_positions:
-                continue
-
-            if position.current_r_multiple >= strength_r:
-                self._logger.info(
-                    "R-STRENGTH EXIT: %s %s | R=%.1f >= %.1f | auto-closing (mechanical TP)",
-                    position.side.upper(), symbol,
-                    position.current_r_multiple, strength_r,
-                )
-                position.exit_reason = "strength_exit"
-                try:
-                    await self.close_position(symbol)
-                except Exception as e:
-                    self._logger.error("Failed strength exit for %s: %s", symbol, e)
+        """STAGE A: disabled."""
+        return None
 
     async def _check_r_based_trailing(self) -> None:
-        """R-based trailing stop: after breakeven, lock profit as R grows.
-
-        After BP is activated, for every trailing_step_r gained, the SL moves
-        up by trailing_lock_r. This is more intuitive than ATR-based trailing.
-
-        Example with defaults (step=1R, lock=0.5R, start=2R):
-        - At 2R: BP activated, SL at entry
-        - At 3R: SL moves to entry + 0.5R
-        - At 4R: SL moves to entry + 1.0R
-        - At 5R: SL moves to entry + 1.5R
-        """
-        stops_cfg = getattr(self._bot_config, "stops", None)
-        if not stops_cfg or not getattr(stops_cfg, "r_based_exits_enabled", False):
-            return
-        if not getattr(stops_cfg, "trailing_r_enabled", False):
-            return
-
-        trailing_start_r = getattr(stops_cfg, "trailing_start_r", 2.0)
-        trailing_step_r = getattr(stops_cfg, "trailing_step_r", 1.0)
-        trailing_lock_r = getattr(stops_cfg, "trailing_lock_r", 0.5)
-
-        for symbol, position in list(self.active_positions.items()):
-            if position.status != PositionStatus.OPEN:
-                continue
-            if not position.breakeven_activated:
-                continue  # Trailing only after breakeven
-            if symbol in self._settling_symbols:
-                continue
-            if position.one_r_price <= 0:
-                continue
-
-            # How many full steps above trailing_start_r has peak_r reached?
-            if position.peak_r_multiple < trailing_start_r + trailing_step_r:
-                continue  # Haven't gained a full step yet
-
-            steps = int((position.peak_r_multiple - trailing_start_r) / trailing_step_r)
-            if steps <= 0:
-                continue
-
-            # Target R-level for SL = number of steps * lock per step
-            target_sl_r = steps * trailing_lock_r
-
-            # Only update if this is higher than last trail update
-            if target_sl_r <= position.last_trail_r - trailing_start_r:
-                continue  # SL already at this level or higher
-
-            is_long = position.side == "long"
-
-            # Calculate new SL price: entry + target_sl_r * 1R
-            if is_long:
-                new_sl = position.entry_price + target_sl_r * position.one_r_price
-            else:
-                new_sl = position.entry_price - target_sl_r * position.one_r_price
-
-            # Safety: only tighten SL, never loosen it
-            if position.sl_price:
-                if is_long and new_sl <= position.sl_price:
-                    continue
-                if not is_long and new_sl >= position.sl_price:
-                    continue
-
-            self._logger.info(
-                "R-TRAILING: %s %s | peak_R=%.1f | steps=%d | SL -> entry %+.1fR (%.4f)",
-                "LONG" if is_long else "SHORT", symbol,
-                position.peak_r_multiple, steps, target_sl_r, new_sl,
-            )
-
-            # Cancel old SL first
-            if not position.sl_order_id:
-                self._logger.warning(
-                    "No existing SL order_id for %s — skipping R-trailing update",
-                    symbol,
-                )
-                continue
-
-            try:
-                await self.client.cancel_order(symbol, int(position.sl_order_id))
-            except Exception as e:
-                self._logger.warning(
-                    "Failed to cancel old SL %s for %s: %s — skipping R-trailing",
-                    position.sl_order_id, symbol, e,
-                )
-                continue
-
-            try:
-                sl_result = await self._place_trigger_with_retry(
-                    symbol=symbol,
-                    is_buy=not is_long,
-                    size=position.size,
-                    trigger_price=new_sl,
-                    tpsl="sl",
-                )
-                position.sl_order_id = sl_result.get("orderId")
-                position.sl_price = new_sl
-                position.last_trail_r = trailing_start_r + target_sl_r
-                if not position.trailing_active:
-                    position.trailing_active = True
-                self._logger.info(
-                    "R-TRAILING SL placed: %s @ %.4f (order %s)",
-                    symbol, new_sl, position.sl_order_id,
-                )
-            except Exception as e:
-                self._logger.error(
-                    "Failed to place R-trailing SL for %s after cancel: %s — position has NO SL!",
-                    symbol, e,
-                )
+        """STAGE A: disabled."""
+        return None
 
     # =========================================================================
     # Legacy Breakeven / Trailing (active only when R-based is disabled)
     # =========================================================================
 
     async def _check_breakeven_stops(self) -> None:
-        """Move SL to entry price (breakeven) when unrealized P&L reaches threshold.
-
-        LEGACY method — only active when R-based exits are disabled.
-        For each OPEN position that has not yet been moved to breakeven:
-        1. Calculate current P&L % using Decimal arithmetic.
-        2. If P&L % >= BREAKEVEN_THRESHOLD_PCT:
-           a. Cancel the old SL trigger on the exchange.
-           b. Only if the cancel succeeds, place a new SL trigger at the entry price.
-           c. Mark the position as breakeven_activated.
-        """
-        # Skip if R-based exits are handling breakeven
-        stops_cfg = getattr(self._bot_config, "stops", None)
-        if stops_cfg and getattr(stops_cfg, "r_based_exits_enabled", False):
-            return
-
-        from decimal import Decimal
-
-        cfg_be = getattr(self._bot_config.risk, "breakeven_threshold_pct", BREAKEVEN_THRESHOLD_PCT)
-        threshold = Decimal(str(cfg_be))
-
-        # Breakeven disabled when TP/SL are 0 (LLM-only exit mode)
-        cfg_sl = getattr(self._bot_config.risk, "stop_loss_pct", 0)
-        cfg_tp = getattr(self._bot_config.risk, "take_profit_pct", 0)
-        if cfg_sl == 0 and cfg_tp == 0:
-            return
-
-        for symbol, position in list(self.active_positions.items()):
-            if position.status != PositionStatus.OPEN:
-                continue
-            if position.breakeven_activated:
-                continue
-            if symbol in self._settling_symbols:
-                continue
-            if position.entry_price <= 0:
-                continue
-
-            # Calculate P&L % with Decimal precision
-            entry = Decimal(str(position.entry_price))
-            current = Decimal(str(position.current_price))
-
-            if position.side == "long":
-                pnl_pct = (current - entry) / entry * Decimal("100")
-            else:
-                pnl_pct = (entry - current) / entry * Decimal("100")
-
-            if pnl_pct < threshold:
-                continue
-
-            # --- Breakeven triggered ---
-            is_long = position.side == "long"
-            # Offset above/below entry to cover round-trip exchange fees
-            if is_long:
-                new_sl_price = position.entry_price * (1 + BREAKEVEN_OFFSET_PCT / 100)
-            else:
-                new_sl_price = position.entry_price * (1 - BREAKEVEN_OFFSET_PCT / 100)
-
-            self._logger.info(
-                "Breakeven activated: %s %s — SL moved to entry %.4f (P&L %.2f%%)",
-                "LONG" if is_long else "SHORT",
-                symbol,
-                new_sl_price,
-                float(pnl_pct),
-            )
-
-            # 1) Cancel old SL trigger — MUST succeed before placing new one
-            if position.sl_order_id:
-                try:
-                    await self.client.cancel_order(symbol, int(position.sl_order_id))
-                    self._logger.debug(
-                        "Cancelled old SL order %s for %s", position.sl_order_id, symbol,
-                    )
-                except Exception as e:
-                    self._logger.warning(
-                        "Failed to cancel old SL %s for %s: %s — skipping breakeven to avoid duplicate orders",
-                        position.sl_order_id, symbol, e,
-                    )
-                    continue  # Do NOT place new SL if cancel failed
-            else:
-                self._logger.warning(
-                    "No existing SL order_id for %s — skipping breakeven to avoid duplicate orders",
-                    symbol,
-                )
-                continue  # Do NOT place new SL without cancelling old one first
-
-            # 2) Place new SL trigger at entry (breakeven)
-            try:
-                sl_result = await self._place_trigger_with_retry(
-                    symbol=symbol,
-                    is_buy=not is_long,
-                    size=position.size,
-                    trigger_price=new_sl_price,
-                    tpsl="sl",
-                )
-                position.sl_order_id = sl_result.get("orderId")
-                position.sl_price = new_sl_price
-                position.breakeven_activated = True
-                self._logger.info(
-                    "Breakeven SL placed: %s @ %.4f (order %s)",
-                    symbol, new_sl_price, position.sl_order_id,
-                )
-            except Exception as e:
-                self._logger.error(
-                    "Failed to place breakeven SL for %s: %s", symbol, e,
-                )
+        """STAGE A: disabled."""
+        return None
 
     async def _check_max_hold_time(self) -> None:
-        """Force-close ANY position that has been open longer than max_hold_hours.
-
-        Previously only closed "dead" trades with negligible P&L (< 0.3%).
-        This caused zombie positions that could stay open for days if P&L
-        oscillated outside the dead-trade window without hitting TP/SL.
-        Now unconditionally closes after max_hold_hours regardless of P&L.
-        """
-        stops_cfg = getattr(self._bot_config, "stops", None)
-        max_hold = getattr(stops_cfg, "max_hold_hours", 6.0) if stops_cfg else 6.0
-
-        # max_hold_hours=0 means DISABLED (LLM-only exit management)
-        if max_hold <= 0:
-            return
-
-        now = datetime.now(timezone.utc)
-
-        for symbol, position in list(self.active_positions.items()):
-            if position.status != PositionStatus.OPEN:
-                continue
-            if symbol in self._settling_symbols:
-                continue
-            if not position.opened_at:
-                continue
-            if position.entry_price <= 0:
-                continue
-
-            age_hours = (now - _ensure_aware(position.opened_at)).total_seconds() / 3600.0
-            if age_hours < max_hold:
-                continue
-
-            # Calculate P&L percentage for logging
-            if position.side == "long":
-                pnl_pct = (position.current_price - position.entry_price) / position.entry_price
-            else:
-                pnl_pct = (position.entry_price - position.current_price) / position.entry_price
-
-            self._logger.info(
-                "MAX HOLD TIME: %s %s | age=%.1fh | pnl=%.3f%% | force-closing (unconditional)",
-                position.side.upper(), symbol, age_hours, pnl_pct * 100,
-            )
-            position.exit_reason = "max_hold_time"
-            try:
-                await self.close_position(symbol)
-            except Exception as e:
-                self._logger.error(
-                    "Failed to close %s on max_hold_time: %s", symbol, e
-                )
+        """STAGE A: disabled — superseded by K-candle expiry timer."""
+        return None
 
     async def _check_trailing_stops(self) -> None:
-        """ATR-based trailing stop.
+        """STAGE A: disabled."""
+        return None
 
-        LEGACY method — only active when R-based exits are disabled.
-
-        Activates only after breakeven has been triggered. Once active, the SL
-        follows price at a distance of trailing_atr_mult x ATR from the peak
-        (LONG) or trough (SHORT). The SL is only ever tightened, never loosened.
-
-        Requirements for trailing to engage:
-        - Position must be OPEN
-        - Breakeven must already be activated
-        - entry_atr_pct must be > 0 (ATR was available at entry)
-        - current_price must be > 0
-        """
-        # Skip if R-based exits are handling trailing
-        stops_cfg = getattr(self._bot_config, "stops", None)
-        if stops_cfg and getattr(stops_cfg, "r_based_exits_enabled", False):
-            return
-
-        trailing_mult = getattr(
-            getattr(self._bot_config, "stops", None),
-            "trailing_atr_mult", 0  # Safe fallback: disabled when key missing
-        )
-
-        if trailing_mult == 0:
-            return
-
-        for symbol, position in list(self.active_positions.items()):
-            if position.status != PositionStatus.OPEN:
-                continue
-            if not position.breakeven_activated:
-                continue  # Trailing only after breakeven
-            if symbol in self._settling_symbols:
-                continue
-
-            # Refresh ATR from market state cache (avoid stale entry-time values)
-            cached_states = getattr(self, "_market_states", {})
-            cached = cached_states.get(symbol) if cached_states else None
-            if cached and getattr(cached, "atr_pct", None):
-                position.entry_atr_pct = float(cached.atr_pct)
-
-            if position.entry_atr_pct <= 0:
-                continue  # No ATR data, skip
-
-            current = position.current_price
-            if current <= 0:
-                continue
-
-            # Trailing distance = entry_price * (atr_pct / 100) * trailing_mult
-            trail_distance = position.entry_price * (position.entry_atr_pct / 100) * trailing_mult
-
-            if position.side == "long":
-                # Update peak price
-                if current > position.highest_price:
-                    position.highest_price = current
-
-                # Calculate trailing SL from peak
-                new_sl = position.highest_price - trail_distance
-
-                # Only tighten SL (never lower it for longs)
-                if position.sl_price is None or new_sl > position.sl_price:
-                    if not position.trailing_active:
-                        position.trailing_active = True
-                        self._logger.info(
-                            "TRAILING activated %s LONG: peak=%.4f, trail_sl=%.4f (was %.4f)",
-                            symbol, position.highest_price, new_sl, position.sl_price,
-                        )
-
-                    # Cancel old SL FIRST, then place new one
-                    if not position.sl_order_id:
-                        self._logger.warning(
-                            "No existing SL order_id for %s — skipping trailing update to avoid duplicate orders",
-                            symbol,
-                        )
-                        continue
-
-                    try:
-                        await self.client.cancel_order(symbol, int(position.sl_order_id))
-                    except Exception as e:
-                        self._logger.warning(
-                            "Failed to cancel old trailing SL %s for %s: %s — skipping update to avoid duplicate orders",
-                            position.sl_order_id, symbol, e,
-                        )
-                        continue  # Do NOT place new SL if cancel failed
-
-                    try:
-                        sl_result = await self._place_trigger_with_retry(
-                            symbol=symbol,
-                            is_buy=False,  # Close long = sell
-                            size=position.size,
-                            trigger_price=new_sl,
-                            tpsl="sl",
-                        )
-                        position.sl_order_id = sl_result.get("orderId")
-                        position.sl_price = new_sl
-                        self._logger.info(
-                            "TRAILING updated %s: new_sl=%.4f (peak=%.4f, trail=%.4f)",
-                            symbol, new_sl, position.highest_price, trail_distance,
-                        )
-                    except Exception as e:
-                        self._logger.error(
-                            "Failed to place trailing SL for %s after cancel succeeded: %s — position has NO SL!",
-                            symbol, e,
-                        )
-
-            elif position.side == "short":
-                # Update trough price
-                if current < position.lowest_price:
-                    position.lowest_price = current
-
-                # Calculate trailing SL from trough
-                new_sl = position.lowest_price + trail_distance
-
-                # Only tighten SL (never raise it for shorts)
-                if position.sl_price is None or new_sl < position.sl_price:
-                    if not position.trailing_active:
-                        position.trailing_active = True
-                        self._logger.info(
-                            "TRAILING activated %s SHORT: trough=%.4f, trail_sl=%.4f (was %.4f)",
-                            symbol, position.lowest_price, new_sl, position.sl_price,
-                        )
-
-                    # Cancel old SL FIRST, then place new one
-                    if not position.sl_order_id:
-                        self._logger.warning(
-                            "No existing SL order_id for %s — skipping trailing update to avoid duplicate orders",
-                            symbol,
-                        )
-                        continue
-
-                    try:
-                        await self.client.cancel_order(symbol, int(position.sl_order_id))
-                    except Exception as e:
-                        self._logger.warning(
-                            "Failed to cancel old trailing SL %s for %s: %s — skipping update to avoid duplicate orders",
-                            position.sl_order_id, symbol, e,
-                        )
-                        continue  # Do NOT place new SL if cancel failed
-
-                    try:
-                        sl_result = await self._place_trigger_with_retry(
-                            symbol=symbol,
-                            is_buy=True,  # Close short = buy
-                            size=position.size,
-                            trigger_price=new_sl,
-                            tpsl="sl",
-                        )
-                        position.sl_order_id = sl_result.get("orderId")
-                        position.sl_price = new_sl
-                        self._logger.info(
-                            "TRAILING updated %s: new_sl=%.4f (trough=%.4f, trail=%.4f)",
-                            symbol, new_sl, position.lowest_price, trail_distance,
-                        )
-                    except Exception as e:
-                        self._logger.error(
-                            "Failed to place trailing SL for %s after cancel succeeded: %s — position has NO SL!",
-                            symbol, e,
-                        )
-
-    async def should_exit_on_roi(self, position: ExecutionPosition) -> tuple[bool, float, float]:
-        """
-        Check if position should exit based on graduated ROI target.
-        
-        ROI targets decrease over time:
-        - 0-30min: 3% profit target
-        - 30-60min: 2% profit target  
-        - 1-2h: 1.5% profit target
-        - 2-4h: 1% profit target
-        - 4-8h: 0.5% profit target
-        - 8h+: Break-even (exit at any profit)
-        
-        Args:
-            position: ExecutionPosition to check
-            
-        Returns:
-            Tuple of (should_exit, current_roi_pct, target_roi_pct)
-        """
-        # Get ROI config from bot config
-        roi_config: Dict[str, float] = {}
-        try:
-            stops = getattr(self._bot_config, 'stops', None)
-            if stops is not None and hasattr(stops, 'minimal_roi'):
-                roi_config = getattr(stops, 'minimal_roi', None) or {}
-        except Exception:
-            pass
-        
-        if not roi_config:
-            return False, 0.0, 0.0  # ROI not configured
-        
-        # Need opened_at to calculate time in trade
-        if not position.opened_at:
-            return False, 0.0, 0.0
-        
-        # Calculate time in trade (minutes)
-        now = datetime.now(timezone.utc)
-        time_in_trade_seconds = (now - _ensure_aware(position.opened_at)).total_seconds()
-        time_in_trade_min = time_in_trade_seconds / 60
-        
-        # Find current ROI target based on time elapsed
-        # ROI config keys are strings representing minutes
-        target_roi = 0.0
-        applicable_threshold = 0
-        
-        for time_threshold_str, roi_value in sorted(
-            roi_config.items(),
-            key=lambda x: int(x[0])  # Sort by time threshold
-        ):
-            time_threshold_min = int(time_threshold_str)
-            
-            if time_in_trade_min >= time_threshold_min:
-                target_roi = float(roi_value)
-                applicable_threshold = time_threshold_min
-            else:
-                break  # We've passed applicable thresholds
-        
-        # Calculate current ROI %
-        if position.entry_price <= 0:
-            return False, 0.0, target_roi
-        
-        if position.side == "long":
-            current_roi_pct = (position.current_price - position.entry_price) / position.entry_price
-        else:  # short
-            current_roi_pct = (position.entry_price - position.current_price) / position.entry_price
-        
-        # Check if current ROI meets target
-        if current_roi_pct >= target_roi:
-            self._logger.info(
-                "ROI target reached for %s: Current ROI %.2f%% >= Target %.2f%% "
-                "(time in trade: %.1f min, threshold: %d min)",
-                position.symbol,
-                current_roi_pct * 100,
-                target_roi * 100,
-                time_in_trade_min,
-                applicable_threshold
-            )
-            return True, current_roi_pct, target_roi
-        
-        return False, current_roi_pct, target_roi
+    def should_exit_on_roi(self, position: ExecutionPosition) -> bool:
+        """STAGE A: disabled."""
+        return False
 
     async def _check_roi_exits(self) -> None:
-        """
-        Check all active positions for ROI-based exits.
-        
-        This is called from _monitor_positions and checks if any position
-        has reached its time-based ROI target.
-        """
-        for symbol, position in list(self.active_positions.items()):
-            if position.status != PositionStatus.OPEN:
-                continue
-            if symbol in self._settling_symbols:
-                continue
-
-            try:
-                should_exit, current_roi, target_roi = await self.should_exit_on_roi(position)
-                
-                if should_exit:
-                    # Calculate time in trade for logging
-                    time_in_trade_str = "unknown"
-                    if position.opened_at:
-                        time_in_trade_sec = (datetime.now(timezone.utc) - _ensure_aware(position.opened_at)).total_seconds()
-                        hours = int(time_in_trade_sec // 3600)
-                        minutes = int((time_in_trade_sec % 3600) // 60)
-                        time_in_trade_str = f"{hours}h {minutes}m"
-                    
-                    # Calculate PnL
-                    pnl = position.unrealized_pnl
-                    
-                    self._logger.info(
-                        "Closing trade via ROI: %s | Entry: $%.2f | "
-                        "Exit: $%.2f | PnL: $%.2f (%.2f%%) | "
-                        "Time in trade: %s | ROI target: %.2f%%",
-                        symbol,
-                        position.entry_price,
-                        position.current_price,
-                        pnl,
-                        current_roi * 100,
-                        time_in_trade_str,
-                        target_roi * 100
-                    )
-                    
-                    # Mark exit reason before closing
-                    position.exit_reason = "roi_target"
-
-                    # Close position
-                    try:
-                        await self.close_position(symbol)
-                    except Exception as e:
-                        self._logger.error(
-                            "Failed to close %s on roi_target: %s", symbol, e
-                        )
-
-            except Exception as e:
-                self._logger.error(
-                    "Error checking ROI exit for %s: %s",
-                    symbol, e
-                )
+        """STAGE A: disabled."""
+        return None
     
     async def _check_momentum_fade(self) -> None:
-        """
-        Close positions where momentum has faded while still in profit.
-
-        Logic:
-        - Position must be OPEN (not closing/settling)
-        - Age > min_age_minutes (grace period)
-        - Profit > min_profit_pct
-        - RSI slope has reversed or flattened:
-            LONG: rsi_slope < +threshold
-            SHORT: rsi_slope > -threshold
-        """
-        # Check if momentum exit is enabled
-        momentum_cfg = getattr(self._bot_config, 'momentum_exit', None)
-        if not momentum_cfg or not getattr(momentum_cfg, 'enabled', False):
-            return
-
-        min_age = momentum_cfg.min_age_minutes
-        min_profit = momentum_cfg.min_profit_pct
-        threshold = momentum_cfg.rsi_slope_threshold
-
-        now = datetime.now(timezone.utc)
-
-        for symbol, position in list(self.active_positions.items()):
-            # Guard: only OPEN positions
-            if position.status != PositionStatus.OPEN:
-                continue
-
-            # Guard: not already closing
-            if symbol in self._closing_positions:
-                continue
-
-            # Guard: not settling
-            if symbol in self._settling_symbols:
-                continue
-
-            # Guard: position age
-            if not position.opened_at:
-                continue
-            age_minutes = (now - _ensure_aware(position.opened_at)).total_seconds() / 60.0
-            if age_minutes < min_age:
-                continue
-
-            # Guard: must be in profit
-            if position.entry_price <= 0:
-                continue
-            if position.side == "long":
-                profit_pct = ((position.current_price - position.entry_price) / position.entry_price) * 100
-            else:
-                profit_pct = ((position.entry_price - position.current_price) / position.entry_price) * 100
-
-            if profit_pct < min_profit:
-                continue
-
-            # Get current RSI slope from market states
-            market_state = self._market_states.get(symbol)
-            if not market_state:
-                continue
-
-            current_rsi_slope = getattr(market_state, 'rsi_slope', None)
-            if current_rsi_slope is None:
-                continue
-
-            # Check if momentum has faded
-            faded = False
-            if position.side == "long" and current_rsi_slope < threshold:
-                faded = True
-            elif position.side == "short" and current_rsi_slope > -threshold:
-                faded = True
-
-            if faded:
-                self._logger.info(
-                    "MOMENTUM FADE: %s %s | rsi_slope=%.2f (entry=%.2f) | "
-                    "P&L=%.2f%% | age=%.1f min | closing",
-                    position.side.upper(), symbol,
-                    current_rsi_slope, position.entry_rsi_slope,
-                    profit_pct, age_minutes,
-                )
-                position.exit_reason = "momentum_fade"
-                try:
-                    await self.close_position(symbol)
-                except Exception as e:
-                    self._logger.error(
-                        "Failed to close %s on momentum_fade: %s", symbol, e
-                    )
+        """STAGE A: disabled."""
+        return None
 
     async def _handle_position_closed(self, symbol: str) -> None:
         """
@@ -3909,6 +3152,7 @@ class ExecutionEngineService(BaseService):
             "fee": total_fee,
             "pnl_pct": pnl_pct,
             "exit_reason": position.exit_reason,
+            "exit_reason_v2": _exit_reason_to_v2(position.exit_reason),
             "position": position.to_dict(),
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "daily_wins": daily_wins,
@@ -4001,22 +3245,8 @@ class ExecutionEngineService(BaseService):
         return cancelled
     
     def _should_block_close_for_min_hold(self, position: ExecutionPosition) -> bool:
-        """Return True if the position is younger than config min_hold_minutes.
-
-        Reads ``self._bot_config.stops.min_hold_minutes`` (anti-churn gate).
-        A value of 0 disables the gate. If ``position.opened_at`` is unknown,
-        we fail OPEN (do not block) to avoid wedging the bot; the FLAG-Trader
-        exit path already has its own fail-safe for that race window.
-        """
-        min_hold = int(getattr(self._bot_config.stops, "min_hold_minutes", 0) or 0)
-        if min_hold <= 0:
-            return False
-        if position.opened_at is None:
-            return False
-        age_minutes = (
-            datetime.now(timezone.utc) - _ensure_aware(position.opened_at)
-        ).total_seconds() / 60.0
-        return age_minutes < float(min_hold)
+        """STAGE A: disabled — min_hold gate removed."""
+        return False
 
     async def close_position(
         self,
