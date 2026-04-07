@@ -1,0 +1,74 @@
+{% macro reason_badge(r) %}
+  {% set rl = (r or 'manual')|lower %}
+  {% if rl in ('tp', 'take_profit') %}
+    <span class="px-2 py-0.5 rounded text-xs bg-green-900 text-green-300">TP</span>
+  {% elif rl in ('sl', 'stop_loss', 'trailing_stop', 'violation_exit') %}
+    <span class="px-2 py-0.5 rounded text-xs bg-red-900 text-red-300">SL</span>
+  {% elif rl in ('expiry', 'timeout', 'regime_exit', 'max_hold') %}
+    <span class="px-2 py-0.5 rounded text-xs bg-yellow-900 text-yellow-300">EXP</span>
+  {% else %}
+    <span class="px-2 py-0.5 rounded text-xs bg-gray-800 text-gray-300">{{ rl }}</span>
+  {% endif %}
+{% endmacro %}
+
+<div class="overflow-x-auto bg-gray-900 border border-gray-800 rounded-lg shadow">
+  <table class="min-w-full text-sm">
+    <thead class="bg-gray-800 text-gray-300 text-xs uppercase">
+      <tr>
+        <th class="px-3 py-2 text-left">Time</th>
+        <th class="px-3 py-2 text-left">Symbol</th>
+        <th class="px-3 py-2 text-left">Side</th>
+        <th class="px-3 py-2 text-right">Entry</th>
+        <th class="px-3 py-2 text-right">Exit</th>
+        <th class="px-3 py-2 text-right">PnL $</th>
+        <th class="px-3 py-2 text-right">PnL %</th>
+        <th class="px-3 py-2 text-right">Pred TP%</th>
+        <th class="px-3 py-2 text-right">Pred SL%</th>
+        <th class="px-3 py-2 text-left">Reason</th>
+        <th class="px-3 py-2"></th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-800">
+      {% for r in rows %}
+        <tr class="hover:bg-gray-800/50">
+          <td class="px-3 py-2 text-gray-400 whitespace-nowrap">{{ (r.timestamp or '')[:19] }}</td>
+          <td class="px-3 py-2 font-medium">{{ r.symbol }}</td>
+          <td class="px-3 py-2">{{ r.action }}</td>
+          <td class="px-3 py-2 text-right">{{ '%.4f' % (r.entry_price or 0) }}</td>
+          <td class="px-3 py-2 text-right">{{ '%.4f' % (r.exit_price or 0) }}</td>
+          <td class="px-3 py-2 text-right {{ 'text-green-400' if (r.pnl_usd or 0) >= 0 else 'text-red-400' }}">
+            {{ '%.2f' % (r.pnl_usd or 0) }}
+          </td>
+          <td class="px-3 py-2 text-right">{{ '%.2f' % (r.pnl_pct or 0) }}</td>
+          <td class="px-3 py-2 text-right text-gray-400">{{ '%.2f' % r.predicted_tp_pct if r.predicted_tp_pct is not none else '—' }}</td>
+          <td class="px-3 py-2 text-right text-gray-400">{{ '%.2f' % r.predicted_sl_pct if r.predicted_sl_pct is not none else '—' }}</td>
+          <td class="px-3 py-2">{{ reason_badge(r.exit_reason_v2 or r.exit_reason) }}</td>
+          <td class="px-3 py-2 text-right">
+            {% if r.trade_id %}
+              <a href="/trades/{{ r.trade_id }}" class="text-blue-400 hover:underline">view</a>
+            {% else %}
+              <span class="text-gray-600 text-xs">no id</span>
+            {% endif %}
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="11" class="px-3 py-6 text-center text-gray-500">No trades found</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="flex items-center justify-between mt-4 text-sm">
+  <div class="text-gray-500">Total: {{ total }}</div>
+  <div class="flex gap-2">
+    {% if has_prev %}
+      <a class="px-3 py-1 bg-gray-800 rounded hover:bg-gray-700"
+         href="/trades?page={{ page - 1 }}&limit={{ limit }}{% if symbol %}&symbol={{ symbol }}{% endif %}">Prev</a>
+    {% endif %}
+    <span class="px-3 py-1 text-gray-400">Page {{ page }}</span>
+    {% if has_next %}
+      <a class="px-3 py-1 bg-gray-800 rounded hover:bg-gray-700"
+         href="/trades?page={{ page + 1 }}&limit={{ limit }}{% if symbol %}&symbol={{ symbol }}{% endif %}">Next</a>
+    {% endif %}
+  </div>
+</div>

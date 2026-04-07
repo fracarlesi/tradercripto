@@ -44,6 +44,27 @@ OLD_LABEL = "stop_loss"
 NEW_LABEL = "external_close"
 
 
+def _legacy_to_v2(legacy: object) -> str | None:
+    """Map legacy exit_reason -> STAGE A v2 enum {tp, sl, expiry, manual}.
+
+    Mirrors crypto_bot.flag_trader.trade_logger._map_exit_reason_to_v2 but
+    duplicated here so the script remains importable without the package on
+    sys.path during ad-hoc backfill runs.
+    """
+    if not isinstance(legacy, str) or not legacy:
+        return None
+    s = legacy.lower()
+    if s in ("take_profit", "tp"):
+        return "tp"
+    if s in ("stop_loss", "sl", "trailing_stop", "violation_exit"):
+        return "sl"
+    if s in ("timeout", "regime_exit", "max_hold", "expiry", "regime_change"):
+        return "expiry"
+    if s in ("manual", "external_close"):
+        return "manual"
+    return None
+
+
 @dataclass
 class FileReport:
     path: Path
@@ -87,8 +108,17 @@ def _process_lines(lines: Iterable[str], window_start: str) -> tuple[list[str], 
             report.skipped_invalid += 1
             new_lines.append(raw)
             continue
+        record_changed = False
+        # STAGE A: ensure exit_reason_v2 is populated for every legacy outcome.
+        if rec.get("exit_reason_v2") in (None, "") and rec.get("exit_reason"):
+            v2 = _legacy_to_v2(rec.get("exit_reason"))
+            if v2 is not None:
+                rec["exit_reason_v2"] = v2
+                record_changed = True
         if _should_fix(rec, window_start):
             rec["exit_reason"] = NEW_LABEL
+            rec["exit_reason_v2"] = "manual"
+            record_changed = True
             report.corrected += 1
             try:
                 report.total_pnl_usd += float(rec.get("pnl_usd", 0))
@@ -98,6 +128,10 @@ def _process_lines(lines: Iterable[str], window_start: str) -> tuple[list[str], 
             if isinstance(sym, str):
                 report.symbols.add(sym)
             # Preserve trailing newline if present in original line.
+            suffix = "\n" if raw.endswith("\n") else ""
+            new_lines.append(json.dumps(rec) + suffix)
+            changed = True
+        elif record_changed:
             suffix = "\n" if raw.endswith("\n") else ""
             new_lines.append(json.dumps(rec) + suffix)
             changed = True
