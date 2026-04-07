@@ -40,12 +40,12 @@
             {{ '%.2f' % (r.pnl_usd or 0) }}
           </td>
           <td class="px-3 py-2 text-right">{{ '%.2f' % (r.pnl_pct or 0) }}</td>
-          <td class="px-3 py-2 text-right text-gray-400">{{ '%.2f' % r.predicted_tp_pct if r.predicted_tp_pct is not none else '—' }}</td>
-          <td class="px-3 py-2 text-right text-gray-400">{{ '%.2f' % r.predicted_sl_pct if r.predicted_sl_pct is not none else '—' }}</td>
-          <td class="px-3 py-2">{{ reason_badge(r.exit_reason_v2 or r.exit_reason) }}</td>
+          <td class="px-3 py-2 text-right text-gray-400">{% if r.get('predicted_tp_pct') is not none %}{{ '%.2f' % r.get('predicted_tp_pct') }}{% else %}—{% endif %}</td>
+          <td class="px-3 py-2 text-right text-gray-400">{% if r.get('predicted_sl_pct') is not none %}{{ '%.2f' % r.get('predicted_sl_pct') }}{% else %}—{% endif %}</td>
+          <td class="px-3 py-2">{{ reason_badge(r.get('exit_reason_v2') or r.get('exit_reason')) }}</td>
           <td class="px-3 py-2 text-right">
-            {% if r.trade_id %}
-              <a href="/trades/{{ r.trade_id }}" class="text-blue-400 hover:underline">view</a>
+            {% if r.get('trade_id') %}
+              <a href="/trades/{{ r.get('trade_id') }}" class="text-blue-400 hover:underline">view</a>
             {% else %}
               <span class="text-gray-600 text-xs">no id</span>
             {% endif %}

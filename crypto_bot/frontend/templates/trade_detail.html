@@ -7,6 +7,8 @@
 
   {% if trade %}
     <h1 class="text-2xl font-bold mb-2">{{ trade.symbol }} — {{ trade.action }}</h1>
+    {% set tp_pct = trade.get('predicted_tp_pct') %}
+    {% set sl_pct = trade.get('predicted_sl_pct') %}
     <div class="text-gray-400 text-sm mb-4">{{ trade.timestamp }}</div>
 
     <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
@@ -26,27 +28,27 @@
       </div>
       <div class="bg-gray-900 border border-gray-800 rounded p-3">
         <div class="text-xs text-gray-400">Exit reason</div>
-        <div class="text-lg font-semibold">{{ trade.exit_reason_v2 or trade.exit_reason or '—' }}</div>
+        <div class="text-lg font-semibold">{{ trade.get('exit_reason_v2') or trade.get('exit_reason') or '—' }}</div>
       </div>
       <div class="bg-gray-900 border border-gray-800 rounded p-3">
         <div class="text-xs text-gray-400">Predicted TP%</div>
         <div class="text-lg font-semibold text-green-400">
-          {{ '%.2f' % trade.predicted_tp_pct if trade.predicted_tp_pct is not none else '—' }}
+          {% if tp_pct is not none %}{{ '%.2f' % tp_pct }}{% else %}—{% endif %}
         </div>
       </div>
       <div class="bg-gray-900 border border-gray-800 rounded p-3">
         <div class="text-xs text-gray-400">Predicted SL%</div>
         <div class="text-lg font-semibold text-red-400">
-          {{ '%.2f' % trade.predicted_sl_pct if trade.predicted_sl_pct is not none else '—' }}
+          {% if sl_pct is not none %}{{ '%.2f' % sl_pct }}{% else %}—{% endif %}
         </div>
       </div>
       <div class="bg-gray-900 border border-gray-800 rounded p-3">
         <div class="text-xs text-gray-400">K candles</div>
-        <div class="text-lg font-semibold">{{ trade.k_candles or '—' }}</div>
+        <div class="text-lg font-semibold">{{ trade.get('k_candles') or '—' }}</div>
       </div>
       <div class="bg-gray-900 border border-gray-800 rounded p-3">
         <div class="text-xs text-gray-400">Confidence</div>
-        <div class="text-lg font-semibold">{{ '%.3f' % (trade.confidence or 0) }}</div>
+        <div class="text-lg font-semibold">{{ '%.3f' % (trade.get('confidence') or 0) }}</div>
       </div>
     </div>
 
