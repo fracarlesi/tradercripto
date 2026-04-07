@@ -24,6 +24,7 @@ httpx>=0.25.0
 aiosqlite>=0.19
 
 # FLAG-Trader (ML/RL)
+torch>=2.4.0
 transformers>=4.40.0
 accelerate>=0.28.0
 gymnasium>=0.29.0
