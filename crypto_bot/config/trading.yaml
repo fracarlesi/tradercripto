@@ -116,10 +116,16 @@ stops:
 # -----------------------------------------------------------------------------
 # STAGE A — Forecast mode (predict-and-place execution)
 # -----------------------------------------------------------------------------
-# When mode_enabled=true, the execution engine places TP/SL atomically at
-# entry, then waits for TP-fill, SL-fill, or expiry (k_candles * 15min).
-# No re-evaluation, no trailing, no breakeven, no R-based logic.
-# Default false to allow safe rollout via feature-flag.
+# Predict-and-place: TP/SL placed atomically at entry; waits for TP-fill,
+# SL-fill, or expiry (k_candles * 15min). No re-eval, no trailing, no
+# breakeven, no R-based logic.
+#
+# NOTE (Phase 8 cleanup): the legacy mechanical-exit code path has been
+# physically deleted from execution_engine.py. `mode_enabled` is retained
+# as a feature flag / safety-net key, but it is now a no-op — setting it
+# to false would simply mean HOLD on every trigger because no fallback
+# logic remains. Do NOT remove this key without coordinating with config
+# loaders that may still read it.
 forecast:
   mode_enabled: true
   k_candles: 34                 # 34 x 15min = 8.5h hard expiry

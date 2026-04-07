@@ -42,7 +42,6 @@ class TradeRecord:
     exit_price: Optional[float] = None
     pnl_usd: Optional[float] = None
     pnl_pct: Optional[float] = None
-    exit_reason: Optional[str] = None  # legacy: "take_profit", "stop_loss", "timeout", ...
     hold_duration_minutes: Optional[float] = None
     market_state_summary: Optional[dict] = None  # {rsi, adx, regime, atr_pct, ema9_slope}
     prompt_summary: str = ""  # First 200 chars of prompt for audit trail
@@ -203,7 +202,6 @@ class FlagTradeLogger:
         record.exit_price = exit_price
         record.pnl_usd = pnl_usd
         record.pnl_pct = pnl_pct
-        record.exit_reason = exit_reason
         record.hold_duration_minutes = hold_duration_minutes
         if exit_reason_v2 is not None:
             record.exit_reason_v2 = exit_reason_v2

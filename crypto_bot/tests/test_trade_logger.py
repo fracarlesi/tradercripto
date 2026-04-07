@@ -55,7 +55,8 @@ def test_log_outcome_with_pending_decision(tmp_path: Path) -> None:
     rows = _read_jsonl(files[0])
     assert rows[0]["symbol"] == "BTC"
     assert rows[0]["pnl_usd"] == 10.0
-    assert rows[0]["exit_reason"] == "take_profit"
+    assert rows[0]["exit_reason_v2"] == "tp"
+    assert "exit_reason" not in rows[0]  # legacy field dropped in STAGE A Phase 8
     assert rows[0]["confidence"] == 1.8  # enriched from pending decision
 
 

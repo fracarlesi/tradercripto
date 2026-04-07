@@ -1236,7 +1236,7 @@ class ConservativeBot:
                 exit_price=float(payload.get("exit_price", 0)),
                 pnl_usd=float(payload.get("realized_pnl", 0)),
                 pnl_pct=float(payload.get("pnl_pct", 0)),
-                exit_reason=payload.get("exit_reason") or "unknown",
+                exit_reason=payload.get("exit_reason_v2") or payload.get("exit_reason") or "unknown",
                 hold_duration_minutes=hold_minutes,
                 side=payload.get("side"),
                 real_high_curve=real_high,

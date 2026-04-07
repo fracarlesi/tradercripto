@@ -70,15 +70,6 @@ logger = logging.getLogger(__name__)
 # the trade is rejected to prevent instant SL triggers.
 MIN_STOP_DISTANCE_PCT = 0.001  # 0.1%
 
-# When a position reaches this unrealized P&L %, the stop-loss is moved
-# to the entry price (breakeven) so the trade becomes risk-free.
-BREAKEVEN_THRESHOLD_PCT = 1.2  # Default fallback; overridden by config.risk.breakeven_threshold_pct
-
-# Offset above/below entry for breakeven SL to cover exchange fees.
-# For LONG: SL = entry * (1 + offset/100); for SHORT: SL = entry * (1 - offset/100).
-BREAKEVEN_OFFSET_PCT = 0.25  # 0.25% offset prevents stop-hunting near entry
-
-
 def _ensure_aware(dt: datetime) -> datetime:
     """Return a timezone-aware datetime; assume UTC if naive."""
     if dt.tzinfo is None:
@@ -886,22 +877,6 @@ class ExecutionEngineService(BaseService):
             self._settling_symbols.discard(symbol)
             self._logger.debug("Settling ended for %s", symbol)
     
-    # Fallback grace period (minutes) before a position can be closed by regime change.
-    # Overridden by config.regime.regime_exit_grace_minutes when available.
-    _DEFAULT_REGIME_GRACE_MINUTES: int = 5
-
-    @property
-    def _regime_exit_grace_minutes(self) -> int:
-        """Return configured regime exit grace period, falling back to default."""
-        regime_cfg = getattr(self._bot_config, "regime", None)
-        if regime_cfg is not None:
-            return getattr(regime_cfg, "regime_exit_grace_minutes", self._DEFAULT_REGIME_GRACE_MINUTES)
-        return self._DEFAULT_REGIME_GRACE_MINUTES
-
-    async def _handle_regime_change(self, message: Message) -> None:
-        """STAGE A: disabled — regime exits removed."""
-        return None
-
     def _validate_signal(self, signal: Dict[str, Any]) -> bool:
         """
         Validate signal before execution.
@@ -2923,54 +2898,6 @@ class ExecutionEngineService(BaseService):
                 self._closing_positions.discard(symbol)
                 position.status = PositionStatus.OPEN
 
-    # =========================================================================
-    # R-Based Exit System (Mechanical — No LLM)
-    # =========================================================================
-
-    def _update_r_multiples(self) -> None:
-        """STAGE A: disabled."""
-        return None
-
-    async def _check_r_based_breakeven(self) -> None:
-        """STAGE A: disabled. Predict-and-place uses TP/SL/expiry only."""
-        return None
-
-    async def _check_strength_exit(self) -> None:
-        """STAGE A: disabled."""
-        return None
-
-    async def _check_r_based_trailing(self) -> None:
-        """STAGE A: disabled."""
-        return None
-
-    # =========================================================================
-    # Legacy Breakeven / Trailing (active only when R-based is disabled)
-    # =========================================================================
-
-    async def _check_breakeven_stops(self) -> None:
-        """STAGE A: disabled."""
-        return None
-
-    async def _check_max_hold_time(self) -> None:
-        """STAGE A: disabled — superseded by K-candle expiry timer."""
-        return None
-
-    async def _check_trailing_stops(self) -> None:
-        """STAGE A: disabled."""
-        return None
-
-    def should_exit_on_roi(self, position: ExecutionPosition) -> bool:
-        """STAGE A: disabled."""
-        return False
-
-    async def _check_roi_exits(self) -> None:
-        """STAGE A: disabled."""
-        return None
-    
-    async def _check_momentum_fade(self) -> None:
-        """STAGE A: disabled."""
-        return None
-
     async def _handle_position_closed(self, symbol: str) -> None:
         """
         Handle a position that has been closed.
@@ -3151,7 +3078,6 @@ class ExecutionEngineService(BaseService):
             "gross_pnl": closed_pnl,
             "fee": total_fee,
             "pnl_pct": pnl_pct,
-            "exit_reason": position.exit_reason,
             "exit_reason_v2": _exit_reason_to_v2(position.exit_reason),
             "position": position.to_dict(),
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -3244,56 +3170,27 @@ class ExecutionEngineService(BaseService):
         self.metrics.orders_cancelled += cancelled
         return cancelled
     
-    def _should_block_close_for_min_hold(self, position: ExecutionPosition) -> bool:
-        """STAGE A: disabled — min_hold gate removed."""
-        return False
-
     async def close_position(
         self,
         symbol: str,
-        *,
-        override_min_hold: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """
         Close a specific position.
 
+        STAGE A (predict-and-place): no min_hold gate. Exit triggers are TP fill,
+        SL fill, expiry, or explicit manual close — all unconditional.
+
         Args:
             symbol: Symbol to close
-            override_min_hold: If True, bypass the anti-churn min_hold gate.
-                Reserved for emergency/manual paths. Normal in-bot decision
-                paths (strength_exit, roi_target, momentum_fade,
-                regime_change, max_hold_time, TP/SL hit) must leave this
-                False so the configured min_hold window is respected.
 
         Returns:
-            Order result or None if no position (or blocked by min_hold).
+            Order result or None if no position.
         """
         if symbol not in self.active_positions:
             self._logger.warning("No position to close for %s", symbol)
             return None
 
         position = self.active_positions[symbol]
-
-        if not override_min_hold and self._should_block_close_for_min_hold(position):
-            age_min = (
-                (datetime.now(timezone.utc) - _ensure_aware(position.opened_at)).total_seconds() / 60.0
-                if position.opened_at is not None
-                else -1.0
-            )
-            min_hold = int(getattr(self._bot_config.stops, "min_hold_minutes", 0) or 0)
-            self._logger.info(
-                "close blocked by min_hold: %s age=%.1fm < min_hold=%dm (exit_reason=%s)",
-                symbol,
-                age_min,
-                min_hold,
-                position.exit_reason,
-            )
-            # Roll back the closing guard / status so the next cycle can retry
-            # once the min_hold window elapses.
-            self._closing_positions.discard(symbol)
-            if position.status == PositionStatus.CLOSING:
-                position.status = PositionStatus.OPEN
-            return None
 
         # Cancel existing TP/SL orders
         for order_id in [position.tp_order_id, position.sl_order_id]:
