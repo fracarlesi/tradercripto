@@ -30,8 +30,10 @@ def main() -> None:
     tp_pct, sl_pct = 1.5, 1.0
     tp_price = entry * (1 + tp_pct / 100)
     sl_price = entry * (1 - sl_pct / 100)
-    real_high = [entry + i * 0.1 for i in range(20)]
-    real_low = [entry - 0.05 - i * 0.05 for i in range(20)]
+    real_high = [entry + i * 0.1 + 0.15 for i in range(20)]
+    real_low = [entry - 0.05 - i * 0.05 - 0.1 for i in range(20)]
+    real_open = [entry + i * 0.08 for i in range(20)]
+    real_close = [entry + i * 0.08 + (0.05 if i % 2 == 0 else -0.05) for i in range(20)]
     rows.append({
         "trade_id": tid,
         "timestamp": (now - timedelta(hours=2)).isoformat(),
@@ -56,6 +58,8 @@ def main() -> None:
         "candle_interval_sec": 900,
         "real_high_curve": real_high,
         "real_low_curve": real_low,
+        "real_open_curve": real_open,
+        "real_close_curve": real_close,
         "real_observed_k": 20,
     })
     sidecar = {
@@ -65,6 +69,10 @@ def main() -> None:
         "interval_sec": 900,
         "real_high": real_high,
         "real_low": real_low,
+        "real_high_curve": real_high,
+        "real_low_curve": real_low,
+        "real_open_curve": real_open,
+        "real_close_curve": real_close,
         "entry": entry,
         "exit": tp_price,
         "exit_reason_v2": "tp",

@@ -1122,6 +1122,7 @@ class ConservativeBot:
             entry_confidence=round(min(abs(decision.confidence), 1.0), 4),
             entry_trigger_details=trigger_details,
             correlation_id=correlation_id,
+            trade_id=decision.trade_id,
         )
 
         logger.info(
@@ -1217,6 +1218,8 @@ class ConservativeBot:
         # so the dashboard can overlay them against the predicted TP/SL levels.
         real_high: list | None = None
         real_low: list | None = None
+        real_open: list | None = None
+        real_close: list | None = None
         try:
             if self._exchange and opened_at:
                 # Fetch enough 15m candles to comfortably cover the K-candle window.
@@ -1226,6 +1229,8 @@ class ConservativeBot:
                 if candles_raw:
                     real_high = [float(c.get("h", c.get("high", 0))) for c in candles_raw]
                     real_low = [float(c.get("l", c.get("low", 0))) for c in candles_raw]
+                    real_open = [float(c.get("o", c.get("open", 0))) for c in candles_raw]
+                    real_close = [float(c.get("c", c.get("close", 0))) for c in candles_raw]
         except Exception as exc:  # pragma: no cover - best-effort
             logger.debug("real curve fetch failed for %s: %s", symbol, exc)
 
@@ -1241,6 +1246,8 @@ class ConservativeBot:
                 side=payload.get("side"),
                 real_high_curve=real_high,
                 real_low_curve=real_low,
+                real_open_curve=real_open,
+                real_close_curve=real_close,
             )
         except Exception:
             logger.exception("trade_logger.log_outcome failed for %s", symbol)

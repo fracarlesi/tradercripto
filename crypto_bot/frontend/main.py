@@ -128,6 +128,8 @@ def create_app(store: TradeStore | None = None) -> Flask:
                 "candle_interval_sec": trade.get("candle_interval_sec"),
                 "real_high_curve": trade.get("real_high_curve"),
                 "real_low_curve": trade.get("real_low_curve"),
+                "real_open_curve": trade.get("real_open_curve"),
+                "real_close_curve": trade.get("real_close_curve"),
                 "real_observed_k": trade.get("real_observed_k"),
                 "timestamp": trade.get("timestamp"),
             })
