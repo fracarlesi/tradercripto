@@ -807,6 +807,61 @@ def _labels_for(severity: str) -> list[str]:
     return base + ["low"]
 
 
+def _persist_verdict(
+    cfg: "AuditConfig",
+    verdict: dict,
+    flags: list,
+    outcomes: list,
+    state: "BotState",
+    deep_analysis: Optional[str],
+    title: str,
+    body: str,
+    fingerprint: str,
+    severity: str,
+) -> Optional[Path]:
+    """Durable local snapshot of every flagged verdict.
+
+    Written BEFORE any GitHub/ntfy I/O so that a 403 or network error never
+    loses the Sonnet diagnosis. File name includes timestamp + severity so
+    the latest findings are easy to locate:
+    ``<trade_logs_path>/audit_verdicts/2026-04-08T09-17-33Z_MEDIUM_churn-XPL.json``
+    """
+    try:
+        out_dir = cfg.trade_logs_path / "audit_verdicts"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
+        safe_fp = "".join(c if c.isalnum() or c in "-_" else "-" for c in fingerprint)[:40]
+        name = f"{ts}_{severity}_{safe_fp or 'unknown'}.json"
+        path = out_dir / name
+        payload = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "severity": severity,
+            "fingerprint": fingerprint,
+            "title": title,
+            "verdict": verdict,
+            "deep_analysis": deep_analysis,
+            "flags": [
+                {"code": getattr(f, "code", None), "symbol": getattr(f, "symbol", None),
+                 "detail": getattr(f, "detail", None), "severity": getattr(f, "severity", None)}
+                for f in flags
+            ],
+            "state": {
+                "n_positions": getattr(state, "n_positions", None),
+                "equity": getattr(state, "equity", None),
+            },
+            "n_outcomes_window": len(outcomes),
+            "issue_body_preview": body[:2000],
+        }
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+        tmp.replace(path)
+        logger.info(f"verdict persisted: {path}")
+        return path
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"failed to persist verdict locally: {type(e).__name__}: {e}")
+        return None
+
+
 def run_audit() -> int:
     cfg = AuditConfig.from_env()
     try:
@@ -845,17 +900,28 @@ def run_audit() -> int:
         body = _format_issue_body(verdict, flags, outcomes, state, deep_analysis)
         fp = _fingerprint(flags)
 
+        # Persist verdict to disk BEFORE GitHub — if the API call fails (403
+        # token, network, etc.) the content is still durable and the ntfy
+        # notification can link the local path.
+        verdict_path = _persist_verdict(
+            cfg, verdict, flags, outcomes, state, deep_analysis, title, body, fp, severity
+        )
+
         issue_url: Optional[str] = None
         if severity != "LOW":
             issue_url = create_or_comment_issue(
                 cfg, title=title, body=body, labels=_labels_for(severity), fingerprint=fp
             )
 
-        # ntfy
-        prio_map = {"LOW": "low", "MEDIUM": "default", "HIGH": "high", "CRITICAL": "urgent"}
+        # ntfy — promote MEDIUM to "high" priority so the notification is
+        # actually visible on the phone (default priority is silent on most
+        # ntfy clients).
+        prio_map = {"LOW": "low", "MEDIUM": "high", "HIGH": "high", "CRITICAL": "urgent"}
         msg = f"[{severity}] {verdict.get('summary', '')}"
         if issue_url:
             msg += f"\n{issue_url}"
+        elif verdict_path is not None:
+            msg += f"\n(local: {verdict_path})"
         ntfy(cfg, msg, priority=prio_map.get(severity, "default"))
 
         print(
