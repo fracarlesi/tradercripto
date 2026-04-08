@@ -150,7 +150,10 @@ def create_app(store: TradeStore | None = None) -> Flask:
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     app = create_app()
-    app.run(host="127.0.0.1", port=5611, debug=False)
+    # Bind 0.0.0.0 inside the container; host-side access is restricted to
+    # localhost by docker-compose publish `127.0.0.1:5611:5611`, so the
+    # exposure stays private (SSH-tunnel only).
+    app.run(host="0.0.0.0", port=5611, debug=False)
 
 
 if __name__ == "__main__":
