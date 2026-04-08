@@ -60,7 +60,7 @@ def _legacy_to_v2(legacy: object) -> str | None:
         return "sl"
     if s in ("timeout", "regime_exit", "max_hold", "expiry", "regime_change"):
         return "expiry"
-    if s in ("manual", "external_close"):
+    if s in ("manual", "external_close", "model_reversal"):
         return "manual"
     return None
 

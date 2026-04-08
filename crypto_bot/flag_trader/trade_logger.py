@@ -56,6 +56,8 @@ class TradeRecord:
     candle_interval_sec: Optional[int] = None
     real_high_curve: Optional[list] = None
     real_low_curve: Optional[list] = None
+    real_open_curve: Optional[list] = None
+    real_close_curve: Optional[list] = None
     real_observed_k: Optional[int] = None
     exit_reason_v2: Optional[str] = None  # "tp" | "sl" | "expiry" | "manual"
 
@@ -71,7 +73,7 @@ def _map_exit_reason_to_v2(legacy: Optional[str]) -> Optional[str]:
         return "sl"
     if s in ("timeout", "regime_exit", "max_hold", "expiry", "regime_change"):
         return "expiry"
-    if s in ("manual", "external_close"):
+    if s in ("manual", "external_close", "model_reversal"):
         return "manual"
     return None
 
@@ -160,6 +162,8 @@ class FlagTradeLogger:
         *,
         real_high_curve: Optional[list] = None,
         real_low_curve: Optional[list] = None,
+        real_open_curve: Optional[list] = None,
+        real_close_curve: Optional[list] = None,
         exit_reason_v2: Optional[str] = None,
     ) -> None:
         """
@@ -212,10 +216,19 @@ class FlagTradeLogger:
             record.real_observed_k = len(real_high_curve)
         if real_low_curve is not None:
             record.real_low_curve = list(real_low_curve)
+        if real_open_curve is not None:
+            record.real_open_curve = list(real_open_curve)
+        if real_close_curve is not None:
+            record.real_close_curve = list(real_close_curve)
 
         # Write sidecar JSON (per-trade) atomically. Stays out of the main
         # JSONL so the curve payload doesn't bloat decision/outcome scans.
-        if record.trade_id and (real_high_curve is not None or real_low_curve is not None):
+        if record.trade_id and (
+            real_high_curve is not None
+            or real_low_curve is not None
+            or real_open_curve is not None
+            or real_close_curve is not None
+        ):
             try:
                 sidecar_path = self.forecasts_dir / f"{record.trade_id}.json"
                 sidecar = {
@@ -231,6 +244,8 @@ class FlagTradeLogger:
                     "candle_interval_sec": record.candle_interval_sec,
                     "real_high_curve": record.real_high_curve,
                     "real_low_curve": record.real_low_curve,
+                    "real_open_curve": record.real_open_curve,
+                    "real_close_curve": record.real_close_curve,
                     "real_observed_k": record.real_observed_k,
                     "expiry_at": record.expiry_at,
                     "exit_reason_v2": record.exit_reason_v2,
