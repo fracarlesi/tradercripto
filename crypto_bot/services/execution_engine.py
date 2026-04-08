@@ -256,6 +256,11 @@ class ExecutionPosition:
     predicted_tp_pct: Optional[float] = None
     predicted_sl_pct: Optional[float] = None
     trade_id: Optional[str] = None
+    # True when exit_reason had to be inferred via the distance-based
+    # heuristic fallback because the HL fills API query returned no usable
+    # result. Propagated to the FILLS event payload + sidecar for downstream
+    # label-quality analysis.
+    exit_reason_inferred_via_fallback: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary."""
@@ -295,6 +300,7 @@ class ExecutionPosition:
             "current_r_multiple": self.current_r_multiple,
             "last_trail_r": self.last_trail_r,
             "trade_id": self.trade_id,
+            "exit_reason_inferred_via_fallback": self.exit_reason_inferred_via_fallback,
         }
 
 
@@ -2899,6 +2905,120 @@ class ExecutionEngineService(BaseService):
                 self._closing_positions.discard(symbol)
                 position.status = PositionStatus.OPEN
 
+    @staticmethod
+    async def _infer_exit_reason_from_fills(
+        client: Any,
+        position: ExecutionPosition,
+        logger: logging.Logger,
+        price_tolerance: float = 0.003,
+    ) -> Optional[str]:
+        """
+        Infer the real exit_reason for a closed position by querying the
+        Hyperliquid fills API and matching the closing fill price against
+        the stored tp_price / sl_price.
+
+        This replaces the legacy distance-to-mark heuristic which was
+        unreliable whenever the polled mark rebounded toward the opposite
+        trigger between the actual intrabar fill and the 5s detection cycle.
+
+        Match logic:
+          1. Fetch recent user fills (~50).
+          2. Keep only fills for this coin whose ``dir`` field starts with
+             "Close" (HL SDK labels: "Close Long" / "Close Short") and whose
+             timestamp is >= position.opened_at. If opened_at is missing,
+             fall back to the most recent close fill for the symbol.
+          3. If multiple close fills match (partial fills of a single
+             trigger), aggregate by volume-weighted average price.
+          4. Compare the resulting fill price to tp_price and sl_price
+             using relative tolerance (default 0.3%). Return the closer
+             matching trigger.
+          5. If no close fill is found, or both tp/sl are within tolerance
+             of each other, return None so the caller can fall back to the
+             legacy heuristic (flagged).
+
+        Args:
+            position: Closed ExecutionPosition with tp_price & sl_price set.
+            price_tolerance: Relative tolerance for matching fill.px to
+                tp_price / sl_price (fraction of entry_price).
+
+        Returns:
+            "take_profit", "stop_loss", or None if undetermined.
+        """
+        if not (position.tp_price and position.sl_price and position.entry_price):
+            return None
+
+        try:
+            fills = await client.get_fills(limit=50)
+        except Exception as e:
+            logger.debug(
+                "fills API error while inferring exit_reason for %s: %s",
+                position.symbol, e,
+            )
+            return None
+
+        if not fills:
+            return None
+
+        opened_at = position.opened_at
+        close_fills: list[dict] = []
+        for f in fills:
+            if f.get("symbol") != position.symbol:
+                continue
+            dir_str = str(f.get("dir") or "")
+            if not dir_str.startswith("Close"):
+                continue
+            ft = f.get("time")
+            if opened_at is not None and isinstance(ft, datetime):
+                # Normalize tz: get_fills uses naive datetime from fromtimestamp.
+                ft_cmp = ft.replace(tzinfo=timezone.utc) if ft.tzinfo is None else ft
+                if ft_cmp < opened_at:
+                    continue
+            close_fills.append(f)
+
+        if not close_fills:
+            return None
+
+        # Aggregate: volume-weighted average price across partial fills.
+        total_size = 0.0
+        total_notional = 0.0
+        for f in close_fills:
+            px = float(f.get("price") or 0.0)
+            sz = float(f.get("size") or 0.0)
+            if px > 0 and sz > 0:
+                total_notional += px * sz
+                total_size += sz
+        if total_size <= 0:
+            return None
+        vwap = total_notional / total_size
+
+        entry = float(position.entry_price)
+        tp = float(position.tp_price)
+        sl = float(position.sl_price)
+        tol_abs = entry * price_tolerance
+
+        tp_diff = abs(vwap - tp)
+        sl_diff = abs(vwap - sl)
+
+        # Require at least one side to be within tolerance, else bail out.
+        if tp_diff > tol_abs and sl_diff > tol_abs:
+            logger.debug(
+                "%s fills vwap=%.4f matches neither tp=%.4f nor sl=%.4f within tol=%.4f",
+                position.symbol, vwap, tp, sl, tol_abs,
+            )
+            return None
+
+        # If both are within tolerance (tp_price ~= sl_price — shouldn't
+        # happen in practice), bail to fallback.
+        if tp_diff <= tol_abs and sl_diff <= tol_abs and abs(tp_diff - sl_diff) < 1e-9:
+            return None
+
+        result = "take_profit" if tp_diff < sl_diff else "stop_loss"
+        logger.info(
+            "%s exit_reason=%s inferred from HL fills (vwap=%.4f, tp=%.4f, sl=%.4f, n_fills=%d)",
+            position.symbol, result, vwap, tp, sl, len(close_fills),
+        )
+        return result
+
     async def _handle_position_closed(self, symbol: str) -> None:
         """
         Handle a position that has been closed.
@@ -2917,12 +3037,29 @@ class ExecutionEngineService(BaseService):
         if not position.exit_reason:
             exit_px = position.current_price
             if position.tp_price and position.sl_price:
-                tp_dist = abs(exit_px - position.tp_price) / position.entry_price if position.entry_price else float("inf")
-                sl_dist = abs(exit_px - position.sl_price) / position.entry_price if position.entry_price else float("inf")
-                if tp_dist < sl_dist:
-                    position.exit_reason = "take_profit"
+                # PRIMARY: query HL fills API and match the closing fill price
+                # against stored tp_price / sl_price. This avoids the
+                # distance-to-mark heuristic bug where intrabar SL triggers
+                # are mislabeled as TP because the polled mark rebounded
+                # toward TP by detection time (~5s polling window).
+                inferred = await self._infer_exit_reason_from_fills(self.client, position, self._logger)
+                if inferred is not None:
+                    position.exit_reason = inferred
                 else:
-                    position.exit_reason = "stop_loss"
+                    # FALLBACK: legacy distance-based heuristic. Flag it so
+                    # downstream analysis can exclude these labels from
+                    # accuracy-sensitive stats.
+                    tp_dist = abs(exit_px - position.tp_price) / position.entry_price if position.entry_price else float("inf")
+                    sl_dist = abs(exit_px - position.sl_price) / position.entry_price if position.entry_price else float("inf")
+                    if tp_dist < sl_dist:
+                        position.exit_reason = "take_profit"
+                    else:
+                        position.exit_reason = "stop_loss"
+                    position.exit_reason_inferred_via_fallback = True
+                    self._logger.warning(
+                        "%s exit_reason inferred via distance fallback (fills API returned no match): %s (exit_px=%.4f, tp=%.4f, sl=%.4f)",
+                        position.symbol, position.exit_reason, float(exit_px), float(position.tp_price), float(position.sl_price),
+                    )
             elif position.tp_price:
                 position.exit_reason = "take_profit"
             elif position.sl_price:
@@ -3080,6 +3217,7 @@ class ExecutionEngineService(BaseService):
             "fee": total_fee,
             "pnl_pct": pnl_pct,
             "exit_reason_v2": _exit_reason_to_v2(position.exit_reason),
+            "exit_reason_inferred_via_fallback": position.exit_reason_inferred_via_fallback,
             "trade_id": position.trade_id,
             "position": position.to_dict(),
             "timestamp": datetime.now(timezone.utc).isoformat(),
