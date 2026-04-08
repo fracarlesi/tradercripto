@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}HLQuantBot Dashboard{% endblock %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = { darkMode: 'class' };
+  </script>
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/uPlot.min.css') }}">
+  <script src="{{ url_for('static', filename='vendor/uPlot.min.js') }}"></script>
+  <style>
+    body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    .uplot, .u-wrap { color: #e5e7eb; }
+  </style>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen">
+  <nav class="border-b border-gray-800 bg-gray-900">
+    <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+      <a href="/" class="text-lg font-semibold text-white">HLQuantBot</a>
+      <div class="flex gap-4 text-sm">
+        <a href="/" class="hover:text-blue-400">Dashboard</a>
+        <a href="/trades" class="hover:text-blue-400">Trades</a>
+      </div>
+    </div>
+  </nav>
+  <main class="max-w-7xl mx-auto px-4 py-6">
+    {% block content %}{% endblock %}
+  </main>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

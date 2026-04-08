@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict, dataclass
+import os
+import uuid
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -40,10 +42,38 @@ class TradeRecord:
     exit_price: Optional[float] = None
     pnl_usd: Optional[float] = None
     pnl_pct: Optional[float] = None
-    exit_reason: Optional[str] = None  # "take_profit", "stop_loss", "timeout", etc.
     hold_duration_minutes: Optional[float] = None
     market_state_summary: Optional[dict] = None  # {rsi, adx, regime, atr_pct, ema9_slope}
     prompt_summary: str = ""  # First 200 chars of prompt for audit trail
+    # --- STAGE A forecast-mode fields (all Optional, backward compatible) ---
+    trade_id: Optional[str] = None
+    predicted_tp_pct: Optional[float] = None
+    predicted_sl_pct: Optional[float] = None
+    predicted_tp_price: Optional[float] = None
+    predicted_sl_price: Optional[float] = None
+    expiry_at: Optional[str] = None  # ISO format
+    k_candles: Optional[int] = None
+    candle_interval_sec: Optional[int] = None
+    real_high_curve: Optional[list] = None
+    real_low_curve: Optional[list] = None
+    real_observed_k: Optional[int] = None
+    exit_reason_v2: Optional[str] = None  # "tp" | "sl" | "expiry" | "manual"
+
+
+def _map_exit_reason_to_v2(legacy: Optional[str]) -> Optional[str]:
+    """Map legacy exit_reason to STAGE A v2 enum {tp, sl, expiry, manual}."""
+    if not legacy:
+        return None
+    s = legacy.lower()
+    if s in ("take_profit", "tp"):
+        return "tp"
+    if s in ("stop_loss", "sl", "trailing_stop", "violation_exit"):
+        return "sl"
+    if s in ("timeout", "regime_exit", "max_hold", "expiry", "regime_change"):
+        return "expiry"
+    if s in ("manual", "external_close"):
+        return "manual"
+    return None
 
 
 class FlagTradeLogger:
@@ -51,8 +81,6 @@ class FlagTradeLogger:
 
     def __init__(self, log_dir: Optional[Path] = None) -> None:
         # Resolve log_dir: explicit arg > HLQUANTBOT_DATA_DIR env > default cwd-relative
-        import os
-
         if log_dir is None:
             env_dir = os.environ.get("HLQUANTBOT_DATA_DIR")
             if env_dir:
@@ -80,8 +108,22 @@ class FlagTradeLogger:
         self._pending_trades: dict[str, list[TradeRecord]] = {}
         self._pending_cap: int = 10  # max pending records per symbol
 
+        # Sidecar dir for STAGE A forecast curves (per-trade JSON, not in main JSONL).
+        self.forecasts_dir = self.log_dir / "forecasts"
+        try:
+            self.forecasts_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            logger.exception("FlagTradeLogger: failed to create forecasts_dir=%s", self.forecasts_dir)
+
     def log_decision(self, record: TradeRecord) -> None:
-        """Log a trading decision (before execution)."""
+        """Log a trading decision (before execution).
+
+        Auto-assigns ``trade_id`` (uuid4 hex) on non-HOLD records if missing,
+        and derives ``predicted_tp_price`` / ``predicted_sl_price`` from
+        ``predicted_tp_pct`` / ``predicted_sl_pct`` if entry context is known.
+        """
+        if record.action != "HOLD" and not record.trade_id:
+            record.trade_id = uuid.uuid4().hex
         log_file = self.log_dir / f"decisions_{datetime.now(timezone.utc).strftime('%Y_%m')}.jsonl"
         try:
             with open(log_file, "a") as f:
@@ -115,6 +157,10 @@ class FlagTradeLogger:
         exit_reason: str,
         hold_duration_minutes: float,
         side: Optional[str] = None,
+        *,
+        real_high_curve: Optional[list] = None,
+        real_low_curve: Optional[list] = None,
+        exit_reason_v2: Optional[str] = None,
     ) -> None:
         """
         Log a closed trade outcome.
@@ -156,8 +202,51 @@ class FlagTradeLogger:
         record.exit_price = exit_price
         record.pnl_usd = pnl_usd
         record.pnl_pct = pnl_pct
-        record.exit_reason = exit_reason
         record.hold_duration_minutes = hold_duration_minutes
+        if exit_reason_v2 is not None:
+            record.exit_reason_v2 = exit_reason_v2
+        else:
+            record.exit_reason_v2 = _map_exit_reason_to_v2(exit_reason)
+        if real_high_curve is not None:
+            record.real_high_curve = list(real_high_curve)
+            record.real_observed_k = len(real_high_curve)
+        if real_low_curve is not None:
+            record.real_low_curve = list(real_low_curve)
+
+        # Write sidecar JSON (per-trade) atomically. Stays out of the main
+        # JSONL so the curve payload doesn't bloat decision/outcome scans.
+        if record.trade_id and (real_high_curve is not None or real_low_curve is not None):
+            try:
+                sidecar_path = self.forecasts_dir / f"{record.trade_id}.json"
+                sidecar = {
+                    "trade_id": record.trade_id,
+                    "symbol": symbol,
+                    "entry_price": entry_price,
+                    "exit_price": exit_price,
+                    "predicted_tp_pct": record.predicted_tp_pct,
+                    "predicted_sl_pct": record.predicted_sl_pct,
+                    "predicted_tp_price": record.predicted_tp_price,
+                    "predicted_sl_price": record.predicted_sl_price,
+                    "k_candles": record.k_candles,
+                    "candle_interval_sec": record.candle_interval_sec,
+                    "real_high_curve": record.real_high_curve,
+                    "real_low_curve": record.real_low_curve,
+                    "real_observed_k": record.real_observed_k,
+                    "expiry_at": record.expiry_at,
+                    "exit_reason_v2": record.exit_reason_v2,
+                    "exit_reason_legacy": exit_reason,
+                    "timestamp": record.timestamp,
+                    "closed_at": datetime.now(timezone.utc).isoformat(),
+                }
+                tmp_path = sidecar_path.with_suffix(".json.tmp")
+                with open(tmp_path, "w") as fh:
+                    json.dump(sidecar, fh, default=str)
+                os.replace(tmp_path, sidecar_path)
+            except OSError:
+                logger.exception(
+                    "FlagTradeLogger: failed to write sidecar for trade_id=%s",
+                    record.trade_id,
+                )
 
         log_file = self.log_dir / f"outcomes_{datetime.now(timezone.utc).strftime('%Y_%m')}.jsonl"
         try:

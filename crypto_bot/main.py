@@ -777,17 +777,8 @@ class ConservativeBot:
                             positions_count,
                         )
 
-                # --- Evaluate open positions every 60s (LLM-only exit management) ---
-                now = time.time()
-                if now - self._last_position_eval >= self._position_eval_interval:
-                    self._last_position_eval = now
-                    risk_manager = self._services.get("risk_manager")
-                    if risk_manager and risk_manager._open_positions:
-                        all_position_symbols = list(risk_manager._open_positions.keys())
-                        portfolio = await self._get_portfolio_state()
-                        await self._evaluate_positions_with_llm(
-                            all_position_symbols, risk_manager, portfolio,
-                        )
+                # STAGE A: removed periodic LLM re-evaluation of open positions.
+                # The bot is now predict-and-place — TP / SL / expiry only.
 
             except asyncio.CancelledError:
                 logger.debug("Evaluation loop cancelled")
@@ -846,192 +837,13 @@ class ConservativeBot:
         risk_manager: Any,
         portfolio: dict,
     ) -> int:
-        """Evaluate open positions with FLAG-Trader LLM for exit decisions.
+        """STAGE A no-op: position re-evaluation has been removed.
 
-        This runs on a 60-second timer, independent of squeeze triggers.
-        Returns the number of positions closed.
+        Kept as a stub so legacy tests / external callers don't break at
+        import time. The execution_engine now manages exits exclusively via
+        TP, SL and the K-candle expiry timer placed at entry.
         """
-        if not self._flag_agent or not self._exchange:
-            return 0
-
-        positions_evaluated = 0
-        positions_closed = 0
-
-        for symbol in symbols:
-            pos = risk_manager._open_positions.get(symbol)
-            if not pos:
-                continue
-            positions_evaluated += 1
-            try:
-                # Calculate PnL %
-                entry_px = float(pos.get("entry_price", 0))
-                mark_px = float(pos.get("mark_price", entry_px))
-                side = pos.get("side", "long")
-                if entry_px > 0:
-                    if side == "long":
-                        pnl_pct = ((mark_px / entry_px) - 1.0) * 100.0
-                    else:
-                        pnl_pct = ((entry_px / mark_px) - 1.0) * 100.0 if mark_px > 0 else 0.0
-                else:
-                    pnl_pct = 0.0
-
-                # Anti-churn: skip if position too young
-                # FAIL-SAFE: when in doubt about age, DO NOT close.
-                opened_at = pos.get("opened_at")
-
-                # Fallback to execution_engine's opened_at if risk_manager hasn't
-                # populated it yet (race window between fill handler and metadata setter).
-                if opened_at is None:
-                    exec_engine_age = self._services.get("execution")
-                    if exec_engine_age:
-                        exec_pos_age = getattr(exec_engine_age, 'active_positions', {}).get(symbol)
-                        if exec_pos_age and getattr(exec_pos_age, 'opened_at', None) is not None:
-                            opened_at = exec_pos_age.opened_at
-                            logger.debug(
-                                "FLAG-Trader EXIT | %s opened_at from execution_engine fallback: %s",
-                                symbol, opened_at,
-                            )
-
-                if opened_at is None:
-                    # Race: position just opened, metadata not yet populated anywhere.
-                    # Default to "too young" to be safe — anti-churning protection.
-                    logger.info(
-                        "FLAG-Trader EXIT SKIPPED | %s %s opened_at not yet populated (race window after fill)",
-                        side.upper(), symbol,
-                    )
-                    continue
-
-                if isinstance(opened_at, str):
-                    from datetime import datetime as _dt
-                    opened_at = _dt.fromisoformat(opened_at)
-                age_minutes = (datetime.now(timezone.utc) - opened_at).total_seconds() / 60
-                min_hold = self.config.flag_trader_config.get("min_hold_minutes", 30)
-                if age_minutes < min_hold:
-                    logger.info(
-                        "FLAG-Trader EXIT SKIPPED | %s %s too young (%.1f min < %d min)",
-                        side.upper(), symbol, age_minutes, min_hold,
-                    )
-                    continue
-
-                # Build entry context for the LLM prompt
-                entry_context = {}
-                entry_reason = pos.get("entry_reason", "")
-                if entry_reason:
-                    entry_context["entry_reason"] = entry_reason
-                entry_conf = pos.get("entry_confidence", 0.0)
-                if entry_conf:
-                    entry_context["entry_confidence"] = entry_conf
-                entry_details = pos.get("entry_trigger_details", "")
-                if entry_details:
-                    entry_context["entry_trigger_details"] = entry_details
-
-                # Also check execution engine for entry context (richer data)
-                exec_engine = self._services.get("execution")
-                if exec_engine:
-                    exec_pos = exec_engine.active_positions.get(symbol)
-                    if exec_pos:
-                        if exec_pos.entry_reason:
-                            entry_context["entry_reason"] = exec_pos.entry_reason
-                        if exec_pos.entry_confidence:
-                            entry_context["entry_confidence"] = exec_pos.entry_confidence
-                        if exec_pos.entry_trigger_details:
-                            entry_context["entry_trigger_details"] = exec_pos.entry_trigger_details
-
-                # --- Violation exit detection (hint for LLM) ---
-                violation_info = {}
-                if self.config.violation_exit_enabled and pnl_pct > self.config.violation_min_profit_pct:
-                    try:
-                        violation_info = await self._check_violation_exit(
-                            symbol, side, entry_px, pnl_pct,
-                        )
-                    except Exception as ve:
-                        logger.debug("Violation check failed for %s: %s", symbol, ve)
-
-                # Enrich portfolio with entry context and violation info for prompt builder
-                eval_portfolio = {
-                    **portfolio,
-                    "entry_context": entry_context,
-                    "violation_info": violation_info,
-                }
-
-                # Add R-multiple info from execution engine
-                exec_engine_r = self._services.get("execution")
-                if exec_engine_r:
-                    exec_pos_r = getattr(exec_engine_r, 'active_positions', {}).get(symbol)
-                    if exec_pos_r:
-                        eval_portfolio["r_multiple"] = exec_pos_r.current_r_multiple
-                        eval_portfolio["peak_r_multiple"] = exec_pos_r.peak_r_multiple
-                        eval_portfolio["one_r_pct"] = exec_pos_r.one_r_pct
-                        eval_portfolio["breakeven_activated"] = exec_pos_r.breakeven_activated
-
-                exit_decision = await self._flag_agent.evaluate_position(
-                    symbol=symbol,
-                    direction=side,
-                    entry_price=entry_px,
-                    pnl_pct=pnl_pct,
-                    candle_fetcher=self._exchange,
-                    portfolio=eval_portfolio,
-                )
-                if exit_decision.should_close:
-                    # Anti-churn fee gate for model_reversal exits
-                    # model_reversal = LLM flipped opinion, often noise causing double fees
-                    # Allow close only if: (a) profitable >= fee threshold, or (b) losing > 1% (clear wrong direction)
-                    # Otherwise skip — likely noise, fees would make it worse
-                    min_net_profit = self.config.flag_trader_config.get("min_net_profit_pct_to_close", 0.15)
-                    if exit_decision.reason == "model_reversal":
-                        model_reversal_loss_threshold = -1.0  # Allow close if losing > 1%
-                        if pnl_pct >= min_net_profit:
-                            pass  # Profitable enough to cover fees — close (take profit)
-                        elif pnl_pct <= model_reversal_loss_threshold:
-                            pass  # Losing badly — clear wrong direction, close
-                        else:
-                            logger.info(
-                                "FLAG-Trader EXIT SKIPPED | %s %s | model_reversal fee gate | pnl=%.3f%% "
-                                "(need >=%.2f%% or <=%.1f%% to close)",
-                                side.upper(), symbol, pnl_pct, min_net_profit, model_reversal_loss_threshold,
-                            )
-                            continue
-                    elif 0 < pnl_pct < min_net_profit:
-                        # Non-reversal exits: original fee gate (small profit doesn't cover fees)
-                        logger.info(
-                            "FLAG-Trader EXIT SKIPPED | %s %s | pnl=%.3f%% < min_net_profit=%.2f%% (fees not covered)",
-                            side.upper(), symbol, pnl_pct, min_net_profit,
-                        )
-                        continue
-
-                    # Hard age floor: refuse to close ANY position younger than 60 seconds.
-                    # Paranoid second line to min_hold_minutes — nothing (no reason, no PnL,
-                    # no config, no fee-gate fall-through) should bypass this. Defends
-                    # against race conditions and any future bypass bug.
-                    HARD_AGE_FLOOR_SECONDS = 60
-                    age_seconds = age_minutes * 60
-                    if age_seconds < HARD_AGE_FLOOR_SECONDS:
-                        logger.warning(
-                            "FLAG-Trader EXIT REFUSED | %s %s age=%.1fs < hard floor %ds — race-condition guard",
-                            side.upper(), symbol, age_seconds, HARD_AGE_FLOOR_SECONDS,
-                        )
-                        continue
-
-                    logger.info(
-                        "FLAG-Trader EXIT | CLOSE %s %s | confidence=%.4f | reason=%s | pnl=%.3f%%",
-                        side.upper(), symbol, exit_decision.confidence, exit_decision.reason, pnl_pct,
-                    )
-                    exec_engine = self._services.get("execution")
-                    if exec_engine:
-                        active_pos = getattr(exec_engine, 'active_positions', {}).get(symbol)
-                        if active_pos and hasattr(active_pos, 'exit_reason'):
-                            active_pos.exit_reason = exit_decision.reason
-                        await exec_engine.close_position(symbol)
-                        positions_closed += 1
-            except Exception as e:
-                logger.warning("Error evaluating position %s: %s", symbol, e)
-
-        if positions_evaluated > 0:
-            logger.info(
-                "POSITION EVAL | %d evaluated, %d closed (timer-based, every %.0fs)",
-                positions_evaluated, positions_closed, self._position_eval_interval,
-            )
-        return positions_closed
+        return 0
 
     async def _check_violation_exit(
         self,
@@ -1401,6 +1213,22 @@ class ConservativeBot:
             except (ValueError, TypeError):
                 pass
 
+        # STAGE A: capture real high/low curves observed between entry and exit
+        # so the dashboard can overlay them against the predicted TP/SL levels.
+        real_high: list | None = None
+        real_low: list | None = None
+        try:
+            if self._exchange and opened_at:
+                # Fetch enough 15m candles to comfortably cover the K-candle window.
+                candles_raw = await self._exchange.get_candles(
+                    symbol, interval="15m", limit=80,
+                )
+                if candles_raw:
+                    real_high = [float(c.get("h", c.get("high", 0))) for c in candles_raw]
+                    real_low = [float(c.get("l", c.get("low", 0))) for c in candles_raw]
+        except Exception as exc:  # pragma: no cover - best-effort
+            logger.debug("real curve fetch failed for %s: %s", symbol, exc)
+
         try:
             self._trade_logger.log_outcome(
                 symbol=symbol,
@@ -1408,9 +1236,11 @@ class ConservativeBot:
                 exit_price=float(payload.get("exit_price", 0)),
                 pnl_usd=float(payload.get("realized_pnl", 0)),
                 pnl_pct=float(payload.get("pnl_pct", 0)),
-                exit_reason=payload.get("exit_reason") or "unknown",
+                exit_reason=payload.get("exit_reason_v2") or payload.get("exit_reason") or "unknown",
                 hold_duration_minutes=hold_minutes,
                 side=payload.get("side"),
+                real_high_curve=real_high,
+                real_low_curve=real_low,
             )
         except Exception:
             logger.exception("trade_logger.log_outcome failed for %s", symbol)

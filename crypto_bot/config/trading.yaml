@@ -111,35 +111,28 @@ risk:
 # Example: entry $100, SL $98 → 1R = 2% → 2R profit = $104
 stops:
   stop_loss_pct: 0              # Config fallback SL (0 = use model-predicted only)
-  take_profit_pct: 0            # Config fallback TP (0 = use R-based system below)
-  max_hold_hours: 0             # 0 = disabled (LLM manages hold duration)
-  trailing_atr_mult: 0          # Legacy ATR trailing (0 = disabled, use R-based below)
+  take_profit_pct: 0            # Config fallback TP (0 = use model-predicted only)
 
-  # --- R-based exit system (mechanical, no LLM needed) ---
-  r_based_exits:
-    enabled: true
-
-    # Breakeven protection: move SL to entry when profit reaches bp_activation_r
-    bp_activation_r: 2.0        # Activate breakeven at +2R profit
-    bp_offset_pct: 0.15         # Offset above entry to cover fees (0.15%)
-
-    # Strength exit: auto-close at high R-multiple (take profit)
-    strength_exit_r: 3.0        # Close position at +3R profit
-
-    # R-based trailing stop: after BP, trail SL upward as profit grows
-    trailing_enabled: true
-    trailing_start_r: 2.0       # Start trailing after this R-multiple
-    trailing_step_r: 1.0        # For every +1R gained above trailing_start_r...
-    trailing_lock_r: 0.5        # ...lock 0.5R of that gain (SL moves up 0.5R)
-
-  # --- Violation exit (hint to LLM, not mechanical) ---
-  # When price violates a technical level while in profit, this info is
-  # added to the LLM prompt as an exit suggestion (not forced).
-  violation_exit:
-    enabled: true
-    ema_period: 4               # EMA period for violation check
-    ema_source: "high"          # "high" for longs, "low" for shorts
-    min_profit_pct: 0.3         # Only suggest violation exit if in profit
+# -----------------------------------------------------------------------------
+# STAGE A — Forecast mode (predict-and-place execution)
+# -----------------------------------------------------------------------------
+# Predict-and-place: TP/SL placed atomically at entry; waits for TP-fill,
+# SL-fill, or expiry (k_candles * 15min). No re-eval, no trailing, no
+# breakeven, no R-based logic.
+#
+# NOTE (Phase 8 cleanup): the legacy mechanical-exit code path has been
+# physically deleted from execution_engine.py. `mode_enabled` is retained
+# as a feature flag / safety-net key, but it is now a no-op — setting it
+# to false would simply mean HOLD on every trigger because no fallback
+# logic remains. Do NOT remove this key without coordinating with config
+# loaders that may still read it.
+forecast:
+  mode_enabled: true
+  k_candles: 34                 # 34 x 15min = 8.5h hard expiry
+  candle_period_minutes: 15
+  expiry_action: market_close
+  expiry_limit_offset_bps: 5
+  expiry_limit_timeout_sec: 10
 
 # -----------------------------------------------------------------------------
 # Regime Detection
@@ -150,7 +143,6 @@ regime:
   range_adx_max: 20
   choppiness_range_min: 60
   confirmation_bars: 2
-  regime_exit_grace_minutes: 99999  # DISABLED
 
 # -----------------------------------------------------------------------------
 # Execution
@@ -198,8 +190,6 @@ flag_trader:
   candle_window: 20
   candle_interval: "15m"
   confidence_threshold: 1.5
-  min_hold_minutes: 120
-  min_net_profit_pct_to_close: 0.15
   max_trades_per_day: 5
 
 # -----------------------------------------------------------------------------

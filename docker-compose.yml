@@ -87,6 +87,27 @@ services:
     profiles:
       - ib    # Only start with: docker compose --profile ib up
 
+  frontend:
+    build:
+      context: .
+      dockerfile: crypto_bot/frontend/Dockerfile
+    container_name: hlquantbot_frontend
+    depends_on:
+      - crypto_bot
+    environment:
+      HLQUANTBOT_DATA_DIR: /data
+    volumes:
+      # Read-only mount of the trade_logs volume — frontend never writes.
+      - hlquantbot_trade_logs:/data/trade_logs:ro
+    ports:
+      - "127.0.0.1:5611:5611"
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
 volumes:
   hlquantbot_data:
   hlquantbot_paper_data:

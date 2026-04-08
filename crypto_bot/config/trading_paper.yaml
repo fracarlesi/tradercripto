@@ -121,8 +121,17 @@ stops:
   stop_loss_pct: 0
   take_profit_pct: 0
   breakeven_threshold_pct: 99.0
-  max_hold_hours: 0
-  trailing_atr_mult: 0
+
+# -----------------------------------------------------------------------------
+# STAGE A — Forecast mode (predict-and-place execution)
+# -----------------------------------------------------------------------------
+forecast:
+  mode_enabled: false
+  k_candles: 34
+  candle_period_minutes: 15
+  expiry_action: market_close
+  expiry_limit_offset_bps: 5
+  expiry_limit_timeout_sec: 10
 
 # -----------------------------------------------------------------------------
 # Regime Detection
@@ -133,7 +142,6 @@ regime:
   range_adx_max: 20
   choppiness_range_min: 60
   confirmation_bars: 2
-  regime_exit_grace_minutes: 99999
 
 # -----------------------------------------------------------------------------
 # Execution
@@ -181,8 +189,6 @@ flag_trader:
   candle_window: 20
   candle_interval: "15m"
   confidence_threshold: 0.6
-  min_hold_minutes: 30
-  min_net_profit_pct_to_close: 0.15
 
 # -----------------------------------------------------------------------------
 # Squeeze Trigger — Bollinger-Keltner Compression → Expansion

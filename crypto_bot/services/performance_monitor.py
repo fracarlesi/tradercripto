@@ -156,7 +156,12 @@ class PerformanceMonitorService(BaseService):
                 exit_price=float(payload.get("exit_price", 0)),
                 realized_pnl=float(payload.get("realized_pnl", 0)),
                 pnl_pct=float(payload.get("pnl_pct", 0)),
-                exit_reason=payload.get("exit_reason") or "unknown",
+                # STAGE A: prefer exit_reason_v2 (tp/sl/expiry/manual) when present.
+                exit_reason=(
+                    payload.get("exit_reason_v2")
+                    or payload.get("exit_reason")
+                    or "unknown"
+                ),
                 closed_at=datetime.now(timezone.utc).isoformat(),
                 fee=float(payload.get("fee", 0)),
                 gross_pnl=float(payload.get("gross_pnl", 0)),
