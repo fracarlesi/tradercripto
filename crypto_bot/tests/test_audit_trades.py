@@ -159,24 +159,82 @@ def test_churn_flagged_when_model_reversal():
     assert churn[0].symbol == "BTC"
 
 
-def test_min_hold_violation_detected():
-    """hold=60min + reason=model_reversal -> HIGH min_hold_violation."""
+def test_zero_confidence_detected():
+    """STAGE A: a trade taken with confidence=0 flags as model fallback."""
     outcomes = [
         {
             "timestamp": _iso(5),
             "symbol": "SOL",
             "action": "BUY",
+            "confidence": 0.0,
             "hold_duration_minutes": 60.0,
-            "exit_reason": "model_reversal",
+            "exit_reason_v2": "sl",
             "pnl_usd": -0.80,
             "pnl_pct": -0.5,
         }
     ]
     flags = audit.compute_flags(outcomes, _empty_state())
     kinds = {f.kind for f in flags}
-    assert "min_hold_violation" in kinds
-    violation = next(f for f in flags if f.kind == "min_hold_violation")
-    assert violation.severity == "HIGH"
+    assert "zero_confidence" in kinds
+    zc = next(f for f in flags if f.kind == "zero_confidence")
+    assert zc.severity == "MEDIUM"
+
+
+def test_rr_prediction_asymmetric_flagged():
+    """STAGE A: predicted tp/sl with R/R < 1:1.5 flags as asymmetric."""
+    outcomes = [
+        {
+            "timestamp": _iso(5),
+            "symbol": "ZEC",
+            "action": "SELL",
+            "confidence": 1.8,
+            "hold_duration_minutes": 65.0,
+            "exit_reason_v2": "sl",
+            "predicted_tp_pct": 0.5,
+            "predicted_sl_pct": 2.0,
+            "pnl_usd": -0.63,
+            "pnl_pct": -1.68,
+        }
+    ]
+    flags = audit.compute_flags(outcomes, _empty_state())
+    kinds = {f.kind for f in flags}
+    assert "rr_prediction_asymmetric" in kinds
+
+
+def test_rr_geometry_asymmetric_aggregate():
+    """STAGE A: 3+ SL-closed losses with avg loss >> avg win = broken R/R."""
+    outcomes = [
+        {"timestamp": _iso(60), "symbol": "BTC", "pnl_usd": -1.0,
+         "hold_duration_minutes": 60, "exit_reason_v2": "sl"},
+        {"timestamp": _iso(50), "symbol": "ETH", "pnl_usd": -1.2,
+         "hold_duration_minutes": 60, "exit_reason_v2": "sl"},
+        {"timestamp": _iso(40), "symbol": "SOL", "pnl_usd": -1.5,
+         "hold_duration_minutes": 60, "exit_reason_v2": "sl"},
+        {"timestamp": _iso(30), "symbol": "ADA", "pnl_usd": 0.25,
+         "hold_duration_minutes": 30, "exit_reason_v2": "tp"},
+    ]
+    flags = audit.compute_flags(outcomes, _empty_state())
+    kinds = {f.kind for f in flags}
+    assert "rr_geometry_asymmetric" in kinds
+
+
+def test_high_expiry_rate_flagged():
+    """STAGE A: > 30% expiry rate flags forecast horizon mismatch."""
+    outcomes = [
+        {"timestamp": _iso(60), "symbol": "BTC", "pnl_usd": 0.1,
+         "exit_reason_v2": "expiry", "hold_duration_minutes": 510},
+        {"timestamp": _iso(50), "symbol": "ETH", "pnl_usd": -0.1,
+         "exit_reason_v2": "expiry", "hold_duration_minutes": 510},
+        {"timestamp": _iso(40), "symbol": "SOL", "pnl_usd": 0.1,
+         "exit_reason_v2": "tp", "hold_duration_minutes": 30},
+        {"timestamp": _iso(30), "symbol": "ADA", "pnl_usd": -0.1,
+         "exit_reason_v2": "sl", "hold_duration_minutes": 60},
+        {"timestamp": _iso(20), "symbol": "XRP", "pnl_usd": 0.1,
+         "exit_reason_v2": "tp", "hold_duration_minutes": 30},
+    ]
+    flags = audit.compute_flags(outcomes, _empty_state())
+    kinds = {f.kind for f in flags}
+    assert "high_expiry_rate" in kinds
 
 
 def test_negative_streak_detected():

@@ -266,6 +266,18 @@ class Flag:
     details: dict[str, Any] = field(default_factory=dict)
 
 
+def _exit_reason_canonical(rec: dict[str, Any]) -> str:
+    """Resolve exit reason for STAGE A audit rules.
+
+    Prefer ``exit_reason_v2`` ({tp, sl, expiry, manual}); fall back to legacy
+    ``exit_reason`` for records written before the STAGE A rollout.
+    """
+    v2 = rec.get("exit_reason_v2")
+    if isinstance(v2, str) and v2:
+        return v2
+    return str(rec.get("exit_reason") or "")
+
+
 def compute_flags(outcomes: list[dict[str, Any]], state: BotState) -> list[Flag]:
     flags: list[Flag] = []
 
@@ -285,6 +297,60 @@ def compute_flags(outcomes: list[dict[str, Any]], state: BotState) -> list[Flag]
                 )
             )
 
+    # ------------------------------------------------------------------
+    # STAGE A aggregate rules (across the whole window)
+    # ------------------------------------------------------------------
+
+    # STAGE A: high expiry rate — forecast horizon K_candles is wrong.
+    # If > 30% of outcomes time out at expiry, the model's implicit horizon
+    # assumption is misaligned with the K_candles config.
+    if len(outcomes) >= 5:
+        expiries = sum(1 for r in outcomes if _exit_reason_canonical(r) == "expiry")
+        if expiries / len(outcomes) > 0.30:
+            flags.append(
+                Flag(
+                    kind="high_expiry_rate",
+                    severity="HIGH",
+                    symbol=None,
+                    message=(
+                        f"{expiries}/{len(outcomes)} trades expired "
+                        f"({100*expiries/len(outcomes):.0f}%) — forecast horizon "
+                        f"K_candles likely wrong"
+                    ),
+                    details={"expiry_count": expiries, "total": len(outcomes)},
+                )
+            )
+
+    # STAGE A: loss asymmetry — if most losses hit full SL while wins are
+    # partial TPs, the R/R geometry is broken (classic predicted TP too
+    # tight vs SL too wide). Threshold: >= 3 losses, all SL-closed, and
+    # avg loss_pnl_abs > avg win_pnl_abs * 2.
+    losses = [r for r in outcomes if isinstance(r.get("pnl_usd"), (int, float)) and r["pnl_usd"] < 0]
+    wins = [r for r in outcomes if isinstance(r.get("pnl_usd"), (int, float)) and r["pnl_usd"] > 0]
+    if len(losses) >= 3 and len(wins) >= 1:
+        sl_losses = sum(1 for r in losses if _exit_reason_canonical(r) == "sl")
+        if sl_losses / len(losses) >= 0.8:
+            avg_loss = sum(abs(r["pnl_usd"]) for r in losses) / len(losses)
+            avg_win = sum(r["pnl_usd"] for r in wins) / len(wins)
+            if avg_loss > avg_win * 2:
+                flags.append(
+                    Flag(
+                        kind="rr_geometry_asymmetric",
+                        severity="HIGH",
+                        symbol=None,
+                        message=(
+                            f"R/R broken: avg_loss=${avg_loss:.2f} is "
+                            f"{avg_loss/avg_win:.1f}x avg_win=${avg_win:.2f} "
+                            f"({sl_losses}/{len(losses)} losses are SL-hit)"
+                        ),
+                        details={
+                            "avg_loss": avg_loss,
+                            "avg_win": avg_win,
+                            "sl_loss_ratio": sl_losses / len(losses),
+                        },
+                    )
+                )
+
     # Per-outcome scans
     per_symbol: dict[str, list[dict[str, Any]]] = {}
     for rec in outcomes:
@@ -292,59 +358,74 @@ def compute_flags(outcomes: list[dict[str, Any]], state: BotState) -> list[Flag]
         per_symbol.setdefault(sym, []).append(rec)
 
         hold = rec.get("hold_duration_minutes")
-        exit_reason = rec.get("exit_reason")
+        exit_reason = _exit_reason_canonical(rec)
         pnl_usd = rec.get("pnl_usd")
         pnl_pct = rec.get("pnl_pct")
+        confidence = rec.get("confidence")
+        predicted_tp = rec.get("predicted_tp_pct") or rec.get("tp_pct")
+        predicted_sl = rec.get("predicted_sl_pct") or rec.get("sl_pct")
 
-        # HIGH: Churn (<2 min) — exempt target-based planned exits.
-        # A fast take_profit/stop_loss/roi_target/max_hold_time hit is a
-        # planned closure, not churning. Only unplanned/model-driven exits
-        # under 2 min are genuine churn symptoms.
-        TARGET_BASED_EXITS = {
-            "take_profit",
-            "stop_loss",
-            "roi_target",
-            "max_hold_time",
-            # LLM-only mode neutral close: exchange-side close with no
-            # TP/SL enforcement configured. Treated as planned/neutral —
-            # the LLM is the sole exit authority in that regime, so any
-            # close is by definition intentional, not churn.
-            "external_close",
-        }
+        # STAGE A churn: any exit in STAGE A is planned (tp/sl/expiry/manual
+        # via trigger orders on the exchange). A <2min hold with exit_reason_v2
+        # in {tp, sl} is a planned hit — not churn. Only manual/unknown
+        # ultra-fast closes are flagged now.
         if (
             isinstance(hold, (int, float))
             and hold < 2.0
-            and exit_reason not in TARGET_BASED_EXITS
+            and exit_reason not in ("tp", "sl", "expiry", "manual",
+                                    # legacy planned exits for backward compat
+                                    "take_profit", "stop_loss", "roi_target",
+                                    "max_hold_time", "external_close")
         ):
             flags.append(
                 Flag(
                     kind="churn",
                     severity="HIGH",
                     symbol=sym,
-                    message=f"{sym} closed after {hold:.2f}min (churn)",
+                    message=f"{sym} closed after {hold:.2f}min with unknown exit '{exit_reason}'",
                     details={"hold_minutes": hold, "exit_reason": exit_reason,
                              "pnl_usd": pnl_usd},
                 )
             )
 
-        # HIGH: Min-hold violation on soft exits
-        if (
-            isinstance(hold, (int, float))
-            and hold < 120
-            and exit_reason in ("model_reversal", "regime_change", "strength_exit")
-        ):
+        # STAGE A: zero-confidence trade — model fell back to rule-based or
+        # feature pipeline degraded. Distinct from a small confidence drop.
+        if isinstance(confidence, (int, float)) and confidence == 0.0:
             flags.append(
                 Flag(
-                    kind="min_hold_violation",
-                    severity="HIGH",
+                    kind="zero_confidence",
+                    severity="MEDIUM",
                     symbol=sym,
-                    message=(
-                        f"{sym} exited via {exit_reason} after {hold:.1f}min "
-                        f"(< 120min min-hold)"
-                    ),
-                    details={"hold_minutes": hold, "exit_reason": exit_reason},
+                    message=f"{sym} trade taken with confidence=0.0 (model fallback / feature degraded)",
+                    details={"confidence": confidence, "exit_reason": exit_reason,
+                             "pnl_usd": pnl_usd},
                 )
             )
+
+        # STAGE A: per-trade R/R asymmetry — the model predicted TP/SL with
+        # R/R worse than 1:1.5 (e.g. tp=0.5% sl=2.0% → ratio 0.25). Even if
+        # the single trade wins, the ratio itself is a policy signal.
+        if (
+            isinstance(predicted_tp, (int, float))
+            and isinstance(predicted_sl, (int, float))
+            and predicted_tp > 0
+            and predicted_sl > 0
+        ):
+            rr = predicted_tp / predicted_sl
+            if rr < 1.0 / 1.5:  # < 1:1.5
+                flags.append(
+                    Flag(
+                        kind="rr_prediction_asymmetric",
+                        severity="MEDIUM",
+                        symbol=sym,
+                        message=(
+                            f"{sym} model predicted tp={predicted_tp:.2f}% "
+                            f"sl={predicted_sl:.2f}% (R/R={rr:.2f}, < 1:1.5)"
+                        ),
+                        details={"predicted_tp_pct": predicted_tp,
+                                 "predicted_sl_pct": predicted_sl, "rr": rr},
+                    )
+                )
 
         # MEDIUM: outlier loss
         if isinstance(pnl_pct, (int, float)) and pnl_pct < -3.0:
@@ -487,12 +568,20 @@ Trade records (anonimizzati):
 Rispondi SOLO in JSON valido con questo schema:
 {{
   "severity": "LOW" | "MEDIUM" | "HIGH" | "CRITICAL",
-  "summary": "<una frase>",
-  "root_cause_hypotheses": ["...", "..."],
+  "summary": "<una frase, max 160 char>",
+  "root_cause_hypotheses": ["<ipotesi 1>", "<ipotesi 2>"],
+  "suggested_fix": "<fix concreto e azionabile, 1-3 frasi: cosa modificare, in quale file/config>",
   "escalate_to_opus": true | false
 }}
 
 escalate_to_opus = true SOLO se: severity=CRITICAL, oppure pattern non riconosciuto e serve deep dive.
+
+Context STAGE A (predict-and-place, mode_enabled=true):
+- Il bot usa TP/SL predetti dal modello Qwen FLAG-Trader (campi `predicted_tp_pct`, `predicted_sl_pct` nelle decisions_*.jsonl)
+- exit_reason_v2 ∈ {{tp, sl, expiry, manual}}. Vecchi valori (trailing_stop, model_reversal, min_hold_*) NON esistono più nel codepath live — se li vedi sono record legacy, non flaggare come bug.
+- min_hold_minutes è stato RIMOSSO, non segnalare violazioni min-hold.
+- Expiry = K_candles × 15min = 8.5h. Un alto tasso di exit_reason_v2=expiry indica forecast orizzonte sbagliato, flaggalo.
+- R/R asimmetrico (predicted_tp_pct < predicted_sl_pct / 1.5) è un problema REALE da segnalare.
 """
 
     try:
@@ -784,6 +873,9 @@ def _format_issue_body(
     lines += ["", "## Root cause hypotheses"]
     for h in verdict.get("root_cause_hypotheses") or []:
         lines.append(f"- {h}")
+    suggested_fix = verdict.get("suggested_fix")
+    if suggested_fix:
+        lines += ["", "## Suggested fix", str(suggested_fix)]
     lines += [
         "",
         "## Recent outcomes",
