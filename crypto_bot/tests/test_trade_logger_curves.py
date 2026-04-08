@@ -110,6 +110,94 @@ def test_legacy_record_roundtrip(tmp_path: Path) -> None:
     assert "trade_id" not in records[0]
 
 
+def test_reversal_trade_id_lookup_beats_fifo(tmp_path: Path) -> None:
+    """Rapid reversal: SELL then BUY on BTC before first outcome lands.
+
+    With explicit ``trade_id`` in log_outcome, the outcome MUST correlate to
+    the matching decision (not the FIFO head by symbol).
+    """
+    logger = FlagTradeLogger(log_dir=tmp_path)
+
+    sell_rec = _make_decision(symbol="BTC", action="SELL")
+    logger.log_decision(sell_rec)
+    sell_id = sell_rec.trade_id
+    assert sell_id is not None
+
+    buy_rec = _make_decision(symbol="BTC", action="BUY")
+    logger.log_decision(buy_rec)
+    buy_id = buy_rec.trade_id
+    assert buy_id is not None
+    assert buy_id != sell_id
+
+    # Close the BUY (newer) first by explicit trade_id.  Under FIFO-by-symbol
+    # this would incorrectly pop the SELL record.
+    logger.log_outcome(
+        symbol="BTC",
+        entry_price=100.0,
+        exit_price=103.0,
+        pnl_usd=3.0,
+        pnl_pct=3.0,
+        exit_reason="take_profit",
+        hold_duration_minutes=15.0,
+        side="long",
+        trade_id=buy_id,
+    )
+
+    # The SELL record must still be pending (FIFO would have consumed it).
+    assert "BTC" in logger._pending_trades
+    remaining = logger._pending_trades["BTC"]
+    assert len(remaining) == 1
+    assert remaining[0].trade_id == sell_id
+    assert remaining[0].action == "SELL"
+
+    # Outcome file should contain exactly one record tagged with buy_id.
+    out_files = list(tmp_path.glob("outcomes_*.jsonl"))
+    assert len(out_files) == 1
+    lines = [json.loads(line) for line in out_files[0].read_text().splitlines() if line.strip()]
+    assert len(lines) == 1
+    assert lines[0]["trade_id"] == buy_id
+    assert lines[0]["action"] == "BUY"
+
+    # Now close the SELL with explicit trade_id; bucket must empty out.
+    logger.log_outcome(
+        symbol="BTC",
+        entry_price=100.0,
+        exit_price=99.0,
+        pnl_usd=1.0,
+        pnl_pct=1.0,
+        exit_reason="take_profit",
+        hold_duration_minutes=20.0,
+        side="short",
+        trade_id=sell_id,
+    )
+    assert "BTC" not in logger._pending_trades
+
+
+def test_log_outcome_backward_compat_fifo(tmp_path: Path) -> None:
+    """When ``trade_id`` is not provided, legacy FIFO-by-symbol path still works."""
+    logger = FlagTradeLogger(log_dir=tmp_path)
+    rec = _make_decision(symbol="ETH", action="BUY")
+    logger.log_decision(rec)
+    original_id = rec.trade_id
+
+    logger.log_outcome(
+        symbol="ETH",
+        entry_price=2000.0,
+        exit_price=2050.0,
+        pnl_usd=50.0,
+        pnl_pct=2.5,
+        exit_reason="take_profit",
+        hold_duration_minutes=10.0,
+        side="long",
+    )
+
+    assert "ETH" not in logger._pending_trades
+    out_files = list(tmp_path.glob("outcomes_*.jsonl"))
+    assert len(out_files) == 1
+    line = json.loads(out_files[0].read_text().splitlines()[0])
+    assert line["trade_id"] == original_id
+
+
 def test_map_exit_reason_to_v2() -> None:
     assert _map_exit_reason_to_v2("take_profit") == "tp"
     assert _map_exit_reason_to_v2("stop_loss") == "sl"

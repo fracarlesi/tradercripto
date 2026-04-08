@@ -1248,6 +1248,7 @@ class ConservativeBot:
                 real_low_curve=real_low,
                 real_open_curve=real_open,
                 real_close_curve=real_close,
+                trade_id=payload.get("trade_id") or (payload.get("position") or {}).get("trade_id"),
             )
         except Exception:
             logger.exception("trade_logger.log_outcome failed for %s", symbol)

@@ -294,6 +294,7 @@ class ExecutionPosition:
             "peak_r_multiple": self.peak_r_multiple,
             "current_r_multiple": self.current_r_multiple,
             "last_trail_r": self.last_trail_r,
+            "trade_id": self.trade_id,
         }
 
 
@@ -3079,6 +3080,7 @@ class ExecutionEngineService(BaseService):
             "fee": total_fee,
             "pnl_pct": pnl_pct,
             "exit_reason_v2": _exit_reason_to_v2(position.exit_reason),
+            "trade_id": position.trade_id,
             "position": position.to_dict(),
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "daily_wins": daily_wins,

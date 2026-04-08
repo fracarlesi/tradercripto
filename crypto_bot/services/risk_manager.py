@@ -754,6 +754,7 @@ class RiskManagerService(BaseService):
             prefer_limit=True,
             max_slippage_pct=Decimal(str(self._risk_config.max_slippage_pct)),
             correlation_id=getattr(setup, "correlation_id", None),
+            trade_id=getattr(setup, "trade_id", None),
         )
 
     async def _publish_intent(self, intent: TradeIntent, leverage: Optional[int] = None) -> None:

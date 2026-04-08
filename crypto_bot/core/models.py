@@ -198,6 +198,11 @@ class Setup(BaseModel):
         default=None, description="Correlation id linking decision -> setup -> intent -> order/fill"
     )
 
+    # FLAG-Trader decision id (uuid4 hex) propagated for outcome correlation
+    trade_id: Optional[str] = Field(
+        default=None, description="FLAG-Trader decision trade_id for outcome correlation"
+    )
+
     class Config:
         json_encoders = {
             Decimal: lambda v: float(v),
@@ -284,6 +289,11 @@ class TradeIntent(BaseModel):
     # Observability: end-to-end correlation id propagated across services
     correlation_id: Optional[str] = Field(
         default=None, description="Correlation id linking decision -> setup -> intent -> order/fill"
+    )
+
+    # FLAG-Trader decision id (uuid4 hex) propagated for outcome correlation
+    trade_id: Optional[str] = Field(
+        default=None, description="FLAG-Trader decision trade_id for outcome correlation"
     )
 
     class Config:

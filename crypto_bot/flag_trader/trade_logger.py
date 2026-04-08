@@ -165,24 +165,46 @@ class FlagTradeLogger:
         real_open_curve: Optional[list] = None,
         real_close_curve: Optional[list] = None,
         exit_reason_v2: Optional[str] = None,
+        trade_id: Optional[str] = None,
     ) -> None:
         """
         Log a closed trade outcome.
 
-        If a matching decision is in ``_pending_trades`` (same process, not restarted),
-        we enrich the outcome record with decision-time context (confidence, prompt,
-        market_state_summary, etc.). Otherwise we synthesise a minimal TradeRecord so
-        the outcome is ALWAYS persisted — critical after process restarts where the
-        in-memory pending map has been lost.
+        Correlation strategy:
+        1. If ``trade_id`` is provided, look it up as primary key across all
+           pending buckets (robust against rapid reversals where FIFO-by-symbol
+           would mis-associate the fill with a newer decision of opposite side).
+        2. Otherwise fall back to FIFO-by-symbol (legacy path).
+        3. If neither matches, synthesise a minimal TradeRecord so the outcome
+           is ALWAYS persisted (critical after process restarts).
         """
-        bucket = self._pending_trades.get(symbol)
         record: Optional[TradeRecord] = None
-        if bucket:
-            # FIFO: the oldest pending decision matches the close event on the exchange.
-            record = bucket.pop(0)
-            if not bucket:
-                # Keep the dict clean — debug tooling iterates over keys.
-                self._pending_trades.pop(symbol, None)
+
+        # Primary: explicit trade_id lookup across all pending buckets.
+        if trade_id:
+            for sym, bucket in list(self._pending_trades.items()):
+                for idx, pending in enumerate(bucket):
+                    if pending.trade_id == trade_id:
+                        record = bucket.pop(idx)
+                        if not bucket:
+                            self._pending_trades.pop(sym, None)
+                        break
+                if record is not None:
+                    break
+            if record is None:
+                logger.debug(
+                    "log_outcome: trade_id=%s not found in pending; "
+                    "falling back to FIFO-by-symbol for %s",
+                    trade_id, symbol,
+                )
+
+        # Fallback: FIFO by symbol (legacy behaviour, backward compatible).
+        if record is None:
+            bucket = self._pending_trades.get(symbol)
+            if bucket:
+                record = bucket.pop(0)
+                if not bucket:
+                    self._pending_trades.pop(symbol, None)
         if record is None:
             # Fallback: synthesise a minimal record so the outcome is still logged.
             action = "SELL" if (side and side.lower() == "short") else "BUY"
@@ -195,6 +217,7 @@ class FlagTradeLogger:
                 log_prob=0.0,
                 candles_summary={},
                 portfolio={},
+                trade_id=trade_id,
             )
             logger.debug(
                 "log_outcome: no pending decision for %s (likely restart); "
