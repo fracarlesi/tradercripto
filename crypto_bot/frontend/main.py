@@ -14,6 +14,7 @@ from typing import Any
 
 from flask import Flask, Response, jsonify, render_template, request
 
+from crypto_bot.flag_trader.open_sidecar import list_open_sidecars
 from crypto_bot.frontend.data import TradeStore
 
 logger = logging.getLogger(__name__)
@@ -103,6 +104,50 @@ def create_app(store: TradeStore | None = None) -> Flask:
         offset = (page - 1) * limit
         rows, total = _store().list_trades(limit=limit, offset=offset, symbol=symbol)
         return jsonify({"rows": rows, "total": total, "page": page, "limit": limit})
+
+    @app.route("/api/open_trades")
+    def api_open_trades() -> Response:
+        """Return all in-flight trades with predicted TP/SL sidecars.
+
+        Each row also carries a derived ``risk_reward`` (TP distance / SL
+        distance) and ``age_sec`` (seconds since ``opened_at``) for the UI.
+        """
+        from datetime import datetime, timezone
+
+        rows: list[dict[str, Any]] = []
+        for sc in list_open_sidecars():
+            entry = sc.get("entry_price")
+            tp = sc.get("predicted_tp_price")
+            sl = sc.get("predicted_sl_price")
+            rr: float | None = None
+            try:
+                if entry is not None and tp is not None and sl is not None:
+                    tp_d = abs(float(tp) - float(entry))
+                    sl_d = abs(float(entry) - float(sl))
+                    if sl_d > 0:
+                        rr = round(tp_d / sl_d, 2)
+            except (TypeError, ValueError):
+                rr = None
+            age: float | None = None
+            try:
+                opened = sc.get("opened_at")
+                if isinstance(opened, str) and opened:
+                    ts = datetime.fromisoformat(opened.replace("Z", "+00:00"))
+                    age = (datetime.now(timezone.utc) - ts).total_seconds()
+            except ValueError:
+                age = None
+            row = dict(sc)
+            row["risk_reward"] = rr
+            row["age_sec"] = age
+            rows.append(row)
+        rows.sort(key=lambda r: r.get("opened_at") or "", reverse=True)
+        return jsonify({"rows": rows, "count": len(rows)})
+
+    @app.route("/partials/open_trades")
+    def partial_open_trades() -> str:
+        resp = api_open_trades()
+        data = json.loads(resp.get_data(as_text=True))
+        return render_template("partials/open_trades_table.html", rows=data["rows"])
 
     @app.route("/api/trades/<trade_id>/curves")
     def api_trade_curves(trade_id: str) -> Response:

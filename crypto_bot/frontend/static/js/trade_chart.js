@@ -152,14 +152,22 @@
     const seriesData = [xs];
     const seriesCfg = [{}];
 
-    // Predicted TP/SL horizontal reference lines.
+    // Predicted TP/SL horizontal reference lines with pct in the legend.
+    const tpPct = sc.predicted_tp_pct != null ? sc.predicted_tp_pct : data.predicted_tp_pct;
+    const slPct = sc.predicted_sl_pct != null ? sc.predicted_sl_pct : data.predicted_sl_pct;
     if (tp != null) {
       seriesData.push(new Array(k).fill(tp));
-      seriesCfg.push({ label: "Predicted TP", stroke: "#22c55e", width: 2, dash: [6, 4] });
+      const lbl = tpPct != null ? ("TP predicted " + Number(tpPct).toFixed(2) + "%") : "Predicted TP";
+      seriesCfg.push({ label: lbl, stroke: "#22c55e", width: 2, dash: [6, 4] });
     }
     if (sl != null) {
       seriesData.push(new Array(k).fill(sl));
-      seriesCfg.push({ label: "Predicted SL", stroke: "#ef4444", width: 2, dash: [6, 4] });
+      const lbl = slPct != null ? ("SL predicted " + Number(slPct).toFixed(2) + "%") : "Predicted SL";
+      seriesCfg.push({ label: lbl, stroke: "#ef4444", width: 2, dash: [6, 4] });
+    }
+    if (entry != null) {
+      seriesData.push(new Array(k).fill(entry));
+      seriesCfg.push({ label: "Entry", stroke: "#60a5fa", width: 1, dash: [2, 3] });
     }
 
     let openIdx = -1, highIdx = -1, lowIdx = -1, closeIdx = -1;

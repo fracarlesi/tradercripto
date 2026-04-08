@@ -1,0 +1,42 @@
+<div class="overflow-x-auto bg-gray-900 border border-gray-800 rounded-lg shadow">
+  <table class="min-w-full text-sm">
+    <thead class="bg-gray-800 text-gray-300 text-xs uppercase">
+      <tr>
+        <th class="px-3 py-2 text-left">Opened</th>
+        <th class="px-3 py-2 text-left">Symbol</th>
+        <th class="px-3 py-2 text-left">Side</th>
+        <th class="px-3 py-2 text-right">Entry</th>
+        <th class="px-3 py-2 text-right">TP pred</th>
+        <th class="px-3 py-2 text-right">SL pred</th>
+        <th class="px-3 py-2 text-right">TP %</th>
+        <th class="px-3 py-2 text-right">SL %</th>
+        <th class="px-3 py-2 text-right">R/R</th>
+        <th class="px-3 py-2 text-right">Age</th>
+        <th class="px-3 py-2"></th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-800">
+      {% for r in rows %}
+        <tr class="hover:bg-gray-800/50">
+          <td class="px-3 py-2 text-gray-400 whitespace-nowrap">{{ (r.opened_at or '')[:19] }}</td>
+          <td class="px-3 py-2 font-medium">{{ r.symbol }}</td>
+          <td class="px-3 py-2 {{ 'text-green-400' if (r.side or '')|lower == 'long' else 'text-red-400' }}">{{ (r.side or '')|upper }}</td>
+          <td class="px-3 py-2 text-right">{{ '%.4f' % (r.entry_price or 0) }}</td>
+          <td class="px-3 py-2 text-right text-green-400">{% if r.predicted_tp_price is not none %}{{ '%.4f' % r.predicted_tp_price }}{% else %}—{% endif %}</td>
+          <td class="px-3 py-2 text-right text-red-400">{% if r.predicted_sl_price is not none %}{{ '%.4f' % r.predicted_sl_price }}{% else %}—{% endif %}</td>
+          <td class="px-3 py-2 text-right text-gray-400">{% if r.predicted_tp_pct is not none %}{{ '%.2f' % r.predicted_tp_pct }}{% else %}—{% endif %}</td>
+          <td class="px-3 py-2 text-right text-gray-400">{% if r.predicted_sl_pct is not none %}{{ '%.2f' % r.predicted_sl_pct }}{% else %}—{% endif %}</td>
+          <td class="px-3 py-2 text-right">{% if r.risk_reward is not none %}{{ r.risk_reward }}{% else %}—{% endif %}</td>
+          <td class="px-3 py-2 text-right text-gray-500">{% if r.age_sec is not none %}{{ (r.age_sec // 60)|int }}m{% else %}—{% endif %}</td>
+          <td class="px-3 py-2 text-right">
+            {% if r.trade_id %}
+              <a href="/trades/{{ r.trade_id }}" class="text-blue-400 hover:underline">view</a>
+            {% endif %}
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="11" class="px-3 py-6 text-center text-gray-500">No open trades</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

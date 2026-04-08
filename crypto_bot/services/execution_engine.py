@@ -47,6 +47,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 from .base import BaseService
 from .message_bus import Message, MessageBus, Topic
 from ..api.exceptions import OrderRejectedError
+from ..flag_trader.open_sidecar import delete_open_sidecar, write_open_sidecar
 
 # For type checking we want the real classes; at runtime fall back to Any
 # so the module still imports if the optional deps are missing.
@@ -1599,6 +1600,39 @@ class ExecutionEngineService(BaseService):
         # Record the size for which TP/SL were placed (for partial fill detection)
         self._tp_sl_placed_size[symbol] = float(size)
 
+        # STAGE A: write open-trade forecast sidecar so the dashboard can
+        # overlay predicted TP/SL for in-flight positions. Best-effort; a
+        # failure here must not break the trading flow.
+        try:
+            tp_pct = signal.get("model_tp_pct")
+            sl_pct = signal.get("model_sl_pct")
+            tp_price_hint: Optional[float] = None
+            sl_price_hint: Optional[float] = None
+            if position.tp_price is not None:
+                tp_price_hint = float(position.tp_price)
+            elif tp_pct:
+                sign = 1 if direction == "long" else -1
+                tp_price_hint = float(entry_price) * (1 + sign * float(tp_pct) / 100)
+            if position.sl_price is not None:
+                sl_price_hint = float(position.sl_price)
+            elif sl_pct:
+                sign = -1 if direction == "long" else 1
+                sl_price_hint = float(entry_price) * (1 + sign * float(sl_pct) / 100)
+            write_open_sidecar(
+                trade_id=str(position.trade_id) if position.trade_id else "",
+                symbol=symbol,
+                side=direction,
+                entry_price=float(entry_price),
+                predicted_tp_price=tp_price_hint,
+                predicted_sl_price=sl_price_hint,
+                predicted_tp_pct=float(tp_pct) if tp_pct else None,
+                predicted_sl_pct=float(sl_pct) if sl_pct else None,
+                opened_at=position.opened_at,
+                expiry_at=position.expiry_at,
+            )
+        except Exception:
+            self._logger.exception("failed to write open forecast sidecar for %s", symbol)
+
     async def _ensure_tp_sl_for_position(self, position: ExecutionPosition) -> None:
         """
         Ensure a position has exactly 1 TP and 1 SL order on the exchange.
@@ -3032,6 +3066,14 @@ class ExecutionEngineService(BaseService):
         position = self.active_positions[symbol]
         position.status = PositionStatus.CLOSED
         position.closed_at = datetime.now(timezone.utc)
+
+        # STAGE A: remove the open forecast sidecar (dashboard live overlay).
+        # Best-effort — tolerate missing files and any unlink errors.
+        try:
+            if position.trade_id:
+                delete_open_sidecar(str(position.trade_id))
+        except Exception:
+            self._logger.exception("failed to delete open forecast sidecar for %s", symbol)
 
         # Infer exit_reason from exit price when not set (exchange-side TP/SL)
         if not position.exit_reason:
