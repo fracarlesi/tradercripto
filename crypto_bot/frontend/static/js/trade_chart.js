@@ -1,7 +1,5 @@
-// uPlot hydration for the trade detail page.
-// Renders OHLC candlesticks (when open/close curves are present), TP/SL
-// predicted levels, and entry/exit vertical markers. Re-initialises on
-// htmx:afterSwap so HTMX navigation does not leak uPlot instances.
+// Trade detail chart — clean, readable layout.
+// Candlesticks + TP/SL lines + entry/exit markers.
 (function () {
   let currentPlot = null;
 
@@ -24,8 +22,9 @@
     container.appendChild(div);
   }
 
-  // Plugin: draws OHLC candlesticks for the given series indices (o/h/l/c).
-  // Uses u.ctx directly in a draw hook so we don't need an external lib.
+  // --- Plugins ---
+
+  // OHLC candlesticks drawn directly on canvas.
   function candlestickPlugin(openIdx, highIdx, lowIdx, closeIdx) {
     return {
       hooks: {
@@ -38,11 +37,10 @@
           const cs = u.data[closeIdx];
           if (!os || !cs) return;
           const n = xs.length;
-          // Estimate pixel width per candle from x-scale distance.
           let step = 1;
           if (n >= 2) step = xs[1] - xs[0];
           const pxPerUnit = (u.valToPos(xs[0] + step, "x", true) - u.valToPos(xs[0], "x", true));
-          const bodyW = Math.max(2, Math.floor(Math.abs(pxPerUnit) * 0.6));
+          const bodyW = Math.max(3, Math.floor(Math.abs(pxPerUnit) * 0.6));
 
           ctx.save();
           for (let i = 0; i < n; i++) {
@@ -58,12 +56,10 @@
             ctx.strokeStyle = color;
             ctx.fillStyle = color;
             ctx.lineWidth = 1;
-            // Wick
             ctx.beginPath();
             ctx.moveTo(xPx, hPx);
             ctx.lineTo(xPx, lPx);
             ctx.stroke();
-            // Body
             const top = Math.min(oPx, cPx);
             const h2 = Math.max(1, Math.abs(cPx - oPx));
             ctx.fillRect(xPx - bodyW / 2, top, bodyW, h2);
@@ -74,32 +70,90 @@
     };
   }
 
-  // Plugin: vertical marker at a given x value with a text label on top.
-  function verticalMarker(xVal, label, color) {
+  // Horizontal price line with right-edge label badge.
+  function hLine(yVal, color, label, dashPattern) {
+    return {
+      hooks: {
+        draw: function (u) {
+          if (yVal == null) return;
+          var ctx = u.ctx;
+          var left = u.bbox.left;
+          var right = left + u.bbox.width;
+          var yPx = u.valToPos(yVal, "y", true);
+
+          ctx.save();
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash(dashPattern || []);
+          ctx.beginPath();
+          ctx.moveTo(left, yPx);
+          ctx.lineTo(right, yPx);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          if (label) {
+            ctx.font = "bold 10px ui-sans-serif, system-ui, sans-serif";
+            var tw = ctx.measureText(label).width;
+            var pad = 4;
+            var bw = tw + pad * 2;
+            var bh = 16;
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.roundRect(right + 3, yPx - bh / 2, bw, bh, 3);
+            ctx.fill();
+            ctx.fillStyle = "#111827";
+            ctx.fillText(label, right + 3 + pad, yPx + 4);
+          }
+          ctx.restore();
+        },
+      },
+    };
+  }
+
+  // Vertical line spanning the full chart height at a given x.
+  // Label badge positioned at the yVal price level so it visually matches the price.
+  function verticalLine(xVal, yVal, label, color) {
     return {
       hooks: {
         draw: function (u) {
           if (xVal == null) return;
-          const ctx = u.ctx;
-          const xPx = u.valToPos(xVal, "x", true);
-          const top = u.bbox.top;
-          const bot = u.bbox.top + u.bbox.height;
+          var ctx = u.ctx;
+          var xPx = u.valToPos(xVal, "x", true);
+          var top = u.bbox.top;
+          var bot = top + u.bbox.height;
+
           ctx.save();
+          // Vertical line
           ctx.strokeStyle = color;
-          ctx.fillStyle = color;
           ctx.lineWidth = 1.5;
-          ctx.setLineDash([4, 3]);
+          ctx.setLineDash([5, 4]);
           ctx.beginPath();
           ctx.moveTo(xPx, top);
           ctx.lineTo(xPx, bot);
           ctx.stroke();
           ctx.setLineDash([]);
-          ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
-          const tw = ctx.measureText(label).width;
-          ctx.fillStyle = "rgba(17,24,39,0.85)";
-          ctx.fillRect(xPx - tw / 2 - 4, top + 2, tw + 8, 14);
-          ctx.fillStyle = color;
-          ctx.fillText(label, xPx - tw / 2, top + 13);
+
+          // Label badge at the price level
+          if (label && yVal != null) {
+            var yPx = u.valToPos(yVal, "y", true);
+            ctx.font = "bold 10px ui-sans-serif, system-ui, sans-serif";
+            var tw = ctx.measureText(label).width;
+            var badgeW = tw + 10;
+            var badgeH = 16;
+            // Position badge to the right of the vertical line
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.roundRect(xPx + 4, yPx - badgeH / 2, badgeW, badgeH, 3);
+            ctx.fill();
+            ctx.fillStyle = "#111827";
+            ctx.fillText(label, xPx + 9, yPx + 4);
+
+            // Small dot on the price level
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.arc(xPx, yPx, 4, 0, Math.PI * 2);
+            ctx.fill();
+          }
           ctx.restore();
         },
       },
@@ -108,116 +162,132 @@
 
   async function renderChart(container) {
     destroyCurrent();
-    const tradeId = container.getAttribute("data-trade-id");
+    var tradeId = container.getAttribute("data-trade-id");
     if (!tradeId) return;
 
-    let data;
+    var data;
     try {
-      const res = await fetch("/api/trades/" + encodeURIComponent(tradeId) + "/curves");
+      var res = await fetch("/api/trades/" + encodeURIComponent(tradeId) + "/curves");
       data = await res.json();
     } catch (err) {
       showMessage(container, "Failed to load curve data.", "text-red-400");
       return;
     }
 
-    const sc = data.sidecar || {};
-    const realHigh = sc.real_high_curve || sc.real_high || data.real_high_curve || [];
-    const realLow = sc.real_low_curve || sc.real_low || data.real_low_curve || [];
-    // Legacy sidecars (FET, ZRO) have no open/close — degrade gracefully
-    // by reusing high/low as approximation so line rendering still works.
-    const realOpen = sc.real_open_curve || data.real_open_curve || null;
-    const realClose = sc.real_close_curve || data.real_close_curve || null;
-    const hasOHLC = Array.isArray(realOpen) && Array.isArray(realClose)
+    var sc = data.sidecar || {};
+    var realHigh = sc.real_high_curve || sc.real_high || data.real_high_curve || [];
+    var realLow = sc.real_low_curve || sc.real_low || data.real_low_curve || [];
+    var realOpen = sc.real_open_curve || data.real_open_curve || null;
+    var realClose = sc.real_close_curve || data.real_close_curve || null;
+    var hasOHLC = Array.isArray(realOpen) && Array.isArray(realClose)
       && realOpen.length > 0 && realClose.length > 0;
-    const intervalSec = sc.candle_interval_sec || sc.interval_sec || data.candle_interval_sec || 900;
-    const k = Math.max(realHigh.length, realLow.length, hasOHLC ? realOpen.length : 0);
+    var intervalSec = sc.candle_interval_sec || sc.interval_sec || data.candle_interval_sec || 900;
+    var k = Math.max(realHigh.length, realLow.length, hasOHLC ? realOpen.length : 0);
 
     if (k === 0) {
       showMessage(container, "No real candle curve recorded for this trade.", "text-yellow-400");
       return;
     }
 
-    const tp = sc.predicted_tp_price != null ? sc.predicted_tp_price
+    var tp = sc.predicted_tp_price != null ? sc.predicted_tp_price
       : (sc.predicted_tp != null ? sc.predicted_tp : data.predicted_tp_price);
-    const sl = sc.predicted_sl_price != null ? sc.predicted_sl_price
+    var sl = sc.predicted_sl_price != null ? sc.predicted_sl_price
       : (sc.predicted_sl != null ? sc.predicted_sl : data.predicted_sl_price);
-    const entry = sc.entry_price != null ? sc.entry_price
+    var entry = sc.entry_price != null ? sc.entry_price
       : (sc.entry != null ? sc.entry : data.entry_price);
-    const exitPrice = sc.exit_price != null ? sc.exit_price
+    var exitPrice = sc.exit_price != null ? sc.exit_price
       : (sc.exit != null ? sc.exit : data.exit_price);
+    var tpPct = sc.predicted_tp_pct != null ? sc.predicted_tp_pct : data.predicted_tp_pct;
+    var slPct = sc.predicted_sl_pct != null ? sc.predicted_sl_pct : data.predicted_sl_pct;
 
-    const xs = [];
-    for (let i = 0; i < k; i++) xs.push(i * intervalSec);
+    var xs = [];
+    for (var i = 0; i < k; i++) xs.push(i * intervalSec);
 
-    const seriesData = [xs];
-    const seriesCfg = [{}];
+    // Only OHLC series (invisible, for y-scale) or legacy high/low lines.
+    var seriesData = [xs];
+    var seriesCfg = [{}];
 
-    // Predicted TP/SL horizontal reference lines with pct in the legend.
-    const tpPct = sc.predicted_tp_pct != null ? sc.predicted_tp_pct : data.predicted_tp_pct;
-    const slPct = sc.predicted_sl_pct != null ? sc.predicted_sl_pct : data.predicted_sl_pct;
-    if (tp != null) {
-      seriesData.push(new Array(k).fill(tp));
-      const lbl = tpPct != null ? ("TP predicted " + Number(tpPct).toFixed(2) + "%") : "Predicted TP";
-      seriesCfg.push({ label: lbl, stroke: "#22c55e", width: 2, dash: [6, 4] });
-    }
-    if (sl != null) {
-      seriesData.push(new Array(k).fill(sl));
-      const lbl = slPct != null ? ("SL predicted " + Number(slPct).toFixed(2) + "%") : "Predicted SL";
-      seriesCfg.push({ label: lbl, stroke: "#ef4444", width: 2, dash: [6, 4] });
-    }
-    if (entry != null) {
-      seriesData.push(new Array(k).fill(entry));
-      seriesCfg.push({ label: "Entry", stroke: "#60a5fa", width: 1, dash: [2, 3] });
-    }
-
-    let openIdx = -1, highIdx = -1, lowIdx = -1, closeIdx = -1;
+    var openIdx = -1, highIdx = -1, lowIdx = -1, closeIdx = -1;
     if (hasOHLC) {
-      // Invisible series so uPlot scales y to OHLC range but we custom-draw candles.
+      // Series must be visible (show:true) for uPlot to include them in y-scale,
+      // but we draw candles ourselves so use transparent stroke + no points.
+      var invisible = { stroke: "rgba(0,0,0,0)", width: 0, points: { show: false } };
       openIdx = seriesData.length;
       seriesData.push(realOpen);
-      seriesCfg.push({ label: "Open", stroke: "rgba(0,0,0,0)", width: 0, points: { show: false } });
+      seriesCfg.push(Object.assign({ label: "O" }, invisible));
       highIdx = seriesData.length;
       seriesData.push(realHigh);
-      seriesCfg.push({ label: "High", stroke: "rgba(0,0,0,0)", width: 0, points: { show: false } });
+      seriesCfg.push(Object.assign({ label: "H" }, invisible));
       lowIdx = seriesData.length;
       seriesData.push(realLow);
-      seriesCfg.push({ label: "Low", stroke: "rgba(0,0,0,0)", width: 0, points: { show: false } });
+      seriesCfg.push(Object.assign({ label: "L" }, invisible));
       closeIdx = seriesData.length;
       seriesData.push(realClose);
-      seriesCfg.push({ label: "Close", stroke: "rgba(0,0,0,0)", width: 0, points: { show: false } });
+      seriesCfg.push(Object.assign({ label: "C" }, invisible));
     } else {
-      // Legacy fallback: plot high/low as lines.
       seriesData.push(realHigh);
-      seriesCfg.push({ label: "Real high", stroke: "#60a5fa", width: 1.5 });
+      seriesCfg.push({ label: "High", stroke: "#60a5fa", width: 1.5 });
       seriesData.push(realLow);
-      seriesCfg.push({ label: "Real low", stroke: "#a78bfa", width: 1.5 });
+      seriesCfg.push({ label: "Low", stroke: "#a78bfa", width: 1.5 });
     }
 
-    const plugins = [];
+    // --- Plugins (background → foreground) ---
+    var plugins = [];
+
     if (hasOHLC) {
       plugins.push(candlestickPlugin(openIdx, highIdx, lowIdx, closeIdx));
     }
-    // Entry marker (always at x=0, first candle).
-    plugins.push(verticalMarker(0, "ENTRY", "#fbbf24"));
-    // Exit marker at the last observed candle when we know there was an exit.
-    if (exitPrice != null && k > 1) {
-      plugins.push(verticalMarker((k - 1) * intervalSec, "EXIT", "#f472b6"));
+
+    // TP line (green dashed) with label
+    if (tp != null) {
+      var tpLabel = "TP" + (tpPct != null ? " +" + Number(tpPct).toFixed(1) + "%" : "");
+      plugins.push(hLine(tp, "#22c55e", tpLabel, [6, 3]));
+    }
+    // SL line (red dashed) with label
+    if (sl != null) {
+      var slLabel = "SL" + (slPct != null ? " -" + Number(slPct).toFixed(1) + "%" : "");
+      plugins.push(hLine(sl, "#ef4444", slLabel, [6, 3]));
+    }
+    // Entry line (yellow, subtle dotted)
+    if (entry != null) {
+      plugins.push(hLine(entry, "rgba(251,191,36,0.4)", null, [2, 4]));
     }
 
-    const rect = container.getBoundingClientRect();
-    const opts = {
+    // Entry vertical line at first candle, badge at entry price level
+    if (entry != null) {
+      plugins.push(verticalLine(0, entry, "ENTRY $" + Number(entry).toFixed(4), "#fbbf24"));
+    }
+    // Exit vertical line at last candle, badge at exit price level
+    if (exitPrice != null && k > 1) {
+      plugins.push(verticalLine((k - 1) * intervalSec, exitPrice, "EXIT $" + Number(exitPrice).toFixed(4), "#f472b6"));
+    }
+
+    var rect = container.getBoundingClientRect();
+    var opts = {
       width: Math.max(320, Math.floor(rect.width || 800)),
-      height: 360,
+      height: 400,
+      padding: [30, 70, 0, 0],
       scales: { x: { time: false } },
       axes: [
         {
-          stroke: "#9ca3af",
-          grid: { stroke: "#1f2937" },
-          values: function (u, vals) { return vals.map(function (v) { return Math.round(v / 60) + "m"; }); },
+          stroke: "#6b7280",
+          grid: { stroke: "rgba(55,65,81,0.5)" },
+          values: function (_u, vals) {
+            return vals.map(function (v) {
+              var h = Math.floor(v / 3600);
+              var m = Math.round((v % 3600) / 60);
+              return h > 0 ? h + "h" + (m > 0 ? m + "m" : "") : m + "m";
+            });
+          },
         },
-        { stroke: "#9ca3af", grid: { stroke: "#1f2937" } },
+        {
+          stroke: "#6b7280",
+          grid: { stroke: "rgba(55,65,81,0.5)" },
+          size: 60,
+        },
       ],
-      legend: { show: true },
+      legend: { show: false },
+      cursor: { show: true },
       series: seriesCfg,
       plugins: plugins,
     };
@@ -225,20 +295,40 @@
     clearChildren(container);
     currentPlot = new uPlot(opts, seriesData, container);
 
-    const caption = document.createElement("div");
-    caption.className = "mt-2 text-xs text-gray-400";
-    const reason = data.exit_reason || "—";
-    const mode = hasOHLC ? "candles" : "lines (legacy)";
-    caption.textContent = "Entry: " + (entry != null ? entry : "—") +
-      "   Exit: " + (exitPrice != null ? exitPrice : "—") +
-      "   Reason: " + reason +
-      "   K observed: " + k +
-      "   Mode: " + mode;
+    // Summary line below chart using safe DOM methods
+    var reason = data.exit_reason_v2 || data.exit_reason || "\u2014";
+    var pnl = data.pnl_usd;
+    var pnlStr = pnl != null ? (pnl >= 0 ? "+" : "") + Number(pnl).toFixed(2) : "\u2014";
+    var pnlColor = pnl != null && pnl >= 0 ? "text-green-400" : "text-red-400";
+
+    var caption = document.createElement("div");
+    caption.className = "mt-3 flex flex-wrap gap-x-6 gap-y-1 text-xs text-gray-500";
+
+    var items = [
+      ["Entry ", "text-yellow-400", entry != null ? "$" + Number(entry).toFixed(4) : "\u2014"],
+      ["Exit ", "text-pink-400", exitPrice != null ? "$" + Number(exitPrice).toFixed(4) : "\u2014"],
+      ["PnL ", pnlColor, pnlStr],
+      ["Reason ", "text-white", reason],
+      ["", "text-gray-500", k + " candles (" + Math.round(k * intervalSec / 3600) + "h)"],
+    ];
+
+    items.forEach(function (item) {
+      var wrap = document.createElement("span");
+      if (item[0]) {
+        wrap.appendChild(document.createTextNode(item[0]));
+      }
+      var val = document.createElement("span");
+      val.className = item[1];
+      val.textContent = item[2];
+      wrap.appendChild(val);
+      caption.appendChild(wrap);
+    });
+
     container.appendChild(caption);
   }
 
   function init() {
-    const container = document.getElementById("chart");
+    var container = document.getElementById("chart");
     if (container) renderChart(container);
   }
 

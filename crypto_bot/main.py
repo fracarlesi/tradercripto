@@ -1114,6 +1114,7 @@ class ConservativeBot:
         opened_at = position_data.get("opened_at")
 
         hold_minutes = 0.0
+        opened_dt: datetime | None = None
         if opened_at:
             try:
                 opened_dt = datetime.fromisoformat(opened_at)
@@ -1123,17 +1124,21 @@ class ConservativeBot:
 
         # STAGE A: capture real high/low curves observed between entry and exit
         # so the dashboard can overlay them against the predicted TP/SL levels.
+        # Only include candles from opened_at onwards so the chart starts at entry.
         real_high: list | None = None
         real_low: list | None = None
         real_open: list | None = None
         real_close: list | None = None
         try:
             if self._exchange and opened_at:
-                # Fetch enough 15m candles to comfortably cover the K-candle window.
                 candles_raw = await self._exchange.get_candles(
-                    symbol, interval="15m", limit=80,
+                    symbol, interval="15m", limit=120,
                 )
                 if candles_raw:
+                    # Filter: keep only candles from entry onwards
+                    opened_ms = int(opened_dt.timestamp() * 1000) if opened_dt is not None else 0
+                    if opened_ms > 0:
+                        candles_raw = [c for c in candles_raw if c.get("t", 0) >= opened_ms]
                     real_high = [float(c.get("h", c.get("high", 0))) for c in candles_raw]
                     real_low = [float(c.get("l", c.get("low", 0))) for c in candles_raw]
                     real_open = [float(c.get("o", c.get("open", 0))) for c in candles_raw]
