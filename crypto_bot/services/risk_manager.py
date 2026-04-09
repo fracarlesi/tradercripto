@@ -360,7 +360,7 @@ class RiskManagerService(BaseService):
                     float(setup.entry_price),
                     risk_params.rejection_reason,
                 )
-                # Publish rejection for counterfactual logger
+                # Publish rejection for counterfactual logger and trade logger cleanup
                 await self.publish(Topic.ORDERS, {
                     "event": "setup_rejected",
                     "symbol": setup.symbol,
@@ -368,6 +368,7 @@ class RiskManagerService(BaseService):
                     "entry_price": float(setup.entry_price),
                     "reason": risk_params.rejection_reason,
                     "correlation_id": getattr(setup, "correlation_id", None),
+                    "trade_id": getattr(setup, "trade_id", None),
                 })
                 return
 
@@ -663,18 +664,13 @@ class RiskManagerService(BaseService):
             position_size = notional_value / setup.entry_price
             exposure_pct = (notional_value / equity) * 100
 
-        # Final guard: reject if notional is below Hyperliquid minimum ($10).
-        # This can happen when equity is small and max_position_pct caps the size.
+        # Floor at exchange minimum to avoid rejections on small accounts
         if notional_value < HYPERLIQUID_MIN_ORDER_NOTIONAL:
-            self._logger.warning(
-                "Notional $%.2f below exchange minimum ($%s) — skipping %s",
-                float(notional_value),
-                HYPERLIQUID_MIN_ORDER_NOTIONAL,
-                setup.symbol,
-            )
-            return _reject(
-                f"Notional ${float(notional_value):.2f} below exchange minimum "
-                f"(${HYPERLIQUID_MIN_ORDER_NOTIONAL})"
+            notional_value = HYPERLIQUID_MIN_ORDER_NOTIONAL
+            position_size = notional_value / setup.entry_price
+            self._logger.info(
+                "Notional floored to exchange minimum ($%s) for %s",
+                HYPERLIQUID_MIN_ORDER_NOTIONAL, setup.symbol,
             )
 
         return RiskParams(

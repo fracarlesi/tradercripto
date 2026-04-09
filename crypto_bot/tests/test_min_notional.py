@@ -79,9 +79,9 @@ class TestMinNotionalCheck:
         """Sanity: the constant matches Hyperliquid's documented minimum."""
         assert HYPERLIQUID_MIN_ORDER_NOTIONAL == Decimal("10")
 
-    def test_reject_when_notional_below_minimum(self):
-        """With tiny equity, position cap can push notional below $10 -> rejected."""
-        # Equity $30, max_position_pct 25% -> cap = $7.50 < $10
+    def test_floor_when_notional_below_minimum(self):
+        """With tiny equity, position cap can push notional below $10 -> floored to $10."""
+        # Equity $30, max_position_pct 25% -> cap = $7.50 < $10 -> floored to $10
         svc = _make_service(
             equity=Decimal("30"),
             max_position_pct=25.0,
@@ -89,9 +89,8 @@ class TestMinNotionalCheck:
         setup = _make_setup()
         params = svc._calculate_risk_params(setup)
 
-        assert params.size_approved is False
-        assert "below exchange minimum" in (params.rejection_reason or "")
-        assert params.notional_value == Decimal("0")
+        assert params.size_approved is True
+        assert params.notional_value == HYPERLIQUID_MIN_ORDER_NOTIONAL
 
     def test_approve_when_notional_at_minimum(self):
         """Notional exactly at $10 is allowed (exchange accepts >= $10)."""
@@ -115,20 +114,22 @@ class TestMinNotionalCheck:
         assert params.size_approved is True
         assert params.notional_value >= HYPERLIQUID_MIN_ORDER_NOTIONAL
 
-    def test_reject_does_not_publish_intent(self):
-        """Rejected setup should have zero position_size (no intent created)."""
+    def test_floor_preserves_position_size(self):
+        """Floored notional should have correct position_size (notional / entry_price)."""
         svc = _make_service(
             equity=Decimal("20"),
-            max_position_pct=20.0,  # cap = $4 < $10
+            max_position_pct=20.0,  # cap = $4 < $10 -> floored to $10
         )
         setup = _make_setup()
         params = svc._calculate_risk_params(setup)
 
-        assert params.size_approved is False
-        assert params.position_size == Decimal("0")
+        assert params.size_approved is True
+        assert params.notional_value == HYPERLIQUID_MIN_ORDER_NOTIONAL
+        expected_size = HYPERLIQUID_MIN_ORDER_NOTIONAL / setup.entry_price
+        assert params.position_size == expected_size
 
-    def test_log_message_includes_notional(self, caplog):
-        """Warning log should mention the actual notional value."""
+    def test_log_message_when_floored(self, caplog):
+        """Info log should mention flooring to exchange minimum."""
         import logging
 
         svc = _make_service(
@@ -137,11 +138,11 @@ class TestMinNotionalCheck:
         )
         setup = _make_setup()
 
-        with caplog.at_level(logging.WARNING, logger="crypto_bot.services.risk_manager"):
+        with caplog.at_level(logging.INFO, logger="hlquantbot.risk_manager"):
             svc._calculate_risk_params(setup)
 
-        notional_warnings = [
+        floor_msgs = [
             r for r in caplog.records
-            if "below exchange minimum" in r.getMessage()
+            if "floored to exchange minimum" in r.getMessage()
         ]
-        assert len(notional_warnings) >= 1
+        assert len(floor_msgs) >= 1

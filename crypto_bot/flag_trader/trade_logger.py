@@ -149,6 +149,40 @@ class FlagTradeLogger:
 
         logger.debug("Decision logged: %s %s (confidence=%.4f)", record.symbol, record.action, record.confidence)
 
+    def close_rejected(self, symbol: str, reason: str, *, trade_id: Optional[str] = None) -> None:
+        """Remove a pending decision that was rejected before reaching the exchange.
+
+        This prevents the pending queue from filling up with decisions that will
+        never receive an outcome (risk rejection, spread too wide, etc.).
+        """
+        record: Optional[TradeRecord] = None
+
+        # Primary: trade_id lookup
+        if trade_id:
+            for sym, bucket in list(self._pending_trades.items()):
+                for idx, pending in enumerate(bucket):
+                    if pending.trade_id == trade_id:
+                        record = bucket.pop(idx)
+                        if not bucket:
+                            self._pending_trades.pop(sym, None)
+                        break
+                if record is not None:
+                    break
+
+        # Fallback: FIFO by symbol
+        if record is None:
+            bucket = self._pending_trades.get(symbol)
+            if bucket:
+                record = bucket.pop(0)
+                if not bucket:
+                    self._pending_trades.pop(symbol, None)
+
+        if record is not None:
+            logger.debug(
+                "Closed rejected decision for %s (reason=%s, trade_id=%s)",
+                symbol, reason, record.trade_id,
+            )
+
     def log_outcome(
         self,
         symbol: str,

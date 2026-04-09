@@ -2727,6 +2727,13 @@ class ExecutionEngineService(BaseService):
                     # Recover real open time from fills API, or fall back to
                     # 1 hour ago if unavailable.
                     synced_opened_at = await self._get_position_open_time(symbol)
+
+                    # Derive expiry_at for synced positions so they respect K-candle timeout
+                    forecast_cfg = getattr(self._bot_config, "forecast", None)
+                    k_candles_cfg = int(getattr(forecast_cfg, "k_candles", 34) or 34)
+                    candle_period_min = int(getattr(forecast_cfg, "candle_period_minutes", 15) or 15)
+                    expiry_at = synced_opened_at + timedelta(minutes=k_candles_cfg * candle_period_min)
+
                     new_pos = ExecutionPosition(
                         symbol=symbol,
                         side=pos.get("side", "long"),
@@ -2737,6 +2744,7 @@ class ExecutionEngineService(BaseService):
                         leverage=pos.get("leverage", 1),
                         status=PositionStatus.OPEN,
                         opened_at=synced_opened_at,
+                        expiry_at=expiry_at,
                         entry_regime="trend",  # We only open in TREND
                         highest_price=entry_px,
                         lowest_price=entry_px,
@@ -2748,6 +2756,10 @@ class ExecutionEngineService(BaseService):
                         symbol,
                         abs(size),
                         synced_opened_at.isoformat(),
+                    )
+                    self._logger.info(
+                        "Synced position %s: derived expiry_at=%s from opened_at=%s + %d candles",
+                        symbol, expiry_at.isoformat(), synced_opened_at.isoformat(), k_candles_cfg,
                     )
 
                     # Check and set SL/TP for newly discovered positions
@@ -2920,6 +2932,13 @@ class ExecutionEngineService(BaseService):
             if symbol in self._closing_positions or symbol in self._settling_symbols:
                 continue
             if position.expiry_at is None:
+                self._logger.warning(
+                    "STALE POSITION | %s has no expiry_at — cannot enforce K-candle timeout. "
+                    "Position opened_at=%s, age=%.1fh",
+                    symbol,
+                    position.opened_at.isoformat() if position.opened_at else "unknown",
+                    (now - _ensure_aware(position.opened_at)).total_seconds() / 3600 if position.opened_at else -1,
+                )
                 continue
             expiry = _ensure_aware(position.expiry_at)
             if now < expiry:
@@ -2938,6 +2957,22 @@ class ExecutionEngineService(BaseService):
                 self._logger.error("Failed to close %s on expiry: %s", symbol, e)
                 self._closing_positions.discard(symbol)
                 position.status = PositionStatus.OPEN
+
+        # Health check: flag positions open longer than 2x max expiry window
+        k_candles_cfg = int(getattr(forecast_cfg, "k_candles", 34) or 34)
+        candle_period_min = int(getattr(forecast_cfg, "candle_period_minutes", 15) or 15)
+        max_age_minutes = k_candles_cfg * candle_period_min * 2
+        for symbol, position in list(self.active_positions.items()):
+            if position.status != PositionStatus.OPEN:
+                continue
+            if not position.opened_at:
+                continue
+            age_minutes = (now - _ensure_aware(position.opened_at)).total_seconds() / 60
+            if age_minutes > max_age_minutes:
+                self._logger.error(
+                    "STALE POSITION ALERT | %s open for %.1fh (max expected: %.1fh) — investigate!",
+                    symbol, age_minutes / 60, max_age_minutes / 60,
+                )
 
     @staticmethod
     async def _infer_exit_reason_from_fills(

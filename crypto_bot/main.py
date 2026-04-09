@@ -377,16 +377,6 @@ class ConservativeBot:
         self._last_position_eval: float = 0.0
         self._position_eval_interval: float = 60.0  # Evaluate open positions every 60s
 
-        # Anti-churn: daily trade counter (resets at midnight UTC)
-        self._daily_trade_count: int = 0
-        self._daily_trade_date: Optional[str] = None  # ISO date string e.g. "2026-03-30"
-        # Persisted to disk so restarts within the same UTC day don't bypass the limit
-        from pathlib import Path as _Path
-        import os as _os
-        self._daily_trade_count_file = _Path(
-            _os.environ.get("HLQUANTBOT_DATA_DIR", str(_Path.home() / ".hlquantbot"))
-        ) / "main_daily_trade_count.json"
-        self._load_daily_trade_count()
 
     # =========================================================================
     # Properties
@@ -427,50 +417,6 @@ class ConservativeBot:
             self._config.max_leverage,
         )
         return self._config
-
-    def _load_daily_trade_count(self) -> None:
-        """Restore daily trade count from disk if still in today's UTC window.
-
-        Opt-in via ``HLQUANTBOT_PERSIST_TRADE_COUNT=1``.
-        """
-        import os as _os
-        if _os.environ.get("HLQUANTBOT_PERSIST_TRADE_COUNT", "").strip() not in ("1", "true", "yes"):
-            return
-        try:
-            if not self._daily_trade_count_file.exists():
-                return
-            import json as _json
-            data = _json.loads(self._daily_trade_count_file.read_text())
-            saved_date = data.get("date")
-            saved_count = int(data.get("count", 0))
-            if not saved_date:
-                return
-            today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-            if saved_date == today_utc:
-                self._daily_trade_count = saved_count
-                self._daily_trade_date = saved_date
-                logger.info(
-                    "Restored main daily trade count: %d for %s",
-                    saved_count, saved_date,
-                )
-            else:
-                self._daily_trade_count_file.unlink(missing_ok=True)
-        except Exception as e:
-            logger.warning("Failed to load main daily trade count: %s", e)
-
-    def _save_daily_trade_count(self) -> None:
-        """Persist daily trade count to disk so restarts respect the limit."""
-        import os as _os
-        if _os.environ.get("HLQUANTBOT_PERSIST_TRADE_COUNT", "").strip() not in ("1", "true", "yes"):
-            return
-        try:
-            import json as _json
-            self._daily_trade_count_file.parent.mkdir(parents=True, exist_ok=True)
-            self._daily_trade_count_file.write_text(
-                _json.dumps({"date": self._daily_trade_date, "count": self._daily_trade_count})
-            )
-        except Exception as e:
-            logger.warning("Failed to save main daily trade count: %s", e)
 
     def _init_flag_trader(self) -> FlagTraderAgent:
         """Initialize FLAG-Trader model and agent."""
@@ -991,57 +937,12 @@ class ConservativeBot:
             len(decisions),
         )
 
-        # --- Anti-churn: daily trade limit ---
-        max_trades_per_day = self.config.flag_trader_config.get("max_trades_per_day", 5)
-        today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        if self._daily_trade_date != today_utc:
-            self._daily_trade_date = today_utc
-            self._daily_trade_count = 0
-            self._save_daily_trade_count()
-            logger.info("DAILY TRADE COUNTER | reset for %s", today_utc)
-
-        if self._daily_trade_count >= max_trades_per_day:
-            logger.info(
-                "DAILY TRADE LIMIT | %d/%d trades used today — skipping new entries",
-                self._daily_trade_count, max_trades_per_day,
-            )
-            # Counterfactual: log every actionable decision rejected by daily limit
-            cf_logger = self._services.get("counterfactual_logger")
-            if cf_logger:
-                for d in decisions:
-                    state = states.get(d.symbol)
-                    price = float(state.close) if state is not None else 0.0
-                    if price <= 0:
-                        continue
-                    direction = "long" if d.action == 2 else "short" if d.action == 0 else None
-                    if direction is None:
-                        continue
-                    try:
-                        cf_logger.log_rejection(
-                            symbol=d.symbol,
-                            direction=direction,
-                            entry_price=price,
-                            reason="main:daily_limit",
-                            ml_probability=float(min(abs(d.confidence), 1.0)),
-                        )
-                    except Exception as e:
-                        logger.debug("cf log_rejection failed: %s", e)
-            return
-
         # --- Execute decisions (no position limit, exposure checked by RiskManager) ---
         executed = 0
         for decision in decisions:
-            if self._daily_trade_count >= max_trades_per_day:
-                logger.info(
-                    "DAILY TRADE LIMIT | %d/%d reached mid-batch — stopping",
-                    self._daily_trade_count, max_trades_per_day,
-                )
-                break
             success = await self._execute_flag_decision(decision)
             if success:
                 executed += 1
-                self._daily_trade_count += 1
-                self._save_daily_trade_count()
                 self._flag_agent.record_action(decision.action_name)
 
         logger.info(
@@ -1076,6 +977,8 @@ class ConservativeBot:
             regime = state.regime
         else:
             logger.warning("No MarketState for %s, skipping", decision.symbol)
+            if self._trade_logger:
+                self._trade_logger.close_rejected(decision.symbol, "no_market_state", trade_id=decision.trade_id)
             return False
 
         # Use model-predicted TP/SL instead of config values
@@ -1156,6 +1059,8 @@ class ConservativeBot:
                         )
                     except Exception as e:
                         logger.debug("cf log_rejection failed: %s", e)
+                if self._trade_logger:
+                    self._trade_logger.close_rejected(decision.symbol, "spread", trade_id=decision.trade_id)
                 return False
 
         # --- Tick size check ---
@@ -1183,6 +1088,8 @@ class ConservativeBot:
                         )
                     except Exception as e:
                         logger.debug("cf log_rejection failed: %s", e)
+                if self._trade_logger:
+                    self._trade_logger.close_rejected(decision.symbol, "tick_size", trade_id=decision.trade_id)
                 return False
 
         # Publish setup for risk manager
@@ -1252,6 +1159,18 @@ class ConservativeBot:
             )
         except Exception:
             logger.exception("trade_logger.log_outcome failed for %s", symbol)
+
+    async def _on_order_for_trade_logger(self, message: Any) -> None:
+        """Close pending trade-logger decisions when risk manager rejects a setup."""
+        if not self._trade_logger:
+            return
+        payload = message.payload
+        if payload.get("event") != "setup_rejected":
+            return
+        symbol = payload.get("symbol", "")
+        reason = payload.get("reason", "risk_rejected")
+        trade_id = payload.get("trade_id")
+        self._trade_logger.close_rejected(symbol, f"risk:{reason}", trade_id=trade_id)
 
     # =========================================================================
     # Health Monitoring
@@ -1413,6 +1332,7 @@ class ConservativeBot:
             # Subscribe trade logger to fill events for outcome tracking
             if self._bus and self._trade_logger:
                 await self._bus.subscribe(Topic.FILLS, self._on_fill_for_trade_logger)
+                await self._bus.subscribe(Topic.ORDERS, self._on_order_for_trade_logger)
 
             # SAFETY: Check for config mismatches with existing positions
             await self._startup_safety_check()
