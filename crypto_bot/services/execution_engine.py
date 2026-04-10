@@ -165,6 +165,8 @@ class Order:
     fee: float = 0.0
     original_signal: Optional[Dict[str, Any]] = None  # Stored for deferred fill handling
     entry_mode: str = "taker"  # "taker" or "maker" (post-only)
+    model_tp_pct: Optional[float] = None   # FLAG-Trader TP head output — preserved for deferred fills
+    model_sl_pct: Optional[float] = None   # FLAG-Trader SL head output — preserved for deferred fills
     reprice_count: int = 0
     last_reprice_at: Optional[datetime] = None
 
@@ -871,6 +873,8 @@ class ExecutionEngineService(BaseService):
                         )
                     else:
                         order_result.original_signal = signal
+                        order_result.model_tp_pct = signal.get("model_tp_pct")
+                        order_result.model_sl_pct = signal.get("model_sl_pct")
                         self.pending_orders[order_result.order_id] = order_result
 
         except Exception as e:
@@ -2559,6 +2563,8 @@ class ExecutionEngineService(BaseService):
                         "entry_price": order.avg_price,
                         "size": order.filled_size,
                         "strategy": order.strategy,
+                        "model_tp_pct": order.model_tp_pct,
+                        "model_sl_pct": order.model_sl_pct,
                     }
                     await self._handle_order_filled(signal, order)
                     self.pending_orders.pop(order_id, None)

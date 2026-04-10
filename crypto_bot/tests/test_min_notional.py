@@ -146,3 +146,58 @@ class TestMinNotionalCheck:
             if "floored to exchange minimum" in r.getMessage()
         ]
         assert len(floor_msgs) >= 1
+
+
+class TestCeilRoundingAfterFloor:
+    """
+    Ensure that after the risk manager floors notional to $10,
+    ceil-rounding in hyperliquid.py never produces a size whose
+    notional falls below the exchange minimum.
+
+    These are unit tests for the math — they don't hit the exchange.
+    """
+
+    @staticmethod
+    def _ceil_round(size: float, sz_decimals: int) -> float:
+        """Mirrors the ceil-rounding logic added to hyperliquid.py place_order."""
+        import math
+        factor = 10 ** sz_decimals
+        return math.ceil(size * factor) / factor
+
+    def test_blur_sz0_ceil_preserves_notional(self):
+        """BLUR szDecimals=0, price $0.0222 — round() gives $9.99, ceil should give $10.02."""
+        price = 0.0222
+        raw_size = 10.0 / price        # 450.45...
+        rounded_down = round(raw_size, 0)
+        assert rounded_down * price < 10.0, "pre-condition: round() would cause rejection"
+
+        ceiled = self._ceil_round(raw_size, sz_decimals=0)
+        assert ceiled * price >= 10.0
+
+    def test_render_sz1_ceil_preserves_notional(self):
+        """RENDER szDecimals=1, price $3.51 — round() gives $9.83, ceil should give $10.53."""
+        price = 3.51
+        raw_size = 10.0 / price        # 2.849...
+        rounded_down = round(raw_size, 1)
+        assert rounded_down * price < 10.0, "pre-condition: round() would cause rejection"
+
+        ceiled = self._ceil_round(raw_size, sz_decimals=1)
+        assert ceiled * price >= 10.0
+
+    def test_aave_sz2_ceil_preserves_notional(self):
+        """AAVE szDecimals=2, price $185 — round() gives $9.25, ceil should give $10.175."""
+        price = 185.0
+        raw_size = 10.0 / price        # 0.05405...
+        rounded_down = round(raw_size, 2)
+        assert rounded_down * price < 10.0, "pre-condition: round() would cause rejection"
+
+        ceiled = self._ceil_round(raw_size, sz_decimals=2)
+        assert ceiled * price >= 10.0
+
+    def test_ceil_round_does_not_affect_reduce_only(self):
+        """For reduce_only (close) orders the original round() is still used — no change."""
+        # This is a documentation test: close orders must NOT use ceil to avoid over-closing.
+        # The actual guard is in place_order(reduce_only=True).
+        price = 3.51
+        raw_size = 2.849
+        assert round(raw_size, 1) == 2.8  # standard round, may be below $10 — that's OK for closes

@@ -35,6 +35,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import logging
+import math
 import os
 import time
 from dataclasses import dataclass, field
@@ -803,7 +804,13 @@ class HyperliquidClient:
 
         # Get size decimals
         sz_decimals = self._symbol_info[symbol].get("szDecimals", 4)
-        size = round(size, sz_decimals)
+        # Entry orders: ceil-round to avoid rounding below exchange minimum notional ($10).
+        # Close orders (reduce_only): standard round to avoid over-closing the position.
+        if reduce_only:
+            size = round(size, sz_decimals)
+        else:
+            factor = 10 ** sz_decimals
+            size = math.ceil(size * factor) / factor
 
         # Round price to valid precision (Hyperliquid uses 5 significant figures)
         if price is not None:
