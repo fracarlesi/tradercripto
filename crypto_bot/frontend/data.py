@@ -108,15 +108,16 @@ class TradeStore:
     def get_sidecar(self, trade_id: str) -> Optional[dict[str, Any]]:
         if not trade_id:
             return None
-        path = self.forecasts_dir / f"{trade_id}.json"
-        if not path.exists():
-            return None
-        try:
-            with open(path, "r") as fh:
-                return json.load(fh)
-        except (OSError, json.JSONDecodeError):
-            logger.exception("failed to read sidecar %s", path)
-            return None
+        # Closed-trade sidecars live in forecasts/, open (live) in forecasts/open/
+        for subdir in ("", "open"):
+            path = self.forecasts_dir / subdir / f"{trade_id}.json" if subdir else self.forecasts_dir / f"{trade_id}.json"
+            if path.exists():
+                try:
+                    with open(path, "r") as fh:
+                        return json.load(fh)
+                except (OSError, json.JSONDecodeError):
+                    logger.exception("failed to read sidecar %s", path)
+        return None
 
     def get_summary(self, lookback: int = 100) -> dict[str, Any]:
         records = self._load_all()[:lookback]
