@@ -9,6 +9,7 @@ from __future__ import annotations
 import gzip
 import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,74 @@ from crypto_bot.flag_trader.open_sidecar import list_open_sidecars
 from crypto_bot.frontend.data import TradeStore
 
 logger = logging.getLogger(__name__)
+
+_HL_INTERVAL_MAP: dict[int, str] = {
+    60: "1m", 300: "5m", 900: "15m", 3600: "1h", 14400: "4h", 86400: "1d"
+}
+_HL_API_URL = "https://api.hyperliquid.xyz/info"
+_CONTEXT_PRE_BARS = 20
+_CONTEXT_POST_BARS = 10
+
+
+def _attach_context_candles(payload: dict[str, Any], trade: dict[str, Any]) -> None:
+    """Fetch pre/post context candles from Hyperliquid and add to payload.
+
+    Modifies payload in-place. Silently skips on any error (best-effort).
+    """
+    symbol: str | None = trade.get("symbol")
+    timestamp_str: str | None = trade.get("timestamp")
+    interval_sec: int = int(trade.get("candle_interval_sec") or 900)
+    hold_min: float | None = trade.get("hold_duration_minutes")
+
+    if not symbol or not timestamp_str:
+        return
+
+    interval_str = _HL_INTERVAL_MAP.get(interval_sec, "15m")
+    interval_ms = interval_sec * 1000
+
+    try:
+        entry_ms = int(
+            datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+            .astimezone(timezone.utc)
+            .timestamp() * 1000
+        )
+    except (ValueError, OSError):
+        return
+
+    def _fetch(start_ms: int, end_ms: int) -> list[dict] | None:
+        import json as _json
+        import urllib.request
+        body = _json.dumps({"type": "candleSnapshot", "req": {
+            "coin": symbol, "interval": interval_str,
+            "startTime": start_ms, "endTime": end_ms,
+        }}).encode()
+        try:
+            req = urllib.request.Request(
+                _HL_API_URL, data=body,
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                candles = _json.loads(resp.read())
+                return [
+                    {"t": c["t"], "o": float(c["o"]), "h": float(c["h"]),
+                     "l": float(c["l"]), "c": float(c["c"])}
+                    for c in candles
+                ]
+        except Exception:
+            pass
+        return None
+
+    # Pre-entry candles
+    pre = _fetch(entry_ms - _CONTEXT_PRE_BARS * interval_ms, entry_ms)
+    if pre:
+        payload["pre_candles"] = pre
+
+    # Post-exit candles (only for closed trades)
+    if hold_min is not None:
+        exit_ms = entry_ms + int(hold_min * 60 * 1000)
+        post = _fetch(exit_ms, exit_ms + _CONTEXT_POST_BARS * interval_ms)
+        if post:
+            payload["post_candles"] = post
 
 
 def create_app(store: TradeStore | None = None) -> Flask:
@@ -177,12 +246,18 @@ def create_app(store: TradeStore | None = None) -> Flask:
                 "real_close_curve": trade.get("real_close_curve"),
                 "real_observed_k": trade.get("real_observed_k"),
                 "timestamp": trade.get("timestamp"),
+                "hold_duration_minutes": trade.get("hold_duration_minutes"),
+                "pnl_usd": trade.get("pnl_usd"),
             })
         if sidecar is not None:
             payload["sidecar"] = sidecar
             payload["has_curve"] = True
         elif trade and trade.get("real_high_curve"):
             payload["has_curve"] = True
+
+        # Best-effort: fetch pre/post context candles from Hyperliquid public API.
+        if trade is not None:
+            _attach_context_candles(payload, trade)
 
         body = json.dumps(payload, default=str).encode("utf-8")
         accept_enc = request.headers.get("Accept-Encoding", "")

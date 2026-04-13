@@ -60,6 +60,7 @@ class TradeRecord:
     real_close_curve: Optional[list] = None
     real_observed_k: Optional[int] = None
     exit_reason_v2: Optional[str] = None  # "tp" | "sl" | "expiry" | "manual"
+    strategy: str = "FLAG-Trader"
 
 
 def _map_exit_reason_to_v2(legacy: Optional[str]) -> Optional[str]:

@@ -16,8 +16,8 @@
     <thead class="bg-gray-800 text-gray-300 text-xs uppercase">
       <tr>
         <th class="px-3 py-2 text-left">Time</th>
-        <th class="px-3 py-2 text-left">Symbol</th>
         <th class="px-3 py-2 text-left">Side</th>
+        <th class="px-3 py-2 text-left">Symbol</th>
         <th class="px-3 py-2 text-right">Entry</th>
         <th class="px-3 py-2 text-right">Exit</th>
         <th class="px-3 py-2 text-right">PnL $</th>
@@ -32,8 +32,15 @@
       {% for r in rows %}
         <tr class="hover:bg-gray-800/50">
           <td class="px-3 py-2 text-gray-400 whitespace-nowrap">{{ (r.timestamp or '')[:19] }}</td>
+          {% set side = (r.action or '')|upper %}
+          {% if side in ('BUY', 'EXIT_EVAL_BUY') %}
+            <td class="px-3 py-2"><span class="px-2 py-0.5 rounded text-xs bg-green-900 text-green-300">LONG</span></td>
+          {% elif side in ('SELL', 'EXIT_EVAL_SELL') %}
+            <td class="px-3 py-2"><span class="px-2 py-0.5 rounded text-xs bg-red-900 text-red-300">SHORT</span></td>
+          {% else %}
+            <td class="px-3 py-2 text-gray-400">{{ side }}</td>
+          {% endif %}
           <td class="px-3 py-2 font-medium">{{ r.symbol }}</td>
-          <td class="px-3 py-2">{{ r.action }}</td>
           <td class="px-3 py-2 text-right">{{ '%.4f' % (r.entry_price or 0) }}</td>
           <td class="px-3 py-2 text-right">{{ '%.4f' % (r.exit_price or 0) }}</td>
           <td class="px-3 py-2 text-right {{ 'text-green-400' if (r.pnl_usd or 0) >= 0 else 'text-red-400' }}">
