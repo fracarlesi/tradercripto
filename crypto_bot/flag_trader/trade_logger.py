@@ -184,6 +184,75 @@ class FlagTradeLogger:
                 symbol, reason, record.trade_id,
             )
 
+    def _recover_decision_from_disk(
+        self, trade_id: Optional[str], symbol: str,
+    ) -> Optional[TradeRecord]:
+        """Search decisions JSONL files on disk for a matching trade_id.
+
+        After a bot restart _pending_trades is empty, but the original
+        decision was already persisted by log_decision().  Recovering it
+        preserves the real confidence, tp/sl predictions, and market context
+        instead of writing a synthetic confidence=0.0 record.
+        """
+        if not trade_id:
+            return None
+
+        # Search current + previous month files (covers month-boundary restarts).
+        now = datetime.now(timezone.utc)
+        months = [now.strftime("%Y_%m")]
+        if now.day <= 2:
+            prev = now.replace(day=1) if now.month > 1 else now.replace(year=now.year - 1, month=12, day=1)
+            months.append(prev.strftime("%Y_%m"))
+
+        for month_tag in months:
+            decisions_file = self.log_dir / f"decisions_{month_tag}.jsonl"
+            if not decisions_file.exists():
+                continue
+            try:
+                with open(decisions_file, "r") as fh:
+                    for line in reversed(fh.readlines()):
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            row = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if row.get("trade_id") == trade_id:
+                            logger.info(
+                                "log_outcome: recovered decision for %s "
+                                "(trade_id=%s) from %s",
+                                symbol, trade_id, decisions_file.name,
+                            )
+                            return TradeRecord(
+                                timestamp=row.get("timestamp", ""),
+                                symbol=row.get("symbol", symbol),
+                                action=row.get("action", "BUY"),
+                                action_id=row.get("action_id", 2),
+                                confidence=row.get("confidence", 0.0),
+                                log_prob=row.get("log_prob", 0.0),
+                                candles_summary=row.get("candles_summary", {}),
+                                portfolio=row.get("portfolio", {}),
+                                market_state_summary=row.get("market_state_summary"),
+                                prompt_summary=row.get("prompt_summary", ""),
+                                trade_id=trade_id,
+                                predicted_tp_pct=row.get("predicted_tp_pct"),
+                                predicted_sl_pct=row.get("predicted_sl_pct"),
+                                predicted_tp_price=row.get("predicted_tp_price"),
+                                predicted_sl_price=row.get("predicted_sl_price"),
+                                expiry_at=row.get("expiry_at"),
+                                k_candles=row.get("k_candles"),
+                                candle_interval_sec=row.get("candle_interval_sec"),
+                            )
+            except OSError:
+                logger.exception("Failed to read %s for decision recovery", decisions_file)
+
+        logger.debug(
+            "log_outcome: trade_id=%s not found in decisions JSONL for %s",
+            trade_id, symbol,
+        )
+        return None
+
     def log_outcome(
         self,
         symbol: str,
@@ -241,7 +310,13 @@ class FlagTradeLogger:
                 if not bucket:
                     self._pending_trades.pop(symbol, None)
         if record is None:
-            # Fallback: synthesise a minimal record so the outcome is still logged.
+            # Try to recover the original decision from decisions JSONL on disk.
+            # This handles the common case where the bot restarted and
+            # _pending_trades (in-memory) was lost.
+            record = self._recover_decision_from_disk(trade_id, symbol)
+
+        if record is None:
+            # Last resort: synthesise a minimal record so the outcome is still logged.
             action = "SELL" if (side and side.lower() == "short") else "BUY"
             record = TradeRecord(
                 timestamp=datetime.now(timezone.utc).isoformat(),

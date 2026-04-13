@@ -101,8 +101,8 @@ class AuditConfig:
             ),
             heartbeat=os.environ.get("AUDIT_HEARTBEAT", "1") == "1",
             window_minutes=int(os.environ.get("AUDIT_WINDOW_MINUTES", "35")),
-            sonnet_model=os.environ.get("AUDIT_SONNET_MODEL", "claude-sonnet-4-5"),
-            opus_model=os.environ.get("AUDIT_OPUS_MODEL", "claude-opus-4-1"),
+            sonnet_model=os.environ.get("AUDIT_SONNET_MODEL", "claude-sonnet-4-6"),
+            opus_model=os.environ.get("AUDIT_OPUS_MODEL", "claude-opus-4-6"),
             cost_log_path=Path(
                 os.environ.get("AUDIT_COST_LOG", "/var/lib/hlquantbot/audit_cost.jsonl")
             ),
