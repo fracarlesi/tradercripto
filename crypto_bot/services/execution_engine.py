@@ -47,7 +47,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 from .base import BaseService
 from .message_bus import Message, MessageBus, Topic
 from ..api.exceptions import OrderRejectedError
-from ..flag_trader.open_sidecar import delete_open_sidecar, write_open_sidecar
+from ..flag_trader.open_sidecar import delete_open_sidecar, list_open_sidecars, write_open_sidecar
 
 # For type checking we want the real classes; at runtime fall back to Any
 # so the module still imports if the optional deps are missing.
@@ -487,6 +487,11 @@ class ExecutionEngineService(BaseService):
 
         # Sync existing positions from exchange
         await self._sync_positions_from_exchange()
+
+        # Remove sidecar files left behind by positions that closed while the
+        # bot was down.  Must run after the first sync so active_positions is
+        # populated.
+        await self._cleanup_orphaned_sidecars()
 
         # SAFETY (Bug B): cancel stray reduce-only trigger orders that do NOT
         # correspond to any tracked position.  These are residue from previous
@@ -2756,6 +2761,23 @@ class ExecutionEngineService(BaseService):
                         lowest_price=entry_px,
                     )
                     self.active_positions[symbol] = new_pos
+
+                    # Fix: recover trade_id from open sidecar so that
+                    # _handle_position_closed can delete it on close.
+                    try:
+                        for sc in list_open_sidecars():
+                            if sc.get("symbol") == symbol:
+                                new_pos.trade_id = sc["trade_id"]
+                                self._logger.info(
+                                    "Recovered trade_id=%s for synced position %s from open sidecar",
+                                    new_pos.trade_id, symbol,
+                                )
+                                break
+                    except Exception:
+                        self._logger.exception(
+                            "Failed to recover trade_id from sidecar for %s", symbol,
+                        )
+
                     self._logger.info(
                         "Synced existing position: %s %s %.4f (opened_at set to %s — estimated, pre-restart)",
                         new_pos.side,
@@ -2790,7 +2812,28 @@ class ExecutionEngineService(BaseService):
 
         except Exception as e:
             self._logger.error("Failed to sync positions: %s", e)
-    
+
+    async def _cleanup_orphaned_sidecars(self) -> None:
+        """Remove open-trade sidecars whose symbol has no matching exchange position.
+
+        Called once at startup after the first ``_sync_positions_from_exchange``
+        so that sidecars left behind by a previous crash/restart are cleaned up.
+        """
+        try:
+            sidecars = list_open_sidecars()
+            open_symbols = set(self.active_positions.keys())
+            for sc in sidecars:
+                sc_symbol = sc.get("symbol")
+                sc_trade_id = sc.get("trade_id")
+                if sc_symbol not in open_symbols and sc_trade_id is not None:
+                    deleted = delete_open_sidecar(str(sc_trade_id))
+                    self._logger.warning(
+                        "Cleaned up orphaned sidecar: trade_id=%s symbol=%s (deleted=%s)",
+                        sc_trade_id, sc_symbol, deleted,
+                    )
+        except Exception:
+            self._logger.exception("Failed during orphaned sidecar cleanup")
+
     async def _get_position_open_time(self, symbol: str) -> datetime:
         """Recover the real open time for a position from the fills API.
 
