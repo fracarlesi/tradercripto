@@ -177,6 +177,21 @@ def create_app(store: TradeStore | None = None) -> Flask:
     def trade_detail(trade_id: str) -> str:
         trade = _store().get_trade(trade_id)
         sidecar = _store().get_sidecar(trade_id)
+        # Live trade: no outcome yet, build trade-like dict from sidecar
+        if trade is None and sidecar is not None:
+            trade = {
+                "trade_id": trade_id,
+                "symbol": sidecar.get("symbol"),
+                "action": (sidecar.get("side") or "").upper(),
+                "entry_price": sidecar.get("entry_price"),
+                "predicted_tp_price": sidecar.get("predicted_tp_price"),
+                "predicted_sl_price": sidecar.get("predicted_sl_price"),
+                "predicted_tp_pct": sidecar.get("predicted_tp_pct"),
+                "predicted_sl_pct": sidecar.get("predicted_sl_pct"),
+                "timestamp": sidecar.get("opened_at"),
+                "k_candles": sidecar.get("k_candles"),
+                "is_live": True,
+            }
         return render_template(
             "trade_detail.html",
             trade=trade,
@@ -272,6 +287,36 @@ def create_app(store: TradeStore | None = None) -> Flask:
     def api_trade_curves(trade_id: str) -> Response:
         trade = _store().get_trade(trade_id)
         sidecar = _store().get_sidecar(trade_id)
+
+        # Live trade: build a trade-like dict from the sidecar so the
+        # chart pipeline can fetch candles from entry → now.
+        if trade is None and sidecar is not None:
+            opened = sidecar.get("opened_at")
+            now_utc = datetime.now(timezone.utc)
+            entry_dt = None
+            if isinstance(opened, str) and opened:
+                try:
+                    entry_dt = datetime.fromisoformat(opened.replace("Z", "+00:00"))
+                except ValueError:
+                    pass
+            hold_min = (
+                (now_utc - entry_dt).total_seconds() / 60 if entry_dt else None
+            )
+            trade = {
+                "trade_id": trade_id,
+                "symbol": sidecar.get("symbol"),
+                "action": (sidecar.get("side") or "").upper(),
+                "entry_price": sidecar.get("entry_price"),
+                "predicted_tp_price": sidecar.get("predicted_tp_price"),
+                "predicted_sl_price": sidecar.get("predicted_sl_price"),
+                "predicted_tp_pct": sidecar.get("predicted_tp_pct"),
+                "predicted_sl_pct": sidecar.get("predicted_sl_pct"),
+                "timestamp": opened,
+                "hold_duration_minutes": hold_min,
+                "k_candles": sidecar.get("k_candles"),
+                "is_live": True,
+            }
+
         payload: dict[str, Any] = {
             "trade_id": trade_id,
             "found": trade is not None,
@@ -298,6 +343,7 @@ def create_app(store: TradeStore | None = None) -> Flask:
                 "timestamp": trade.get("timestamp"),
                 "hold_duration_minutes": trade.get("hold_duration_minutes"),
                 "pnl_usd": trade.get("pnl_usd"),
+                "is_live": trade.get("is_live", False),
             })
         if sidecar is not None:
             payload["sidecar"] = sidecar
@@ -305,7 +351,7 @@ def create_app(store: TradeStore | None = None) -> Flask:
         elif trade and trade.get("real_high_curve"):
             payload["has_curve"] = True
 
-        # Best-effort: fetch pre/post context candles from Hyperliquid public API.
+        # Best-effort: fetch chart candles from Hyperliquid public API.
         if trade is not None:
             _attach_context_candles(payload, trade)
 

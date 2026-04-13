@@ -6,7 +6,13 @@
   </div>
 
   {% if trade %}
-    <h1 class="text-2xl font-bold mb-2">{{ trade.symbol }} — {{ trade.action }}</h1>
+    {% set is_live = trade.get('is_live', false) %}
+    <h1 class="text-2xl font-bold mb-2">
+      {{ trade.symbol }} — {{ trade.action }}
+      {% if is_live %}
+        <span class="ml-2 px-2 py-0.5 rounded text-sm bg-blue-900 text-blue-300 animate-pulse">LIVE</span>
+      {% endif %}
+    </h1>
     {% set tp_pct = trade.get('predicted_tp_pct') %}
     {% set sl_pct = trade.get('predicted_sl_pct') %}
     <div class="text-gray-400 text-sm mb-4">{{ trade.timestamp }}</div>
@@ -16,6 +22,7 @@
         <div class="text-xs text-gray-400">Entry</div>
         <div class="text-lg font-semibold">{{ '%.4f' % (trade.entry_price or 0) }}</div>
       </div>
+      {% if not is_live %}
       <div class="bg-gray-900 border border-gray-800 rounded p-3">
         <div class="text-xs text-gray-400">Exit</div>
         <div class="text-lg font-semibold">{{ '%.4f' % (trade.exit_price or 0) }}</div>
@@ -30,6 +37,7 @@
         <div class="text-xs text-gray-400">Exit reason</div>
         <div class="text-lg font-semibold">{{ trade.get('exit_reason_v2') or trade.get('exit_reason') or '—' }}</div>
       </div>
+      {% endif %}
       <div class="bg-gray-900 border border-gray-800 rounded p-3">
         <div class="text-xs text-gray-400">Predicted TP%</div>
         <div class="text-lg font-semibold text-green-400">
@@ -71,5 +79,5 @@
 {% endblock %}
 
 {% block scripts %}
-  <script src="{{ url_for('static', filename='js/trade_chart.js') }}?v=10"></script>
+  <script src="{{ url_for('static', filename='js/trade_chart.js') }}?v=11"></script>
 {% endblock %}
