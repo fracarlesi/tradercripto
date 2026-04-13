@@ -448,6 +448,8 @@ class ExecutionEngineService(BaseService):
         # loop using this interval.
         self._stray_trigger_cleanup_interval_s: float = 1800.0  # 30 min
         self._last_stray_trigger_cleanup: float = 0.0
+        self._orphan_sidecar_cleanup_interval_s: float = 300.0  # 5 min
+        self._last_orphan_sidecar_cleanup: float = 0.0
 
 
         # Configuration shortcuts — _bot_config is a BotConfig (Pydantic).
@@ -2639,6 +2641,12 @@ class ExecutionEngineService(BaseService):
                     await self._cleanup_stray_trigger_orders()
                     self._last_stray_trigger_cleanup = now_mono
 
+                # Periodic orphan sidecar cleanup (safety net for missed deletes).
+                if (now_mono - self._last_orphan_sidecar_cleanup
+                        >= self._orphan_sidecar_cleanup_interval_s):
+                    await self._cleanup_orphaned_sidecars()
+                    self._last_orphan_sidecar_cleanup = now_mono
+
                 await asyncio.sleep(5)
             except asyncio.CancelledError:
                 self._logger.debug("Position monitoring cancelled")
@@ -2764,6 +2772,8 @@ class ExecutionEngineService(BaseService):
 
                     # Fix: recover trade_id from open sidecar so that
                     # _handle_position_closed can delete it on close.
+                    # If no sidecar exists, generate a trade_id and write one
+                    # so the dashboard can see the synced position.
                     try:
                         for sc in list_open_sidecars():
                             if sc.get("symbol") == symbol:
@@ -2776,6 +2786,23 @@ class ExecutionEngineService(BaseService):
                     except Exception:
                         self._logger.exception(
                             "Failed to recover trade_id from sidecar for %s", symbol,
+                        )
+
+                    # No existing sidecar → generate trade_id + write sidecar
+                    # so the dashboard shows synced positions too.
+                    if not new_pos.trade_id:
+                        new_pos.trade_id = uuid.uuid4().hex
+                        write_open_sidecar(
+                            trade_id=new_pos.trade_id,
+                            symbol=symbol,
+                            side=new_pos.side,
+                            entry_price=float(entry_px),
+                            opened_at=new_pos.opened_at,
+                            expiry_at=new_pos.expiry_at,
+                        )
+                        self._logger.info(
+                            "Created sidecar for synced position %s: trade_id=%s",
+                            symbol, new_pos.trade_id,
                         )
 
                     self._logger.info(
@@ -3154,8 +3181,21 @@ class ExecutionEngineService(BaseService):
         # STAGE A: remove the open forecast sidecar (dashboard live overlay).
         # Best-effort — tolerate missing files and any unlink errors.
         try:
+            deleted = False
             if position.trade_id:
-                delete_open_sidecar(str(position.trade_id))
+                deleted = delete_open_sidecar(str(position.trade_id))
+            # Fallback: if trade_id was None or delete didn't find the file,
+            # scan all sidecars by symbol and delete any match.
+            if not deleted:
+                for sc in list_open_sidecars():
+                    if sc.get("symbol") == symbol:
+                        sc_tid = sc.get("trade_id")
+                        if sc_tid:
+                            delete_open_sidecar(str(sc_tid))
+                            self._logger.info(
+                                "Deleted orphan sidecar by symbol fallback: %s trade_id=%s",
+                                symbol, sc_tid,
+                            )
         except Exception:
             self._logger.exception("failed to delete open forecast sidecar for %s", symbol)
 
