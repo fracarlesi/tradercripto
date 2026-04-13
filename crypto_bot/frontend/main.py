@@ -28,21 +28,51 @@ _CONTEXT_PRE_BARS = 20
 _CONTEXT_POST_BARS = 10
 
 
-def _attach_context_candles(payload: dict[str, Any], trade: dict[str, Any]) -> None:
-    """Fetch pre/post context candles from Hyperliquid and add to payload.
+def _fetch_hl_candles(
+    symbol: str, interval_str: str, start_ms: int, end_ms: int,
+) -> list[dict] | None:
+    """Fetch OHLC candles from Hyperliquid public API (best-effort)."""
+    import json as _json
+    import urllib.request
 
-    Modifies payload in-place. Silently skips on any error (best-effort).
+    body = _json.dumps({"type": "candleSnapshot", "req": {
+        "coin": symbol, "interval": interval_str,
+        "startTime": start_ms, "endTime": end_ms,
+    }}).encode()
+    try:
+        req = urllib.request.Request(
+            _HL_API_URL, data=body,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            candles = _json.loads(resp.read())
+            return [
+                {"t": c["t"], "o": float(c["o"]), "h": float(c["h"]),
+                 "l": float(c["l"]), "c": float(c["c"])}
+                for c in candles
+            ]
+    except Exception:
+        return None
+
+
+def _attach_context_candles(payload: dict[str, Any], trade: dict[str, Any]) -> None:
+    """Fetch chart candles at optimal resolution from Hyperliquid.
+
+    Picks granularity based on trade duration:
+      hold < 60 min → 1m candles
+      hold < 4h    → 5m candles
+      else         → 15m candles
+
+    Stores result in ``payload["chart"]`` as a single object with
+    pre/trade/post candle arrays so the JS can render at the best resolution.
+    Also populates the legacy ``pre_candles``/``post_candles`` as fallback.
     """
     symbol: str | None = trade.get("symbol")
     timestamp_str: str | None = trade.get("timestamp")
-    interval_sec: int = int(trade.get("candle_interval_sec") or 900)
     hold_min: float | None = trade.get("hold_duration_minutes")
 
     if not symbol or not timestamp_str:
         return
-
-    interval_str = _HL_INTERVAL_MAP.get(interval_sec, "15m")
-    interval_ms = interval_sec * 1000
 
     try:
         entry_ms = int(
@@ -53,40 +83,60 @@ def _attach_context_candles(payload: dict[str, Any], trade: dict[str, Any]) -> N
     except (ValueError, OSError):
         return
 
-    def _fetch(start_ms: int, end_ms: int) -> list[dict] | None:
-        import json as _json
-        import urllib.request
-        body = _json.dumps({"type": "candleSnapshot", "req": {
-            "coin": symbol, "interval": interval_str,
-            "startTime": start_ms, "endTime": end_ms,
-        }}).encode()
-        try:
-            req = urllib.request.Request(
-                _HL_API_URL, data=body,
-                headers={"Content-Type": "application/json"},
-            )
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                candles = _json.loads(resp.read())
-                return [
-                    {"t": c["t"], "o": float(c["o"]), "h": float(c["h"]),
-                     "l": float(c["l"]), "c": float(c["c"])}
-                    for c in candles
-                ]
-        except Exception:
-            pass
-        return None
+    # Pick optimal candle interval for visualization
+    if hold_min is not None and hold_min < 60:
+        chart_interval = 60
+    elif hold_min is not None and hold_min < 240:
+        chart_interval = 300
+    else:
+        chart_interval = 900
 
-    # Pre-entry candles
-    pre = _fetch(entry_ms - _CONTEXT_PRE_BARS * interval_ms, entry_ms)
+    interval_str = _HL_INTERVAL_MAP[chart_interval]
+    interval_ms = chart_interval * 1000
+
+    exit_ms = entry_ms + int((hold_min or 0) * 60 * 1000) if hold_min else None
+
+    # Single fetch: pre-context → trade → post-context
+    fetch_start = entry_ms - _CONTEXT_PRE_BARS * interval_ms
+    fetch_end = (exit_ms or entry_ms) + _CONTEXT_POST_BARS * interval_ms
+    all_candles = _fetch_hl_candles(symbol, interval_str, fetch_start, fetch_end)
+
+    if not all_candles:
+        return
+
+    # Split into pre / trade / post by timestamp
+    pre: list[dict] = []
+    trade_candles: list[dict] = []
+    post: list[dict] = []
+
+    for c in all_candles:
+        t = c["t"]
+        if t < entry_ms:
+            pre.append(c)
+        elif exit_ms is not None and t > exit_ms:
+            post.append(c)
+        else:
+            trade_candles.append(c)
+
+    # Trim to desired context sizes
+    pre = pre[-_CONTEXT_PRE_BARS:]
+    post = post[:_CONTEXT_POST_BARS]
+
+    # Structured chart data for the JS
+    payload["chart"] = {
+        "interval_sec": chart_interval,
+        "pre_candles": pre,
+        "trade_candles": trade_candles,
+        "post_candles": post,
+        "entry_ms": entry_ms,
+        "exit_ms": exit_ms,
+    }
+
+    # Legacy fallback fields
     if pre:
         payload["pre_candles"] = pre
-
-    # Post-exit candles (only for closed trades)
-    if hold_min is not None:
-        exit_ms = entry_ms + int(hold_min * 60 * 1000)
-        post = _fetch(exit_ms, exit_ms + _CONTEXT_POST_BARS * interval_ms)
-        if post:
-            payload["post_candles"] = post
+    if post:
+        payload["post_candles"] = post
 
 
 def create_app(store: TradeStore | None = None) -> Flask:

@@ -208,13 +208,35 @@
     }
 
     var sc = data.sidecar || {};
-    var realHigh = sc.real_high_curve || sc.real_high || data.real_high_curve || [];
-    var realLow = sc.real_low_curve || sc.real_low || data.real_low_curve || [];
-    var realOpen = sc.real_open_curve || data.real_open_curve || null;
-    var realClose = sc.real_close_curve || data.real_close_curve || null;
-    var hasOHLC = Array.isArray(realOpen) && Array.isArray(realClose)
-      && realOpen.length > 0 && realClose.length > 0;
-    var intervalSec = sc.candle_interval_sec || sc.interval_sec || data.candle_interval_sec || 900;
+    var chart = data.chart;  // New: optimal-resolution chart data
+
+    var realHigh, realLow, realOpen, realClose, hasOHLC;
+    var intervalSec, preCandlesRaw, postCandlesRaw;
+
+    if (chart && chart.trade_candles && chart.trade_candles.length > 0) {
+      // --- New path: use HL API candles at optimal resolution ---
+      var tc = chart.trade_candles;
+      realOpen = tc.map(function(c) { return c.o; });
+      realHigh = tc.map(function(c) { return c.h; });
+      realLow = tc.map(function(c) { return c.l; });
+      realClose = tc.map(function(c) { return c.c; });
+      hasOHLC = true;
+      intervalSec = chart.interval_sec || 60;
+      preCandlesRaw = chart.pre_candles || [];
+      postCandlesRaw = chart.post_candles || [];
+    } else {
+      // --- Legacy path: sidecar curves + separate context candles ---
+      realHigh = sc.real_high_curve || sc.real_high || data.real_high_curve || [];
+      realLow = sc.real_low_curve || sc.real_low || data.real_low_curve || [];
+      realOpen = sc.real_open_curve || data.real_open_curve || null;
+      realClose = sc.real_close_curve || data.real_close_curve || null;
+      hasOHLC = Array.isArray(realOpen) && Array.isArray(realClose)
+        && realOpen.length > 0 && realClose.length > 0;
+      intervalSec = sc.candle_interval_sec || sc.interval_sec || data.candle_interval_sec || 900;
+      preCandlesRaw = data.pre_candles || [];
+      postCandlesRaw = data.post_candles || [];
+    }
+
     var k = Math.max(realHigh.length, realLow.length, hasOHLC ? realOpen.length : 0);
 
     if (k === 0) {
@@ -225,9 +247,6 @@
     // Save original trade candle count before prepending/appending context
     var tradeK = k;
 
-    // Context candles (pre-entry and post-exit) from Hyperliquid API
-    var preCandlesRaw = data.pre_candles || [];
-    var postCandlesRaw = data.post_candles || [];
     var preN = preCandlesRaw.length;
     var postN = postCandlesRaw.length;
 
@@ -325,8 +344,11 @@
       plugins.push(verticalLine(0, entry, "ENTRY $" + Number(entry).toFixed(4), "#fbbf24"));
     }
     // Exit vertical line at last trade candle (not post-context), badge at exit price level
-    if (exitPrice != null && tradeK > 1) {
-      plugins.push(verticalLine((tradeK - 1) * intervalSec, exitPrice, "EXIT $" + Number(exitPrice).toFixed(4), "#f472b6"));
+    if (exitPrice != null) {
+      var exitX = Math.max(0, tradeK - 1) * intervalSec;
+      // When entry and exit overlap (1 candle), offset exit slightly right
+      if (tradeK <= 1) exitX = 0.3 * intervalSec;
+      plugins.push(verticalLine(exitX, exitPrice, "EXIT $" + Number(exitPrice).toFixed(4), "#f472b6"));
     }
     // Expiry deadline vertical line (gray, subtle) — x is relative to entry (x=0)
     var expiryK = sc.k_candles ?? data.k_candles;
