@@ -26,6 +26,13 @@ from .trade_memory_rag import TradeMemoryRAG
 logger = logging.getLogger(__name__)
 
 
+# Leva 2: cap the model-predicted SL at 1.0% to counter the saturated SL head.
+# The Qwen FLAG-Trader SL head is effectively hardcoded at 2.0% (zero variance
+# across all observed trades), producing a poor R/R (~0.25:1) given the TP head
+# typically outputs ~0.5%. Capping reduces avg loss without changing the number
+# of trades executed. Tune this single constant to adjust the cap.
+_SL_CAP_PCT = 1.0
+
 
 @dataclass
 class TradeDecision:
@@ -205,6 +212,16 @@ class FlagTraderAgent:
         action_id, state_value, log_prob, tp_pct, sl_pct = self.model.get_action(prompt)  # pyright: ignore[reportAssignmentType]  # torch/SDK typing
         elapsed = time.monotonic() - start
         action_name = {0: "SELL", 1: "HOLD", 2: "BUY"}.get(action_id, "HOLD")
+
+        # Leva 2: cap the SL at _SL_CAP_PCT to counter the saturated SL head
+        # (always ~2.0%). TP is intentionally NOT capped since the TP head has
+        # real variance (~0.5-1.1%). Log only when the cap fires to avoid spam.
+        if sl_pct > _SL_CAP_PCT:
+            logger.info(
+                "FLAG-Trader | %s | SL capped from %.2f%% to %.2f%% (Leva 2)",
+                symbol, sl_pct, _SL_CAP_PCT,
+            )
+            sl_pct = _SL_CAP_PCT
 
         logger.info(
             "FLAG-Trader | %s | action=%s | value=%.4f | tp=%.1f%% | sl=%.1f%% | time=%.1fs",
