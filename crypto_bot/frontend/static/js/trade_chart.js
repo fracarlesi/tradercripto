@@ -357,12 +357,13 @@
     if (entry != null) {
       plugins.push(verticalLine(0, null, null, "rgba(251,191,36,0.5)"));
     }
-    // Exit vertical line at last trade candle (not post-context), badge at exit price level
+    // Exit vertical line at last trade candle (not post-context) — no badge,
+    // the Exit card above the chart already shows the price.
     if (exitPrice != null) {
       var exitX = Math.max(0, tradeK - 1) * intervalSec;
       // When entry and exit overlap (1 candle), offset exit slightly right
       if (tradeK <= 1) exitX = 0.3 * intervalSec;
-      plugins.push(verticalLine(exitX, exitPrice, "EXIT $" + Number(exitPrice).toFixed(4), "#f472b6"));
+      plugins.push(verticalLine(exitX, null, null, "rgba(244,114,182,0.6)"));
     }
     // Expiry deadline vertical line (gray, subtle) — x is relative to entry (x=0)
     var expiryK = sc.k_candles ?? data.k_candles;
