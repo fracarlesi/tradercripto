@@ -1946,6 +1946,45 @@ class ExecutionEngineService(BaseService):
                     missing_side = ""
 
                 if missing_side:
+                    # Gap 2 defensive guard: if the caller supplied no target
+                    # percentage for the missing side (effective_* == 0 or None),
+                    # `missing_price` would collapse to `entry_price` and the
+                    # distance validation below would silently bail — leaving the
+                    # position with only one protective order in place. That is a
+                    # silent failure mode we must surface loudly. A missing TP
+                    # is recoverable (SL still protects against loss); a missing
+                    # SL is liquidation-risk. Both deserve alerts and an early
+                    # return instead of placing a useless entry-priced order.
+                    if missing_side == "tp" and (
+                        effective_tp == 0 or effective_tp is None
+                    ):
+                        self._logger.error(
+                            "%s: has SL but missing TP — no TP override available "
+                            "(config=%s, no sidecar/decision recovery). Position "
+                            "stays SL-only. This must be investigated: TP should "
+                            "have been recovered from sidecar or decisions.",
+                            symbol, cfg_tp,
+                        )
+                        await self._send_alert(
+                            f"{symbol} missing TP — no prediction available. "
+                            f"Manual intervention required."
+                        )
+                        return
+
+                    if missing_side == "sl" and (
+                        effective_sl == 0 or effective_sl is None
+                    ):
+                        self._logger.error(
+                            "%s: has TP but missing SL — no SL override available. "
+                            "Position stays TP-only (LIQUIDATION RISK).",
+                            symbol,
+                        )
+                        await self._send_alert(
+                            f"{symbol} missing SL — LIQUIDATION RISK. "
+                            f"Place manually NOW."
+                        )
+                        return
+
                     # Validate the *paired* TP/SL distances before placing.
                     if not self._validate_stop_distance(
                         entry_price, paired_tp, paired_sl, symbol
@@ -2879,20 +2918,104 @@ class ExecutionEngineService(BaseService):
                         )
                         await self._update_tp_sl_for_size_change(local_pos)
 
-                    # Re-attempt TP/SL if initial placement failed
+                    # Re-attempt TP/SL if initial placement failed.
+                    # Fix (Gap 3): previously this block was gated on
+                    # `tp_sl_enforced`, which meant in LLM-only mode
+                    # (cfg_sl == cfg_tp == 0) positions with one side missing
+                    # would stay unprotected forever. We now ALWAYS attempt
+                    # the reconcile when one side is missing — but via two
+                    # different code paths:
+                    #   * enforcement mode: pass no overrides so config
+                    #     percentages flow through (pre-existing behavior).
+                    #   * LLM-only mode: recover model-predicted values from
+                    #     sidecar / decisions.jsonl and pass as overrides so
+                    #     `_ensure_tp_sl_for_position` can compute valid
+                    #     prices instead of returning early as a no-op.
                     if symbol in self._tp_sl_confirmed:
                         pass  # Already confirmed via exchange orders, skip re-check
                     elif (
-                        tp_sl_enforced
-                        and (local_pos.tp_price is None or local_pos.sl_price is None)
+                        (local_pos.tp_price is None or local_pos.sl_price is None)
                         and local_pos.status == PositionStatus.OPEN
                         and symbol not in self._settling_symbols
                     ):
-                        self._logger.warning(
-                            "Position %s missing TP/SL protection (tp=%s, sl=%s), re-attempting...",
-                            symbol, local_pos.tp_price, local_pos.sl_price,
-                        )
-                        await self._ensure_tp_sl_for_position(local_pos)
+                        if tp_sl_enforced:
+                            # Enforcement mode: config provides the percentages
+                            # (cfg_sl or cfg_tp > 0). Re-attempt with no
+                            # overrides so _ensure_tp_sl_for_position uses the
+                            # config values directly — pre-existing behavior.
+                            self._logger.warning(
+                                "Position %s missing TP/SL protection "
+                                "(tp=%s, sl=%s), re-attempting...",
+                                symbol, local_pos.tp_price, local_pos.sl_price,
+                            )
+                            await self._ensure_tp_sl_for_position(local_pos)
+                        else:
+                            # LLM-only mode (cfg_sl == cfg_tp == 0). Config has
+                            # no percentages to use, so we MUST recover model-
+                            # predicted values from sidecar or decisions.jsonl.
+                            # Without overrides, _ensure_tp_sl_for_position
+                            # would return immediately (no-op) and leave the
+                            # position SL-only forever — the exact ONDO/XMR
+                            # failure mode this fix addresses (Gap 3).
+                            rec_tp_pct: Optional[float] = None
+                            rec_sl_pct: Optional[float] = None
+                            try:
+                                for sc in list_open_sidecars():
+                                    if sc.get("symbol") == symbol:
+                                        rec_tp_pct = sc.get("predicted_tp_pct")
+                                        rec_sl_pct = sc.get("predicted_sl_pct")
+                                        break
+                            except Exception:
+                                self._logger.exception(
+                                    "Reconcile: failed to read sidecar for %s",
+                                    symbol,
+                                )
+                            if rec_tp_pct is None or rec_sl_pct is None:
+                                # Try decisions.jsonl for the missing piece(s).
+                                try:
+                                    dec = self._recover_decision_for_synced_position(
+                                        symbol=symbol,
+                                        side=local_pos.side,
+                                        opened_at=local_pos.opened_at
+                                        or datetime.now(timezone.utc),
+                                    )
+                                except Exception:
+                                    self._logger.exception(
+                                        "Reconcile: decision recovery failed for %s",
+                                        symbol,
+                                    )
+                                    dec = None
+                                if dec:
+                                    if rec_tp_pct is None:
+                                        rec_tp_pct = dec.get("predicted_tp_pct")
+                                    if rec_sl_pct is None:
+                                        rec_sl_pct = dec.get("predicted_sl_pct")
+
+                            # Safety-net SL only — do NOT synthesize a TP;
+                            # Gap 2 guard will alert if TP is still missing.
+                            safety_sl_pct = 2.0
+                            tp_override = (
+                                float(rec_tp_pct)
+                                if rec_tp_pct is not None
+                                else None
+                            )
+                            sl_override = (
+                                float(rec_sl_pct)
+                                if rec_sl_pct is not None
+                                else safety_sl_pct
+                            )
+                            self._logger.warning(
+                                "Position %s missing TP/SL bracket in LLM-only "
+                                "mode (tp=%s, sl=%s) — reconciling with "
+                                "tp_override=%s sl_override=%s",
+                                symbol, local_pos.tp_price, local_pos.sl_price,
+                                tp_override, sl_override,
+                            )
+                            await self._ensure_tp_sl_for_position(
+                                local_pos,
+                                tp_pct_override=tp_override,
+                                sl_pct_override=sl_override,
+                            )
 
                 else:
                     # New position (opened externally or before service start)
@@ -2935,15 +3058,22 @@ class ExecutionEngineService(BaseService):
                     )
                     self.active_positions[symbol] = new_pos
 
-                    # Fix: recover trade_id from open sidecar so that
-                    # _handle_position_closed can delete it on close.
+                    # Fix (Gap 1): recover trade_id + predicted TP/SL from the
+                    # open sidecar; supplement any null fields from
+                    # decisions.jsonl. A prior buggy sync may have written a
+                    # sidecar with trade_id=uuid4() and null tp/sl predictions,
+                    # which would cause _ensure_tp_sl_for_position to skip TP
+                    # placement entirely. decisions.jsonl is the source of
+                    # truth for predicted values, so we always cross-check.
                     recovered_tp_pct: Optional[float] = None
                     recovered_sl_pct: Optional[float] = None
                     recovered_tp_price: Optional[float] = None
                     recovered_sl_price: Optional[float] = None
+                    sidecar_found = False
                     try:
                         for sc in list_open_sidecars():
                             if sc.get("symbol") == symbol:
+                                sidecar_found = True
                                 new_pos.trade_id = sc["trade_id"]
                                 # Carry forward any model predictions written
                                 # at entry time so we can restore brackets.
@@ -2963,13 +3093,17 @@ class ExecutionEngineService(BaseService):
                             "Failed to recover trade_id from sidecar for %s", symbol,
                         )
 
-                    # No existing sidecar → try to recover the original
-                    # decision from decisions_YYYY_MM.jsonl before falling back
-                    # to a fresh uuid. This keeps synced positions correlated
-                    # with the model's predictions so protective brackets use
-                    # the predicted TP/SL instead of arbitrary config defaults.
+                    # Supplement sidecar: decisions JSONL is the source of
+                    # truth for predicted values. Trigger lookup if either the
+                    # sidecar is missing, or the sidecar exists but has null
+                    # tp/sl predictions (corrupted by prior buggy sync).
                     decision: Optional[dict[str, Any]] = None
-                    if not new_pos.trade_id:
+                    need_decision_recovery = (
+                        not new_pos.trade_id
+                        or recovered_tp_pct is None
+                        or recovered_sl_pct is None
+                    )
+                    if need_decision_recovery:
                         try:
                             decision = self._recover_decision_for_synced_position(
                                 symbol=symbol,
@@ -2982,41 +3116,70 @@ class ExecutionEngineService(BaseService):
                             )
                             decision = None
 
-                        if decision and decision.get("trade_id"):
-                            new_pos.trade_id = str(decision["trade_id"])
-                            recovered_tp_pct = decision.get("predicted_tp_pct")
-                            recovered_sl_pct = decision.get("predicted_sl_pct")
-                            recovered_tp_price = decision.get("predicted_tp_price")
-                            recovered_sl_price = decision.get("predicted_sl_price")
+                        if decision:
+                            # Preserve an existing sidecar trade_id (avoid
+                            # orphaning correlation already established with
+                            # the sidecar + any downstream logs).
+                            if not new_pos.trade_id:
+                                new_pos.trade_id = str(
+                                    decision.get("trade_id") or uuid.uuid4().hex
+                                )
+                            # Fill in ONLY the fields still missing; don't
+                            # overwrite valid sidecar data with something else
+                            # from an older decision record.
+                            if recovered_tp_pct is None:
+                                recovered_tp_pct = decision.get("predicted_tp_pct")
+                            if recovered_sl_pct is None:
+                                recovered_sl_pct = decision.get("predicted_sl_pct")
+                            if recovered_tp_price is None:
+                                recovered_tp_price = decision.get("predicted_tp_price")
+                            if recovered_sl_price is None:
+                                recovered_sl_price = decision.get("predicted_sl_price")
                             self._logger.info(
-                                "Sync: recovered trade_id=%s for %s (TP=%s%% SL=%s%%)",
-                                new_pos.trade_id, symbol,
+                                "Sync: supplemented %s sidecar with decisions.jsonl "
+                                "(trade_id=%s, tp_pct=%s, sl_pct=%s)",
+                                symbol, new_pos.trade_id,
                                 recovered_tp_pct, recovered_sl_pct,
                             )
-                        else:
+                        elif not new_pos.trade_id:
+                            # No sidecar AND no decision — safety net only.
                             new_pos.trade_id = uuid.uuid4().hex
                             self._logger.warning(
-                                "Sync: no decision record found for %s; generated fresh trade_id=%s "
-                                "(position will get safety-net SL only)",
+                                "Sync: no sidecar, no decision for %s; "
+                                "fresh trade_id=%s, safety-net SL only",
                                 symbol, new_pos.trade_id,
                             )
 
-                        write_open_sidecar(
-                            trade_id=new_pos.trade_id,
-                            symbol=symbol,
-                            side=new_pos.side,
-                            entry_price=float(entry_px),
-                            opened_at=new_pos.opened_at,
-                            expiry_at=new_pos.expiry_at,
-                            predicted_tp_pct=recovered_tp_pct,
-                            predicted_sl_pct=recovered_sl_pct,
-                            predicted_tp_price=recovered_tp_price,
-                            predicted_sl_price=recovered_sl_price,
-                        )
-                        self._logger.info(
-                            "Created sidecar for synced position %s: trade_id=%s",
-                            symbol, new_pos.trade_id,
-                        )
+                    # Always rewrite the sidecar with the (possibly
+                    # supplemented) values so subsequent runs don't re-do the
+                    # decisions.jsonl lookup. Rewrite if either the sidecar was
+                    # absent OR we supplemented something from decisions.
+                    if (not sidecar_found or need_decision_recovery) and new_pos.trade_id:
+                        try:
+                            write_open_sidecar(
+                                trade_id=new_pos.trade_id,
+                                symbol=symbol,
+                                side=new_pos.side,
+                                entry_price=float(entry_px),
+                                opened_at=new_pos.opened_at,
+                                expiry_at=new_pos.expiry_at,
+                                predicted_tp_pct=recovered_tp_pct,
+                                predicted_sl_pct=recovered_sl_pct,
+                                predicted_tp_price=recovered_tp_price,
+                                predicted_sl_price=recovered_sl_price,
+                            )
+                            self._logger.info(
+                                "Sync: %s sidecar for %s: trade_id=%s",
+                                "Rewrote" if sidecar_found else "Created",
+                                symbol, new_pos.trade_id,
+                            )
+                        except Exception:
+                            # Sidecar write failure must not abort the bracket
+                            # placement — in-memory overrides are still valid.
+                            self._logger.exception(
+                                "Failed to rewrite supplemented sidecar for %s",
+                                symbol,
+                            )
 
                     self._logger.info(
                         "Synced existing position: %s %s %.4f (opened_at set to %s — estimated, pre-restart)",
