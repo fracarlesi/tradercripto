@@ -352,6 +352,11 @@
       plugins.push(hLine(entry, "rgba(251,191,36,0.4)", null, [2, 4]));
     }
 
+    // Entry vertical line at first candle — no badge, the horizontal dashed
+    // entry line and the Entry card above already convey the level/label.
+    if (entry != null) {
+      plugins.push(verticalLine(0, null, null, "rgba(251,191,36,0.5)"));
+    }
     // Exit vertical line at last trade candle (not post-context), badge at exit price level
     if (exitPrice != null) {
       var exitX = Math.max(0, tradeK - 1) * intervalSec;
