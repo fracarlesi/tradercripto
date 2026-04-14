@@ -36,12 +36,15 @@ Author: Francesco Carlesi
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from enum import Enum
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 
 from .base import BaseService
@@ -1644,7 +1647,144 @@ class ExecutionEngineService(BaseService):
         except Exception:
             self._logger.exception("failed to write open forecast sidecar for %s", symbol)
 
-    async def _ensure_tp_sl_for_position(self, position: ExecutionPosition) -> None:
+    def _recover_decision_for_synced_position(
+        self,
+        symbol: str,
+        side: str,
+        opened_at: datetime,
+        max_age_hours: float = 24.0,
+    ) -> Optional[dict[str, Any]]:
+        """Recover the original decision record for a position discovered on the
+        exchange after a restart.
+
+        Positions that re-enter the engine via ``_sync_positions_from_exchange``
+        are missing the ``trade_id`` that correlates them with the model's
+        original decision (and its predicted TP/SL levels). This helper scans
+        ``decisions_YYYY_MM.jsonl`` (current + previous month to cover
+        month-boundary restarts) from the end and returns the most recent
+        non-HOLD decision whose ``(symbol, side)`` matches and whose timestamp
+        is within ``max_age_hours`` of ``opened_at``.
+
+        Mapping: decisions store ``action="BUY"/"SELL"``; positions use
+        ``side="long"/"short"``. BUY → long, SELL → short.
+
+        Returns the raw decision dict (has ``trade_id``, ``predicted_tp_pct``,
+        ``predicted_sl_pct``, ``predicted_tp_price``, ``predicted_sl_price``)
+        or ``None`` if no match is found.
+        """
+        # Same log_dir resolution as FlagTradeLogger: HLQUANTBOT_DATA_DIR env
+        # takes precedence, else cwd-relative default. Kept self-contained per
+        # advisor guidance; this is a lookup by (symbol, side, timestamp) while
+        # FlagTradeLogger's is by trade_id — different enough to duplicate.
+        env_dir = os.environ.get("HLQUANTBOT_DATA_DIR")
+        if env_dir:
+            log_dir = Path(env_dir) / "trade_logs"
+        else:
+            log_dir = Path("data/trade_logs")
+
+        # Normalize opened_at to aware UTC for safe arithmetic.
+        if opened_at.tzinfo is None:
+            opened_at = opened_at.replace(tzinfo=timezone.utc)
+        else:
+            opened_at = opened_at.astimezone(timezone.utc)
+
+        expected_action = "BUY" if side == "long" else "SELL"
+        max_age = timedelta(hours=max_age_hours)
+
+        # Search current + previous month files (covers month-boundary restarts).
+        now = datetime.now(timezone.utc)
+        months = [now.strftime("%Y_%m")]
+        prev_dt = (now.replace(day=1) - timedelta(days=1))
+        months.append(prev_dt.strftime("%Y_%m"))
+
+        best: Optional[dict[str, Any]] = None
+        best_delta: Optional[timedelta] = None
+
+        for month_tag in months:
+            decisions_file = log_dir / f"decisions_{month_tag}.jsonl"
+            if not decisions_file.exists():
+                continue
+            try:
+                with open(decisions_file, "r") as fh:
+                    # Read from the end so the most recent decisions are seen
+                    # first; bail out once we're older than max_age_hours.
+                    lines = fh.readlines()
+            except OSError:
+                self._logger.exception(
+                    "recover_decision: failed to read %s", decisions_file,
+                )
+                continue
+
+            stop_for_this_file = False
+            for line in reversed(lines):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                if row.get("symbol") != symbol:
+                    continue
+                action = row.get("action")
+                if action != expected_action:
+                    continue
+                if not row.get("trade_id"):
+                    continue
+
+                ts_raw = row.get("timestamp")
+                if not ts_raw:
+                    continue
+                try:
+                    ts = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                else:
+                    ts = ts.astimezone(timezone.utc)
+
+                delta = abs(opened_at - ts)
+                if delta > max_age:
+                    # Lines are in append order; once we see a decision older
+                    # than the window we can stop scanning this file. We
+                    # compare against opened_at not "now" to handle restarts
+                    # long after the position opened.
+                    # Still continue scanning older lines in case opened_at is
+                    # in the future of the file (safety), but cap to a few.
+                    stop_for_this_file = True
+                    break
+
+                if best_delta is None or delta < best_delta:
+                    best = row
+                    best_delta = delta
+
+            if stop_for_this_file and best is not None:
+                # Found at least one match in this (more recent) file; don't
+                # bother scanning the previous-month file.
+                break
+
+        if best is not None:
+            delta_s = int(best_delta.total_seconds()) if best_delta is not None else -1
+            self._logger.info(
+                "recover_decision: matched %s %s decision trade_id=%s "
+                "(delta=%ds to opened_at)",
+                symbol, expected_action, best.get("trade_id"), delta_s,
+            )
+        else:
+            self._logger.debug(
+                "recover_decision: no match for %s %s within %.1fh of %s",
+                symbol, expected_action, max_age_hours, opened_at.isoformat(),
+            )
+        return best
+
+    async def _ensure_tp_sl_for_position(
+        self,
+        position: ExecutionPosition,
+        tp_pct_override: Optional[float] = None,
+        sl_pct_override: Optional[float] = None,
+    ) -> None:
         """
         Ensure a position has exactly 1 TP and 1 SL order on the exchange.
 
@@ -1655,10 +1795,17 @@ class ExecutionEngineService(BaseService):
         Args:
             position: Position to protect
         """
-        # LLM-only exit mode: skip TP/SL enforcement
+        # LLM-only exit mode: skip TP/SL enforcement UNLESS the caller passed
+        # model-predicted overrides (or a hard-coded safety-net SL from the
+        # sync path). `_bot_config.risk.*` values are treated as percentages
+        # in the same units as the overrides.
         cfg_sl = getattr(self._bot_config.risk, "stop_loss_pct", 0)
         cfg_tp = getattr(self._bot_config.risk, "take_profit_pct", 0)
-        if cfg_sl == 0 and cfg_tp == 0:
+        effective_sl = sl_pct_override if sl_pct_override is not None else cfg_sl
+        effective_tp = tp_pct_override if tp_pct_override is not None else cfg_tp
+        if (effective_sl == 0 or effective_sl is None) and (
+            effective_tp == 0 or effective_tp is None
+        ):
             return
 
         symbol = position.symbol
@@ -1686,15 +1833,15 @@ class ExecutionEngineService(BaseService):
                     reduce_only_orders, position
                 )
 
-                # Cancel duplicate TPs (keep the one closest to config TP%)
-                tp_pct = self._bot_config.risk.take_profit_pct / 100
+                # Cancel duplicate TPs (keep the one closest to effective TP%)
+                tp_pct = float(effective_tp or 0) / 100
                 expected_tp = entry_price * (1 - tp_pct) if not is_long else entry_price * (1 + tp_pct)
                 tp_orders.sort(key=lambda o: abs(float(o.get("price", 0)) - expected_tp))
                 for dup in tp_orders[1:]:
                     await self._cancel_duplicate_order(dup, symbol, "TP")
 
-                # Cancel duplicate SLs (keep the one closest to config SL%)
-                sl_pct = self._bot_config.risk.stop_loss_pct / 100
+                # Cancel duplicate SLs (keep the one closest to effective SL%)
+                sl_pct = float(effective_sl or 0) / 100
                 expected_sl = entry_price * (1 + sl_pct) if not is_long else entry_price * (1 - sl_pct)
                 sl_orders.sort(key=lambda o: abs(float(o.get("price", 0)) - expected_sl))
                 for dup in sl_orders[1:]:
@@ -1743,10 +1890,14 @@ class ExecutionEngineService(BaseService):
                     reduce_only_orders, position
                 )
 
-                # Default percentages — both > 0 here because the function is
-                # gated on `tp_sl_enforced` (see top of method).
-                tp_pct = self._bot_config.risk.take_profit_pct / 100
-                sl_pct = self._bot_config.risk.stop_loss_pct / 100
+                # Effective percentages: caller overrides (recovered model
+                # predictions or safety-net SL) take precedence over config.
+                # May be 0 for one side if only a single-sided override was
+                # supplied; the missing_side branch below still produces a
+                # sensible level because the single existing order on the
+                # exchange anchors the pair.
+                tp_pct = float(effective_tp or 0) / 100
+                sl_pct = float(effective_sl or 0) / 100
 
                 missing_side: str = ""  # "tp" or "sl"
                 missing_price: float = 0.0
@@ -1851,51 +2002,63 @@ class ExecutionEngineService(BaseService):
         except Exception as e:
             self._logger.warning("Could not check existing orders for %s: %s", symbol, e)
 
-        # Calculate TP/SL using default percentages
-        tp_pct = self._bot_config.risk.take_profit_pct / 100
-        sl_pct = self._bot_config.risk.stop_loss_pct / 100
+        # Calculate TP/SL using effective percentages (overrides > config).
+        # Either side may be 0/None — in that case we skip placing that side.
+        tp_pct = float(effective_tp or 0) / 100
+        sl_pct = float(effective_sl or 0) / 100
+        place_tp = tp_pct > 0
+        place_sl = sl_pct > 0
 
         if is_long:
-            tp_price = entry_price * (1 + tp_pct)
-            sl_price = entry_price * (1 - sl_pct)
+            tp_price = entry_price * (1 + tp_pct) if place_tp else 0.0
+            sl_price = entry_price * (1 - sl_pct) if place_sl else 0.0
         else:
-            tp_price = entry_price * (1 - tp_pct)
-            sl_price = entry_price * (1 + sl_pct)
+            tp_price = entry_price * (1 - tp_pct) if place_tp else 0.0
+            sl_price = entry_price * (1 + sl_pct) if place_sl else 0.0
 
         self._logger.info(
-            "Setting TP/SL for existing position %s: TP=%.4f (%.1f%%), SL=%.4f (%.1f%%)",
-            symbol, tp_price, tp_pct * 100, sl_price, sl_pct * 100
+            "Setting TP/SL for existing position %s: "
+            "TP=%s (%.2f%%), SL=%s (%.2f%%) [place_tp=%s, place_sl=%s]",
+            symbol,
+            f"{tp_price:.6f}" if place_tp else "skip",
+            tp_pct * 100,
+            f"{sl_price:.6f}" if place_sl else "skip",
+            sl_pct * 100,
+            place_tp, place_sl,
         )
 
-        # Validate stop distance after rounding
-        if not self._validate_stop_distance(entry_price, tp_price, sl_price, symbol):
-            self._logger.error(
-                "CLOSING %s: TP/SL distance collapsed after rounding — position unprotectable",
-                symbol,
-            )
-            await self._send_alert(
-                f"External position {symbol} unprotectable: TP/SL too small after rounding"
-            )
-            try:
-                await self.client.place_order(
-                    symbol=symbol,
-                    is_buy=not is_long,
-                    size=size,
-                    price=None,
-                    order_type="market",
-                    reduce_only=True,
+        # Validate stop distance after rounding — only when both sides will
+        # be placed. When only one side is present, distance validation is
+        # not meaningful (the other leg is absent by design).
+        if place_tp and place_sl:
+            if not self._validate_stop_distance(entry_price, tp_price, sl_price, symbol):
+                self._logger.error(
+                    "CLOSING %s: TP/SL distance collapsed after rounding — position unprotectable",
+                    symbol,
                 )
-            except Exception as e:
-                self._logger.error("Failed to close unprotectable position %s: %s", symbol, e)
-            return
+                await self._send_alert(
+                    f"External position {symbol} unprotectable: TP/SL too small after rounding"
+                )
+                try:
+                    await self.client.place_order(
+                        symbol=symbol,
+                        is_buy=not is_long,
+                        size=size,
+                        price=None,
+                        order_type="market",
+                        reduce_only=True,
+                    )
+                except Exception as e:
+                    self._logger.error("Failed to close unprotectable position %s: %s", symbol, e)
+                return
 
-        # Check if price has already passed TP level — trigger orders won't fire retroactively
+        # Check if price has already passed TP/SL level — trigger orders won't fire retroactively
         current_price = position.current_price
-        tp_already_passed = (
+        tp_already_passed = place_tp and (
             (is_long and current_price >= tp_price) or
             (not is_long and current_price <= tp_price)
         )
-        sl_already_passed = (
+        sl_already_passed = place_sl and (
             (is_long and current_price <= sl_price) or
             (not is_long and current_price >= sl_price)
         )
@@ -1922,35 +2085,37 @@ class ExecutionEngineService(BaseService):
             return
 
         # Place TP order with retry (limit order for maker fee savings)
-        try:
-            tp_result = await self._place_trigger_with_retry(
-                symbol=symbol,
-                is_buy=not is_long,
-                size=size,
-                trigger_price=tp_price,
-                tpsl="tp",
-                limit_price=tp_price,
-            )
-            position.tp_order_id = tp_result.get("orderId")
-            position.tp_price = tp_price
-            self._logger.info("TP limit trigger placed for %s: %s @ %.4f (maker fee)", symbol, position.tp_order_id, tp_price)
-        except Exception as e:
-            self._logger.error("Failed to place TP trigger order for %s after retries: %s", symbol, e)
+        if place_tp:
+            try:
+                tp_result = await self._place_trigger_with_retry(
+                    symbol=symbol,
+                    is_buy=not is_long,
+                    size=size,
+                    trigger_price=tp_price,
+                    tpsl="tp",
+                    limit_price=tp_price,
+                )
+                position.tp_order_id = tp_result.get("orderId")
+                position.tp_price = tp_price
+                self._logger.info("TP limit trigger placed for %s: %s @ %.4f (maker fee)", symbol, position.tp_order_id, tp_price)
+            except Exception as e:
+                self._logger.error("Failed to place TP trigger order for %s after retries: %s", symbol, e)
 
         # Place SL order with retry (market order for guaranteed execution)
-        try:
-            sl_result = await self._place_trigger_with_retry(
-                symbol=symbol,
-                is_buy=not is_long,
-                size=size,
-                trigger_price=sl_price,
-                tpsl="sl",
-            )
-            position.sl_order_id = sl_result.get("orderId")
-            position.sl_price = sl_price
-            self._logger.info("SL trigger order placed for %s: %s @ %.4f", symbol, position.sl_order_id, sl_price)
-        except Exception as e:
-            self._logger.error("Failed to place SL order for %s after retries: %s", symbol, e)
+        if place_sl:
+            try:
+                sl_result = await self._place_trigger_with_retry(
+                    symbol=symbol,
+                    is_buy=not is_long,
+                    size=size,
+                    trigger_price=sl_price,
+                    tpsl="sl",
+                )
+                position.sl_order_id = sl_result.get("orderId")
+                position.sl_price = sl_price
+                self._logger.info("SL trigger order placed for %s: %s @ %.4f", symbol, position.sl_order_id, sl_price)
+            except Exception as e:
+                self._logger.error("Failed to place SL order for %s after retries: %s", symbol, e)
 
         # Record size for partial fill detection
         self._tp_sl_placed_size[symbol] = float(size)
@@ -2772,15 +2937,25 @@ class ExecutionEngineService(BaseService):
 
                     # Fix: recover trade_id from open sidecar so that
                     # _handle_position_closed can delete it on close.
-                    # If no sidecar exists, generate a trade_id and write one
-                    # so the dashboard can see the synced position.
+                    recovered_tp_pct: Optional[float] = None
+                    recovered_sl_pct: Optional[float] = None
+                    recovered_tp_price: Optional[float] = None
+                    recovered_sl_price: Optional[float] = None
                     try:
                         for sc in list_open_sidecars():
                             if sc.get("symbol") == symbol:
                                 new_pos.trade_id = sc["trade_id"]
+                                # Carry forward any model predictions written
+                                # at entry time so we can restore brackets.
+                                recovered_tp_pct = sc.get("predicted_tp_pct")
+                                recovered_sl_pct = sc.get("predicted_sl_pct")
+                                recovered_tp_price = sc.get("predicted_tp_price")
+                                recovered_sl_price = sc.get("predicted_sl_price")
                                 self._logger.info(
-                                    "Recovered trade_id=%s for synced position %s from open sidecar",
+                                    "Recovered trade_id=%s for synced position %s from open sidecar "
+                                    "(tp_pct=%s sl_pct=%s)",
                                     new_pos.trade_id, symbol,
+                                    recovered_tp_pct, recovered_sl_pct,
                                 )
                                 break
                     except Exception:
@@ -2788,10 +2963,44 @@ class ExecutionEngineService(BaseService):
                             "Failed to recover trade_id from sidecar for %s", symbol,
                         )
 
-                    # No existing sidecar → generate trade_id + write sidecar
-                    # so the dashboard shows synced positions too.
+                    # No existing sidecar → try to recover the original
+                    # decision from decisions_YYYY_MM.jsonl before falling back
+                    # to a fresh uuid. This keeps synced positions correlated
+                    # with the model's predictions so protective brackets use
+                    # the predicted TP/SL instead of arbitrary config defaults.
+                    decision: Optional[dict[str, Any]] = None
                     if not new_pos.trade_id:
-                        new_pos.trade_id = uuid.uuid4().hex
+                        try:
+                            decision = self._recover_decision_for_synced_position(
+                                symbol=symbol,
+                                side=new_pos.side,
+                                opened_at=synced_opened_at,
+                            )
+                        except Exception:
+                            self._logger.exception(
+                                "Decision recovery failed for %s", symbol,
+                            )
+                            decision = None
+
+                        if decision and decision.get("trade_id"):
+                            new_pos.trade_id = str(decision["trade_id"])
+                            recovered_tp_pct = decision.get("predicted_tp_pct")
+                            recovered_sl_pct = decision.get("predicted_sl_pct")
+                            recovered_tp_price = decision.get("predicted_tp_price")
+                            recovered_sl_price = decision.get("predicted_sl_price")
+                            self._logger.info(
+                                "Sync: recovered trade_id=%s for %s (TP=%s%% SL=%s%%)",
+                                new_pos.trade_id, symbol,
+                                recovered_tp_pct, recovered_sl_pct,
+                            )
+                        else:
+                            new_pos.trade_id = uuid.uuid4().hex
+                            self._logger.warning(
+                                "Sync: no decision record found for %s; generated fresh trade_id=%s "
+                                "(position will get safety-net SL only)",
+                                symbol, new_pos.trade_id,
+                            )
+
                         write_open_sidecar(
                             trade_id=new_pos.trade_id,
                             symbol=symbol,
@@ -2799,6 +3008,10 @@ class ExecutionEngineService(BaseService):
                             entry_price=float(entry_px),
                             opened_at=new_pos.opened_at,
                             expiry_at=new_pos.expiry_at,
+                            predicted_tp_pct=recovered_tp_pct,
+                            predicted_sl_pct=recovered_sl_pct,
+                            predicted_tp_price=recovered_tp_price,
+                            predicted_sl_price=recovered_sl_price,
                         )
                         self._logger.info(
                             "Created sidecar for synced position %s: trade_id=%s",
@@ -2817,13 +3030,35 @@ class ExecutionEngineService(BaseService):
                         symbol, expiry_at.isoformat(), synced_opened_at.isoformat(), k_candles_cfg,
                     )
 
-                    # Check and set SL/TP for newly discovered positions
-                    # Skip entirely in LLM-only exit mode — the call is a no-op
-                    # in that configuration and would only waste CPU.
-                    if tp_sl_enforced:
-                        await self._ensure_tp_sl_for_position(new_pos)
-                        # Mark TP/SL as confirmed if both were set
-                        if new_pos.tp_order_id and new_pos.sl_order_id:
+                    # Safety-net SL: positions discovered on the exchange MUST
+                    # NOT run unprotected at leverage. If decision recovery
+                    # yielded no SL%, fall back to a hard-coded 2.0% SL here
+                    # (NOT in config — that would alter the entry path too).
+                    safety_sl_pct = 2.0
+                    tp_override = (
+                        float(recovered_tp_pct) if recovered_tp_pct is not None else None
+                    )
+                    sl_override = (
+                        float(recovered_sl_pct)
+                        if recovered_sl_pct is not None
+                        else safety_sl_pct
+                    )
+                    try:
+                        await self._ensure_tp_sl_for_position(
+                            new_pos,
+                            tp_pct_override=tp_override,
+                            sl_pct_override=sl_override,
+                        )
+                    except Exception:
+                        self._logger.exception(
+                            "Sync: failed to place protective TP/SL for %s "
+                            "(tp=%s sl=%s) — position may be unprotected",
+                            symbol, tp_override, sl_override,
+                        )
+                    # Mark TP/SL as confirmed if both sides were placed. We
+                    # also accept SL-only (safety net path in LLM-only mode).
+                    if new_pos.sl_order_id:
+                        if new_pos.tp_order_id or tp_override is None:
                             self._tp_sl_confirmed.add(symbol)
 
             # Check for closed positions (skip settling symbols to avoid spurious notifications)
