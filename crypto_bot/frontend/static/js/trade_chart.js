@@ -96,17 +96,10 @@
           ctx.setLineDash([]);
 
           if (label) {
+            // Plain colored label — no background pill (was too visually heavy).
             ctx.font = "bold 10px ui-sans-serif, system-ui, sans-serif";
-            var tw = ctx.measureText(label).width;
-            var pad = 4;
-            var bw = tw + pad * 2;
-            var bh = 16;
             ctx.fillStyle = color;
-            ctx.beginPath();
-            ctx.roundRect(right + 3, yPx - bh / 2, bw, bh, 3);
-            ctx.fill();
-            ctx.fillStyle = "#111827";
-            ctx.fillText(label, right + 3 + pad, yPx + 4);
+            ctx.fillText(label, right + 5, yPx + 4);
           }
           ctx.restore();
         },
