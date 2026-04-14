@@ -316,6 +316,19 @@
       seriesCfg.push({ label: "Low", stroke: "#a78bfa", width: 1.5 });
     }
 
+    // Force TP/SL into the y-scale so their lines stay visible even when
+    // price hasn't oscillated far enough to reach them (typical for live
+    // trades early on). Invisible series — plugins still render the labels.
+    var yAnchor = { stroke: "rgba(0,0,0,0)", width: 0, points: { show: false } };
+    if (tp != null) {
+      seriesData.push(Array(k).fill(tp));
+      seriesCfg.push(Object.assign({ label: "_tp" }, yAnchor));
+    }
+    if (sl != null) {
+      seriesData.push(Array(k).fill(sl));
+      seriesCfg.push(Object.assign({ label: "_sl" }, yAnchor));
+    }
+
     // --- Plugins (background → foreground) ---
     var plugins = [];
 
@@ -339,10 +352,6 @@
       plugins.push(hLine(entry, "rgba(251,191,36,0.4)", null, [2, 4]));
     }
 
-    // Entry vertical line at first candle, badge at entry price level
-    if (entry != null) {
-      plugins.push(verticalLine(0, entry, "ENTRY $" + Number(entry).toFixed(4), "#fbbf24"));
-    }
     // Exit vertical line at last trade candle (not post-context), badge at exit price level
     if (exitPrice != null) {
       var exitX = Math.max(0, tradeK - 1) * intervalSec;
